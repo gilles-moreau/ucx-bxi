@@ -8,23 +8,29 @@ libuct_bxi_la_LIBADD = $(top_builddir)/src/ucs/libucs.la \
 libuct_bxi_la_LDFLAGS = $(BXI_LDFLAGS) -version-info $(SOVERSION)
 
 noinst_HEADERS = \
+								 base/ptl_iface.h \
+								 base/ptl_ep.h \
+								 base/ptl_rq.h \
 								 base/ptl_md.h 
 
 libuct_bxi_la_SOURCES = \
+												base/ptl_iface.c \
+												base/ptl_ep.c \
+												base/ptl_rq.c \
 												base/ptl_md.c
 
-#noinst_HEADERS += \
-#								 am/ptl_am_iface.h \
-#								 am/ptl_am_ms.h \
-#								 am/ptl_am_ep.h
-#
-## Active Message interface
-#libuct_bxi_la_SOURCES += \
-#												 am/ptl_am_iface.c \
-#												 am/ptl_am_ms.c \
-#												 am/ptl_am_ep.c
-#
-#
+noinst_HEADERS += \
+								 am/ptl_am_iface.h \
+								 am/ptl_am_ms.h \
+								 am/ptl_am_ep.h
+
+# Active Message interface
+libuct_bxi_la_SOURCES += \
+												 am/ptl_am_iface.c \
+												 am/ptl_am_ms.c \
+												 am/ptl_am_ep.c
+
+
 #noinst_HEADERS += \
 #								 rma/ptl_rma_ms.h \
 #								 rma/ptl_rma_iface.h \

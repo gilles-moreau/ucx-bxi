@@ -1,29 +1,18 @@
 #include "ptl_ep.h"
-#include "ptl_iface.h"
 
-#include <ecr/portals/ptl_types.h>
+UCS_CLASS_INIT_FUNC(uct_ptl_ep_t, uct_ptl_iface_t *iface,
+                    const uct_ep_params_t *params) {
+  uct_ptl_iface_t *ptl_iface = ucs_derived_of(iface, uct_ptl_iface_t);
 
-#include <assert.h>
+  UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
-ECC_CLASS_DEFINE_INIT_FUNC(ecr_ptl_ep_t, ecr_iface_h iface,
-                           ecr_iface_addr_t *addr, unsigned flags)
-{
-    ecc_status_t     rc;
-    ecr_ptl_iface_t *ptl_iface = ecc_derived_of(iface, ecr_ptl_iface_t);
+  self->pid = uct_ptl_iface_md(ptl_iface)->pid;
 
-    rc = ECC_CLASS_CALL_SUPER_INIT(ecr_ep_t, self, iface, addr, flags);
-    if (rc != ECC_SUCCESS)
-        goto err;
-
-    self->pid = ecr_ptl_iface_ms(ptl_iface)->pid;
-err:
-    return rc;
+  return UCS_OK;
 }
 
-ECC_CLASS_DEFINE_CLEAN_FUNC(ecr_ptl_ep_t)
-{
-    ECC_CLASS_CALL_SUPER_CLEAN(ecr_ep_t, self);
-    return;
+static UCS_CLASS_CLEANUP_FUNC(uct_ptl_ep_t) {
+  ucs_debug("destroy ptl ep %p", self);
 }
 
-ECC_CLASS_DEFINE(ecr_ptl_ep_t, ecr_ep_t);
+UCS_CLASS_DEFINE(uct_ptl_ep_t, uct_ep_t);

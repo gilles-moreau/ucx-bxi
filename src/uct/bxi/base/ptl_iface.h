@@ -1,88 +1,86 @@
 #ifndef PTL_IFACE_H
 #define PTL_IFACE_H
 
-#include "ptl_ms.h"
+#include "ptl_md.h"
 
-#include <ecr/portals/ptl_types.h>
-#include <ecr/base/ecr_iface.h>
-#include <ecc/type/class.h>
-#include <ecc/datastruct/queue.h>
-#include <ecc/datastruct/khash.h>
+#include <uct/base/uct_iface.h>
+#include <uct/bxi/ptl_types.h>
 
-typedef ecc_status_t (*handle_ev_func_t)(ecr_ptl_iface_t *iface,
-                                         ptl_event_t     *ev);
+typedef ucs_status_t (*handle_ev_func_t)(uct_ptl_iface_t *iface,
+                                         ptl_event_t *ev);
 
-typedef struct ecr_ptl_iface_addr {
-    ecr_iface_addr_t super;
-    ptl_process_t    pid;
-} ecr_ptl_iface_addr_t;
+typedef struct uct_ptl_iface_addr {
+  ptl_process_t pid;
+} uct_ptl_iface_addr_t;
 
-typedef struct ecr_ptl_iface_ops {
-    handle_ev_func_t handle_ev;
-} ecr_ptl_iface_ops_t;
+typedef struct uct_ptl_iface_ops {
+  uct_iface_internal_ops_t super;
+  handle_ev_func_t handle_ev;
+} uct_ptl_iface_ops_t;
 
-typedef struct ecr_ptl_iface_config {
-    ecr_iface_config_t super;
-    size_t             max_events;
-    int                max_outstanding_ops;
-    int                copyin_buf_per_block;
-    int                min_copyin_buf;
-    int                max_copyin_buf;
-    int                num_eager_blocks;
-    int                eager_block_size;
-    unsigned           features;
-} ecr_ptl_iface_config_t;
+typedef struct uct_ptl_iface_config {
+  uct_iface_config_t super;
+  size_t max_events;
+  int max_outstanding_ops;
+  int copyin_buf_per_block;
+  int min_copyin_buf;
+  int max_copyin_buf;
+  int num_eager_blocks;
+  int eager_block_size;
+  unsigned features;
+} uct_ptl_iface_config_t;
 
-typedef struct ecr_ptl_iface {
-    ecr_iface_t super;
-    struct {
-        size_t          max_events;
-        int             max_outstanding_ops;
-        int             copyin_buf_per_block;
-        int             min_copyin_buf;
-        int             max_copyin_buf;
-        int             num_eager_blocks;
-        int             max_iovecs;
-        size_t          eager_block_size;
-        size_t          max_msg_size;
-        size_t          max_atomic_size;
-        ptl_ni_limits_t limits;
-        unsigned        features;
-    } config;
-    ecr_ptl_iface_ops_t ops;
-    ptl_handle_eq_t     eqh; // Event Queue
-    ecc_list_elem_t     mds; // Memory descriptors
-} ecr_ptl_iface_t;
+typedef struct uct_ptl_iface {
+  uct_base_iface_t super;
+  struct {
+    size_t max_events;
+    int max_outstanding_ops;
+    int copyin_buf_per_block;
+    int min_copyin_buf;
+    int max_copyin_buf;
+    int num_eager_blocks;
+    int max_iovecs;
+    int max_short;
+    size_t eager_block_size;
+    size_t max_msg_size;
+    size_t max_atomic_size;
+    ptl_ni_limits_t limits;
+    unsigned features;
+    size_t iface_addr_size;
+  } config;
+  uct_ptl_iface_ops_t ops;
+  ptl_handle_eq_t eqh; // Event Queue
+  ucs_list_link_t mds; // Memory descriptors
+} uct_ptl_iface_t;
 
-ECC_CLASS_DECLARE_INIT_FUNC(ecr_ptl_iface_t, ecr_ms_h ms, ecr_device_t *device,
-                            ecr_ptl_iface_config_t *config);
-ECC_CLASS_DECLARE_CLEAN_FUNC(ecr_ptl_iface_t);
-ECC_CLASS_DECLARE(ecr_ptl_iface_t);
+UCS_CLASS_DECLARE(uct_ptl_iface_t, uct_iface_ops_t *, uct_ptl_iface_ops_t *,
+                  uct_md_h, uct_worker_h, const uct_iface_params_t *,
+                  const uct_ptl_iface_config_t *);
 
-ecc_status_t ecr_ptl_query_devices(ecr_component_h component,
-                                   ecr_device_t  **devices_p,
-                                   unsigned int   *num_devices_p);
-ecc_status_t ecr_ptl_iface_progress(ecr_iface_h super);
-void         ecr_ptl_iface_get_attr(ecr_iface_h iface, ecr_iface_attr_t *attr);
-ecc_status_t ecr_ptl_md_progress(ecr_ptl_md_t *md);
+extern ucs_config_field_t uct_ptl_iface_config_table[];
+extern ucs_config_field_t uct_ptl_iface_common_config_table[];
 
-static inline void
-ecr_ptl_iface_enable_progression(ecr_ptl_iface_t *iface, ecr_ptl_md_t *md)
-{
-    ecc_list_push_head(&iface->mds, &md->elem);
+ucs_status_t uct_ptl_query_devices(uct_md_h component,
+                                   uct_tl_resource_desc_t **resources_p,
+                                   unsigned *num_resources_p);
+ucs_status_t uct_ptl_iface_progress(uct_iface_h super);
+void uct_ptl_iface_get_attr(uct_iface_h iface, uct_iface_attr_t *attr);
+ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd);
+
+static inline void uct_ptl_iface_enable_progression(uct_ptl_iface_t *iface,
+                                                    uct_ptl_mmd_t *mmd) {
+  ucs_list_add_head(&iface->mds, &mmd->elem);
 }
 
-static inline void ecr_ptl_iface_disable_progression(ecr_ptl_md_t *md)
-{
-    ecc_list_del(&md->elem);
+static inline void uct_ptl_iface_disable_progression(uct_ptl_mmd_t *mmd) {
+  ucs_list_del(&mmd->elem);
 }
 
-
-extern ecc_config_tab_t ecr_ptl_iface_config_tab;
-extern char            *ecr_ptl_event_str[];
+extern ucs_config_field_t uct_ptl_iface_config_table[];
+extern char *uct_ptl_event_str[];
 
 // FIXME: this triggers a clang include not used error, check other solution
-#define ecr_ptl_iface_ms(_iface)                                               \
-    (ecc_derived_of((_iface)->super.ms, ecr_ptl_ms_t))
+#define uct_ptl_iface_md(_iface)                                               \
+  (ucs_derived_of((_iface)->super.md, uct_ptl_md_t))
 
 #endif

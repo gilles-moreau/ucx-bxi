@@ -1,145 +1,180 @@
-#include "ptl_am_ms.h"
+#include "ptl_am_md.h"
 
-static ecc_config_entry_t ecr_ptl_am_ms_config_entries[] = {
-        {ECC_CONFIG_ELEM_ENTRY(super, "", "", ecr_ptl_am_ms_config_t,
-                               ECC_CONFIG_TYPE_TABLE(&ecr_ptl_ms_config_tab))},
+#include <ucs/sys/module.h>
+#include <uct/api/uct.h>
 
-        {""},
+static ucs_config_field_t uct_ptl_am_md_config_table[] = {
+    {UCT_PTL_CONFIG_PREFIX, "", NULL, ucs_offsetof(uct_ptl_md_config_t, super),
+     UCS_CONFIG_TYPE_TABLE(&uct_ptl_md_config_table)},
+
+    {""},
 };
 
-static ecc_config_tab_t ecr_ptl_am_ms_config_tab = {
-        "ECR_MS_AM_PTL",
-        ECC_LIST_INITIALIZER(NULL, NULL),
-        ecr_ptl_am_ms_config_entries,
-        sizeof(ecr_ptl_am_ms_config_t),
+ucs_status_t uct_ptl_am_mem_reg(uct_md_h uct_md, void *address, size_t length,
+                                const uct_md_mem_reg_params_t *params,
+                                uct_mem_h *memh_p) {
+  uct_ptl_am_mr_t *mr;
+  ucs_status_t rc = UCS_OK;
+  uct_ptl_am_md_t *ptl_md = ucs_derived_of(uct_md, uct_ptl_am_md_t);
+
+  mr = (uct_ptl_am_mr_t *)ucs_malloc(sizeof(uct_ptl_am_mr_t), "am-memh");
+  if (mr == NULL) {
+    ucs_error("PTL: could not allocate am mr.");
+    rc = UCS_ERR_NO_MEMORY;
+    goto err;
+  }
+  mr->super.flags = 0;
+
+  if (params->flags &
+      (UCT_MD_MEM_ACCESS_LOCAL_READ | UCT_MD_MEM_ACCESS_LOCAL_WRITE)) {
+    ucs_assert(!PtlHandleIsEqual(ptl_md->mmd.mdh, PTL_INVALID_HANDLE));
+    mr->mmd = &ptl_md->mmd;
+    mr->super.flags |= UCT_PTL_MR_FLAGS_INITIATOR;
+  }
+
+  if (params->flags &
+      (UCT_MD_MEM_ACCESS_REMOTE_PUT | UCT_MD_MEM_ACCESS_REMOTE_GET)) {
+    ucs_assert(!PtlHandleIsEqual(ptl_md->me.meh, PTL_INVALID_HANDLE));
+    mr->me = &ptl_md->me;
+    mr->super.flags |= UCT_PTL_MR_FLAGS_TARGET;
+  }
+
+  *memh_p = mr;
+
+err:
+  return rc;
+}
+
+ucs_status_t uct_ptl_am_mem_dereg(uct_md_h uct_md,
+                                  const uct_md_mem_dereg_params_t *params) {
+  uct_ptl_am_mr_t *memh;
+
+  UCT_MD_MEM_DEREG_CHECK_PARAMS(params, 0);
+
+  memh = params->memh;
+
+  ucs_free(memh);
+
+  return UCS_OK;
+}
+
+void uct_ptl_am_md_close(uct_md_h uct_md) {
+  uct_ptl_am_md_t *md = ucs_derived_of(uct_md, uct_ptl_am_md_t);
+
+  uct_ptl_md_mdesc_fini(&md->mmd);
+  uct_ptl_md_me_fini(&md->super, &md->me);
+}
+
+static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
+                                       const char *md_name,
+                                       const uct_md_config_t *uct_md_config,
+                                       uct_md_h *md_p) {
+  ucs_status_t rc = UCS_OK;
+  uct_ptl_am_md_t *ptl_md;
+  uct_ptl_me_param_t me_param;
+  const uct_ptl_am_md_config_t *md_config =
+      ucs_derived_of(uct_md_config, uct_ptl_am_md_config_t);
+
+  ptl_md = ucs_derived_of(uct_ptl_md_alloc(sizeof(*ptl_md), "ptl-am-md"),
+                          uct_ptl_am_md_t);
+  if (ptl_md == NULL)
+    goto err;
+
+  rc = uct_ptl_md_init(&ptl_md->super, md_name, &md_config->super);
+  if (rc != UCS_OK) {
+    goto err_clean_md;
+  }
+
+  /* Memory entry for remote access. */
+  me_param = (uct_ptl_me_param_t){
+      .match = 0,
+      .ign = ~0,
+      .start = NULL,
+      .length = PTL_SIZE_MAX,
+      .flags = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE,
+  };
+  rc = uct_ptl_md_me_init(&ptl_md->super, &me_param, &ptl_md->me);
+  if (rc != UCS_OK)
+    goto err;
+
+  ptl_md->super.cap_flags |=
+      UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_MEMH | UCT_MD_FLAG_NEED_RKEY;
+
+  *md_p = &ptl_md->super.super;
+err_clean_md:
+  ucs_free(ptl_md);
+err:
+  return rc;
+}
+
+ucs_status_t uct_ptl_am_rkey_unpack(uct_component_t *component,
+                                    const void *rkey_buffer, uct_rkey_t *rkey_p,
+                                    void **handle_p) {
+  *rkey_p = 0;
+  *handle_p = NULL;
+  return UCS_OK;
+}
+
+static uct_ptl_md_ops_t uct_ptl_am_md_ops = {
+    .super =
+        {
+            .close = uct_ptl_am_md_close,
+            .query = uct_ptl_md_query,
+            .mem_reg = uct_ptl_am_mem_reg,
+            .mem_dereg = uct_ptl_am_mem_dereg,
+            .mem_attach = ucs_empty_function_return_unsupported,
+            .mem_advise = ucs_empty_function_return_unsupported,
+            .mkey_pack = ucs_empty_function_return_success,
+            .detect_memory_type = ucs_empty_function_return_unsupported,
+        },
+    .open = NULL,
 };
 
-ecc_status_t ecr_ptl_am_ms_reg_mem(ecr_ms_h ms, const void *addr, size_t size,
-                                   ecr_mr_param_t *param, ecr_mr_h *mr_p)
-{
-    ecr_ptl_am_mr_t *mr;
-    ecc_status_t     rc     = ECC_SUCCESS;
-    ecr_ptl_am_ms_t *ptl_ms = ecc_derived_of(ms, ecr_ptl_am_ms_t);
+UCT_PTL_MD_DEFINE_ENTRY(ptl_am, uct_ptl_am_md_ops);
 
-    mr = (ecr_ptl_am_mr_t *)malloc(sizeof(ecr_ptl_am_mr_t));
-    if (mr == NULL) {
-        ECC_LOG_ERROR("PTL: could not allocate am mr.");
-        rc = ECC_ERR_OUT_OF_MEMORY;
-        goto err;
-    }
-    mr->super.flags = 0;
+uct_component_t uct_ptl_am_component = {
+    .query_md_resources = uct_ptl_query_md_resources,
+    .md_open = uct_ptl_am_md_open,
+    .cm_open = ucs_empty_function_return_unsupported,
+    .rkey_unpack = uct_ptl_am_rkey_unpack,
+    .rkey_ptr = ucs_empty_function_return_unsupported,
+    .rkey_release = ucs_empty_function_return_success,
+    .rkey_compare = uct_base_rkey_compare,
+    .name = "ptl_am",
+    .md_config =
+        {
+            .name = "PTL AM memory domain",
+            .prefix = UCT_PTL_AM_CONFIG_PREFIX,
+            .table = uct_ptl_am_md_config_table,
+            .size = sizeof(uct_ptl_am_md_config_t),
+        },
+    .cm_config = UCS_CONFIG_EMPTY_GLOBAL_LIST_ENTRY,
+    .tl_list = UCT_COMPONENT_TL_LIST_INITIALIZER(&uct_ptl_am_component),
+    .flags = 0,
+    .md_vfs_init = (uct_component_md_vfs_init_func_t)ucs_empty_function};
 
-    if (param->flags & (ECR_MR_FLAGS_LOCAL_READ | ECR_MR_FLAGS_LOCAL_WRITE)) {
-        assert(!PtlHandleIsEqual(ptl_ms->md.mdh, PTL_INVALID_HANDLE));
-        mr->md           = &ptl_ms->md;
-        mr->super.flags |= ECR_PTL_MR_FLAGS_INITIATOR;
-    }
+void UCS_F_CTOR uct_ptl_am_init() {
+  UCS_MODULE_FRAMEWORK_DECLARE(uct_ptl_am);
+  ssize_t i;
 
-    if (param->flags & (ECR_MR_FLAGS_REMOTE_READ | ECR_MR_FLAGS_REMOTE_WRITE)) {
-        assert(!PtlHandleIsEqual(ptl_ms->me.meh, PTL_INVALID_HANDLE));
-        mr->me           = &ptl_ms->me;
-        mr->super.flags |= ECR_PTL_MR_FLAGS_TARGET;
-    }
+  ucs_list_add_head(&uct_ptl_ops, &UCT_PTL_MD_OPS_NAME(ptl_am).list);
+  uct_component_register(&uct_ptl_am_component);
 
-    *mr_p = (ecr_mr_h)mr;
+  for (i = 0; i < ucs_static_array_size(uct_ib_tls); i++) {
+    uct_tl_register(&uct_ptl_am_component, uct_ib_tls[i]);
+  }
 
-err:
-    return rc;
+  UCS_MODULE_FRAMEWORK_LOAD(uct_ptl_am, 0);
 }
 
-ecc_status_t ecr_ptl_am_ms_dereg_mem(ecr_ms_h ms, ecr_mr_h mr)
-{
-    free(mr);
-    return ECC_SUCCESS;
+void UCS_F_DTOR uct_ib_cleanup() {
+  ssize_t i;
+
+  for (i = ucs_static_array_size(uct_ib_tls) - 1; i >= 0; i--) {
+    uct_tl_unregister(uct_ib_tls[i]);
+  }
+
+  uct_component_unregister(&uct_ib_component);
+  ucs_list_del(&UCT_IB_MD_OPS_NAME(verbs).list);
 }
-
-ECC_CLASS_DEFINE_INIT_FUNC(ecr_ptl_am_ms_t, ecr_component_t *component,
-                           ecr_device_t *dev, ecr_ptl_am_ms_config_t *config)
-{
-    ecc_status_t       rc;
-    ecr_ptl_md_param_t md_param;
-
-    rc = ECC_CLASS_CALL_SUPER_INIT(ecr_ptl_ms_t, self, component, dev,
-                                   &config->super);
-    if (rc != ECC_SUCCESS)
-        goto err;
-
-    /* Memory descriptor for local access. */
-    md_param = (ecr_ptl_md_param_t){
-            .flags = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_CT_REPLY,
-    };
-    rc = ecr_ptl_ms_md_init(&self->super, &md_param, &self->md);
-    if (rc != ECC_SUCCESS)
-        goto err;
-
-    /* Memory entry for remote access. */
-    ecr_ptl_me_param_t me_param = {
-            .match  = 0,
-            .ign    = ~0,
-            .start  = NULL,
-            .length = PTL_SIZE_MAX,
-            .flags = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
-                     PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE,
-    };
-    rc = ecr_ptl_ms_me_init(&self->super, &me_param, &self->me);
-    if (rc != ECC_SUCCESS)
-        goto err;
-
-err:
-    return rc;
-}
-
-ECC_CLASS_DEFINE_CLEAN_FUNC(ecr_ptl_am_ms_t)
-{
-    ECC_CLASS_CALL_SUPER_CLEAN(ecr_ptl_ms_t, self);
-
-    return;
-}
-
-ECC_CLASS_DEFINE(ecr_ptl_am_ms_t, ecr_ptl_ms_t);
-
-void ecr_ptl_am_ms_close(ecr_ms_h ms)
-{
-    ECC_CLASS_DELETE(ecr_ptl_am_ms_t, ms);
-}
-
-ecc_status_t ecr_ptl_am_ms_open(ecr_component_t *component, ecr_device_t *dev,
-                                const ecr_ms_config_t *cf, ecr_ms_h *ms_p)
-{
-    ecc_status_t            rc;
-    ecr_ptl_am_ms_t        *ptl_ms;
-    ecr_ptl_am_ms_config_t *config = ecc_derived_of(cf, ecr_ptl_am_ms_config_t);
-
-    rc = ECC_CLASS_NEW(ecr_ptl_am_ms_t, &ptl_ms, component, dev, config);
-    if (rc != ECC_SUCCESS) {
-        goto err;
-    }
-
-    ptl_ms->super.super.ops.reg_mem      = ecr_ptl_am_ms_reg_mem;
-    ptl_ms->super.super.ops.dereg_mem    = ecr_ptl_am_ms_dereg_mem;
-    ptl_ms->super.super.ops.pack_memkey  = ecr_ptl_ms_pack_memkey;
-    ptl_ms->super.super.ops.unpack_rkey  = ecr_ptl_ms_unpack_rkey;
-    ptl_ms->super.super.ops.release_rkey = ecr_ptl_ms_release_rkey;
-    ptl_ms->super.super.ops.close        = ecr_ptl_am_ms_close;
-
-    *ms_p = (ecr_ms_h)ptl_ms;
-err:
-    return rc;
-}
-
-
-ecr_component_t ptl_am_component = {
-        .name          = {"ptl_am"},
-        .ms_open       = ecr_ptl_am_ms_open,
-        .query_devices = ecr_ptl_query_devices,
-        .flags         = 0,
-        .md_config =
-                {
-                        .cf      = &ecr_ptl_am_ms_config_tab,
-                        .cf_size = sizeof(ecr_ptl_ms_config_t),
-                },
-        .rails = ECC_LIST_INITIALIZER(&ptl_am_component.rails,
-                                      &ptl_am_component.rails),
-};
-ECR_COMPONENT_REGISTER(&ptl_am_component);
-ECC_CONFIG_REGISTER(ecr_ptl_am_ms_config_tab)

@@ -5,30 +5,31 @@
 #include <config.h>
 #endif
 
-#include <ecr/portals/base/ptl_ms.h>
-#include <ecr/portals/ptl_types.h>
+#define UCT_PTL_AM_CONFIG_PREFIX "PTL_AM"
 
-typedef struct ecr_ptl_am_mr {
-    ecr_ptl_mr_t  super;
-    ecr_ptl_md_t *md;
-    ecr_ptl_me_t *me;
-} ecr_ptl_am_mr_t;
+#include <uct/bxi/base/ptl_md.h>
 
-typedef struct ecr_ptl_am_rkey {
-    ecr_ptl_rkey_t super;
-} ecr_ptl_am_rkey_t;
+typedef struct uct_ptl_am_mr {
+  uct_ptl_mr_t super;
+  uct_ptl_mmd_t *mmd;
+  uct_ptl_me_t *me;
+} uct_ptl_am_mr_t;
 
-typedef struct ecr_ptl_am_ms_config {
-    ecr_ptl_ms_config_t super;
-} ecr_ptl_am_ms_config_t;
+typedef struct uct_ptl_am_rkey {
+  uct_ptl_rkey_t super;
+} uct_ptl_am_rkey_t;
 
-typedef struct ecr_ptl_am_ms {
-    ecr_ptl_ms_t super;
-    struct {
-        size_t id;
-    } config;
-    ecr_ptl_md_t md;
-    ecr_ptl_me_t me;
-} ecr_ptl_am_ms_t;
+typedef struct uct_ptl_am_md_config {
+  uct_ptl_md_config_t super;
+} uct_ptl_am_md_config_t;
+
+typedef struct uct_ptl_am_md {
+  uct_ptl_md_t super;
+  struct {
+    size_t id;
+  } config;
+  uct_ptl_mmd_t mmd;
+  uct_ptl_me_t me;
+} uct_ptl_am_md_t;
 
 #endif

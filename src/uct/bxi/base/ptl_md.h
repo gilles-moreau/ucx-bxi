@@ -1,12 +1,34 @@
 #ifndef PTL_MD_H
 #define PTL_MD_H
 
+#include <uct/base/uct_iface.h>
 #include <uct/base/uct_md.h>
 #include <uct/bxi/ptl_types.h>
 
+#define UCT_PTL_CONFIG_PREFIX "PTL_"
+
 enum {
-  ECR_PTL_MR_FLAGS_INITIATOR = UCS_BIT(0),
-  ECR_PTL_MR_FLAGS_TARGET = UCS_BIT(1),
+  UCT_PTL_MR_FLAGS_INITIATOR = UCS_BIT(0),
+  UCT_PTL_MR_FLAGS_TARGET = UCS_BIT(1),
+};
+
+enum {
+  UCT_PTL_MEM_FLAG_ODP = UCS_BIT(0),             /**< The memory region has on
+                                                     demand paging enabled */
+  UCT_PTL_MEM_ACCESS_REMOTE_ATOMIC = UCS_BIT(1), /**< An atomic access was
+                                                     requested for the memory
+                                                     region */
+  UCT_PTL_MEM_MULTITHREADED = UCS_BIT(2), /**< The memory region registration
+                                              handled by chunks in parallel
+                                              threads */
+  UCT_PTL_MEM_IMPORTED = UCS_BIT(3),      /**< The memory handle was
+                                              created by mem_attach */
+#if ENABLE_PARAMS_CHECK
+  UCT_PTL_MEM_ACCESS_REMOTE_RMA = UCS_BIT(4), /**< RMA access was requested
+                                                  for the memory region */
+#else
+  UCT_IB_MEM_ACCESS_REMOTE_RMA = 0,
+#endif
 };
 
 typedef struct uct_ptl_rkey {
@@ -15,7 +37,7 @@ typedef struct uct_ptl_rkey {
 
 typedef struct uct_ptl_mmd_param {
   unsigned flags;
-} uct_ptl_md_param_t;
+} uct_ptl_mmd_param_t;
 
 typedef struct uct_ptl_mmd {
   ucs_list_link_t elem;
@@ -60,14 +82,24 @@ typedef struct uct_ptl_md {
   ptl_process_t pid;
   ptl_ni_limits_t limits;
   ptl_pt_index_t pti;
+  uint64_t cap_flags;
+  size_t rkey_size;
 } uct_ptl_md_t;
 
-ucs_status_t uct_ptl_md_md_init(uct_ptl_md_t *md, uct_ptl_md_param_t *param,
-                                uct_ptl_mmd_t *mmd);
-ucs_status_t uct_ptl_md_md_fini(uct_ptl_mmd_t *mmd);
+ucs_status_t uct_ptl_md_mdesc_init(uct_ptl_md_t *md, uct_ptl_mmd_param_t *param,
+                                   uct_ptl_mmd_t *mmd);
+ucs_status_t uct_ptl_md_mdesc_fini(uct_ptl_mmd_t *mmd);
 ucs_status_t uct_ptl_md_me_init(uct_ptl_md_t *md, uct_ptl_me_param_t *param,
                                 uct_ptl_me_t *me);
 ucs_status_t uct_ptl_md_me_fini(uct_ptl_md_t *md, uct_ptl_me_t *me);
+uct_ptl_md_t *uct_ptl_md_alloc(size_t size, const char *name);
+ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
+                             const uct_ptl_md_config_t *config);
+ucs_status_t uct_ptl_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
+void uct_ptl_md_close(uct_ptl_md_t *md);
+ucs_status_t uct_ptl_query_md_resources(uct_component_t *component,
+                                        uct_md_resource_desc_t **resources_p,
+                                        unsigned *num_resources_p);
 
 /**
  * Memory domain constructor.
@@ -102,4 +134,7 @@ typedef struct uct_ptl_md_ops_entry {
       .name = UCS_PP_MAKE_STRING(_md_ops),                                     \
       .ops = &_md_ops,                                                         \
   }
+
+extern ucs_list_link_t uct_ptl_ops;
+
 #endif
