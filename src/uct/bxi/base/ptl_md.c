@@ -19,6 +19,12 @@ ucs_config_field_t uct_ptl_md_config_table[] = {
 
 UCS_LIST_HEAD(uct_ptl_ops);
 
+extern uct_tl_t UCT_TL_NAME(am_ptl);
+
+// static uct_tl_t *uct_ptl_tls[] = {
+//     &UCT_TL_NAME(am_ptl),
+// };
+
 static const ptl_ni_limits_t default_limits = {
     .max_entries = INT_MAX,
     .max_unexpected_headers = INT_MAX,
@@ -38,7 +44,28 @@ static const ptl_ni_limits_t default_limits = {
     .features = 0,
 };
 
-ucs_status_t uct_ptl_md_md_init(uct_ptl_md_t *md, uct_ptl_md_param_t *param,
+ucs_status_t uct_ptl_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr) {
+  uct_ptl_md_t *md = ucs_derived_of(uct_md, uct_ptl_md_t);
+  size_t component_name_length = strlen(md->super.component->name);
+
+  uct_md_base_md_query(md_attr);
+  md_attr->max_reg = ULONG_MAX;
+  md_attr->flags = md->cap_flags;
+  md_attr->access_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->reg_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->gva_mem_types = 0;
+  md_attr->reg_nonblock_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->cache_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->access_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->rkey_packed_size = md->rkey_size;
+  md_attr->reg_cost = ucs_linear_func_make(9e-9, 0);
+
+  memcpy(md_attr->global_id, md->super.component->name, component_name_length);
+
+  return UCS_OK;
+}
+
+ucs_status_t uct_ptl_md_md_init(uct_ptl_md_t *md, uct_ptl_mmd_param_t *params,
                                 uct_ptl_mmd_t *mmd) {
   ucs_status_t rc;
   ptl_md_t tmp;
@@ -51,7 +78,7 @@ ucs_status_t uct_ptl_md_md_init(uct_ptl_md_t *md, uct_ptl_md_param_t *param,
       .length = PTL_SIZE_MAX,
       .ct_handle = mmd->cth,
       .eq_handle = PTL_EQ_NONE,
-      .options = param->flags,
+      .options = params->flags,
   };
 
   rc = uct_ptl_wrap(PtlMDBind(md->nih, &tmp, &mmd->mdh));
@@ -113,21 +140,20 @@ ucs_status_t uct_ptl_md_mkey_pack(uct_md_h md, uct_mem_h memh, void *address,
   return UCS_OK;
 }
 
-static inline ptl_interface_t
-uct_ptl_parse_device(uct_md_resource_desc_t *rsc) {
+static inline ptl_interface_t uct_ptl_parse_device(const char *ptl_device) {
   ptl_interface_t iface;
-  if (strstr(rsc->md_name, "bxi") == NULL) {
+  if (strstr(ptl_device, "bxi") == NULL) {
     // Device name from simulator, thus return 0
     iface = 0;
   } else {
-    sscanf(UCS_PTR_TYPE_OFFSET(rsc->md_name, 3), "%d", &iface);
+    sscanf(UCS_PTR_TYPE_OFFSET(ptl_device, 3), "%d", &iface);
   }
   return iface;
 }
 
-ucs_status_t uct_ib_query_md_resources(uct_component_t *component,
-                                       uct_md_resource_desc_t **resources_p,
-                                       unsigned *num_resources_p) {
+ucs_status_t uct_ptl_query_md_resources(uct_component_t *component,
+                                        uct_md_resource_desc_t **resources_p,
+                                        unsigned *num_resources_p) {
   int rc = UCS_OK;
   static const char *bxi_dir[2] = {"/sys/class/bxi", "/sys/class/net"};
   uct_md_resource_desc_t *resources;
@@ -193,8 +219,8 @@ ucs_status_t uct_ib_query_md_resources(uct_component_t *component,
   return rc;
 }
 
-ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, uct_md_resource_desc_t *rsc,
-                             uct_ptl_md_config_t *config) {
+ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
+                             const uct_ptl_md_config_t *config) {
 
   ucs_status_t rc;
   /* init the driver */
@@ -204,7 +230,7 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, uct_md_resource_desc_t *rsc,
   }
 
   /* init one physical interface */
-  rc = uct_ptl_wrap(PtlNIInit(uct_ptl_parse_device(rsc),
+  rc = uct_ptl_wrap(PtlNIInit(uct_ptl_parse_device(ptl_device),
                               PTL_NI_MATCHING | PTL_NI_PHYSICAL, PTL_PID_ANY,
                               &default_limits, &md->limits, &md->nih));
   if (rc != UCS_OK) {
@@ -233,7 +259,18 @@ err:
   return rc;
 }
 
-void uct_ptl_md_clean(uct_ptl_md_t *md) {
+uct_ptl_md_t *uct_ptl_md_alloc(size_t size, const char *name) {
+  uct_ptl_md_t *md;
+
+  md = ucs_calloc(1, size, name);
+  if (md == NULL) {
+    ucs_error("failed to allocate memory for md");
+  }
+
+  return md;
+}
+
+void uct_ptl_md_close(uct_ptl_md_t *md) {
   uct_ptl_wrap(PtlPTFree(md->nih, md->pti));
 
   uct_ptl_wrap(PtlNIFini(md->nih));

@@ -6,6 +6,7 @@
 #include <ucs/datastruct/mpool.h>
 #include <ucs/datastruct/queue.h>
 #include <ucs/debug/log.h>
+#include <ucs/debug/memtrack_int.h>
 
 #include <limits.h>
 #include <sys/uio.h>
