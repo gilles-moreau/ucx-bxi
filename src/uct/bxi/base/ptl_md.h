@@ -78,6 +78,7 @@ typedef struct uct_ptl_md {
   struct {
     int id;
   } config;
+  char *device;
   ptl_handle_ni_t nih;
   ptl_process_t pid;
   ptl_ni_limits_t limits;
@@ -118,7 +119,6 @@ typedef ucs_status_t (*uct_ptl_md_open_func_t)(
 
 typedef struct uct_ptl_md_ops {
   uct_md_ops_t super;
-  uct_ptl_md_open_func_t open;
 } uct_ptl_md_ops_t;
 
 typedef struct uct_ptl_md_ops_entry {
@@ -126,15 +126,5 @@ typedef struct uct_ptl_md_ops_entry {
   const char *name;
   uct_ptl_md_ops_t *ops;
 } uct_ptl_md_ops_entry_t;
-
-#define UCT_PTL_MD_OPS_NAME(_name) uct_ptl_md_ops_##_name##_entry
-
-#define UCT_PTL_MD_DEFINE_ENTRY(_name, _md_ops)                                \
-  uct_ptl_md_ops_entry_t UCT_PTL_MD_OPS_NAME(_name) = {                        \
-      .name = UCS_PP_MAKE_STRING(_md_ops),                                     \
-      .ops = &_md_ops,                                                         \
-  }
-
-extern ucs_list_link_t uct_ptl_ops;
 
 #endif

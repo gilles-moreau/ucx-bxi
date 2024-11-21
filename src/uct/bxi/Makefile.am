@@ -4,7 +4,8 @@ module_LTLIBRARIES = libuct_bxi.la
 libuct_bxi_la_CPPFLAGS = $(BASE_CPPFLAGS) $(BXI_CPPFLAGS) 
 libuct_bxi_la_CFLAGS = $(BASE_CFLAGS) $(LT_CFLAGS)
 libuct_bxi_la_LIBADD = $(top_builddir)/src/ucs/libucs.la \
-                       $(top_builddir)/src/uct/libuct.la
+                       $(top_builddir)/src/uct/libuct.la \
+											 $(BXI_LIBS)
 libuct_bxi_la_LDFLAGS = $(BXI_LDFLAGS) -version-info $(SOVERSION)
 
 noinst_HEADERS = \
@@ -21,13 +22,13 @@ libuct_bxi_la_SOURCES = \
 
 noinst_HEADERS += \
 								 am/ptl_am_iface.h \
-								 am/ptl_am_ms.h \
+								 am/ptl_am_md.h \
 								 am/ptl_am_ep.h
 
 # Active Message interface
 libuct_bxi_la_SOURCES += \
 												 am/ptl_am_iface.c \
-												 am/ptl_am_ms.c \
+												 am/ptl_am_md.c \
 												 am/ptl_am_ep.c
 
 
