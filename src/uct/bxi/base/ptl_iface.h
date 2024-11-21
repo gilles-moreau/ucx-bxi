@@ -63,9 +63,14 @@ extern ucs_config_field_t uct_ptl_iface_common_config_table[];
 ucs_status_t uct_ptl_query_devices(uct_md_h component,
                                    uct_tl_resource_desc_t **resources_p,
                                    unsigned *num_resources_p);
-ucs_status_t uct_ptl_iface_progress(uct_iface_h super);
-void uct_ptl_iface_get_attr(uct_iface_h iface, uct_iface_attr_t *attr);
+unsigned uct_ptl_iface_progress(uct_iface_t *super);
+ucs_status_t uct_ptl_iface_query(uct_iface_t *iface, uct_iface_attr_t *attr);
 ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd);
+
+ucs_status_t
+uct_ptl_iface_query_tl_devices(uct_md_h md,
+                               uct_tl_device_resource_t **tl_devices_p,
+                               unsigned *num_tl_devices_p);
 
 static inline void uct_ptl_iface_enable_progression(uct_ptl_iface_t *iface,
                                                     uct_ptl_mmd_t *mmd) {
@@ -75,6 +80,11 @@ static inline void uct_ptl_iface_enable_progression(uct_ptl_iface_t *iface,
 static inline void uct_ptl_iface_disable_progression(uct_ptl_mmd_t *mmd) {
   ucs_list_del(&mmd->elem);
 }
+
+ucs_status_t uct_ptl_iface_flush(uct_iface_h tl_iface, unsigned flags,
+                                 uct_completion_t *comp);
+
+ucs_status_t uct_ptl_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 extern ucs_config_field_t uct_ptl_iface_config_table[];
 extern char *uct_ptl_event_str[];

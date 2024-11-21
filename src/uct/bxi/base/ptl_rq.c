@@ -128,12 +128,17 @@ ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,
   /* First, initialize memory pool of receive buffers. */
   ucs_mpool_params_reset(&mp_block_params);
   mp_block_params = (ucs_mpool_params_t){
+      .max_chunk_size = params->items_per_chunk *
+                        (sizeof(uct_ptl_recv_block_t) + params->item_size),
       .elems_per_chunk = params->items_per_chunk,
       .elem_size = sizeof(uct_ptl_recv_block_t) + params->item_size,
       .max_elems = params->max_items,
       .alignment = 64,
+      .align_offset = 0,
       .ops = &uct_ptl_rq_mpool_ops,
-      .name = "rq-blocks"};
+      .name = "rq-blocks",
+      .grow_factor = 1,
+  };
 
   rc = ucs_mpool_init(&mp_block_params, &rq->mp);
   if (rc != UCS_OK) {
@@ -148,6 +153,7 @@ ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,
 
   rc = uct_ptl_recv_blocks_enable(rq);
 
+  return rc;
 err_clean_pt:
   uct_ptl_wrap(PtlPTFree(uct_ptl_iface_md(iface)->nih, rq->pti));
 err:

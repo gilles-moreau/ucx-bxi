@@ -17,14 +17,6 @@ ucs_config_field_t uct_ptl_md_config_table[] = {
 
     {NULL}};
 
-UCS_LIST_HEAD(uct_ptl_ops);
-
-extern uct_tl_t UCT_TL_NAME(am_ptl);
-
-// static uct_tl_t *uct_ptl_tls[] = {
-//     &UCT_TL_NAME(am_ptl),
-// };
-
 static const ptl_ni_limits_t default_limits = {
     .max_entries = INT_MAX,
     .max_unexpected_headers = INT_MAX,
@@ -65,8 +57,9 @@ ucs_status_t uct_ptl_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr) {
   return UCS_OK;
 }
 
-ucs_status_t uct_ptl_md_md_init(uct_ptl_md_t *md, uct_ptl_mmd_param_t *params,
-                                uct_ptl_mmd_t *mmd) {
+ucs_status_t uct_ptl_md_mdesc_init(uct_ptl_md_t *md,
+                                   uct_ptl_mmd_param_t *params,
+                                   uct_ptl_mmd_t *mmd) {
   ucs_status_t rc;
   ptl_md_t tmp;
 
@@ -92,7 +85,7 @@ err:
   return rc;
 }
 
-ucs_status_t uct_ptl_md_mmd_fini(uct_ptl_mmd_t *mmd) {
+ucs_status_t uct_ptl_md_mdesc_fini(uct_ptl_mmd_t *mmd) {
   ucs_status_t rc;
 
   rc = uct_ptl_wrap(PtlCTFree(mmd->cth));
@@ -237,10 +230,17 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
     goto err_ptl_fini;
   }
 
+  md->device = ucs_strdup(ptl_device, "md-name-dup");
+  if (md->device == NULL) {
+    ucs_error("PTL: Could not allocate ptl device name");
+    rc = UCS_ERR_NO_MEMORY;
+    goto err_ptl_nifini;
+  }
+
   /* retrieve the process identifier */
   rc = uct_ptl_wrap(PtlGetPhysId(md->nih, &md->pid));
   if (rc != UCS_OK) {
-    goto err_ptl_nifini;
+    goto err_ptl_freedev;
   }
 
   /* Allocate Portals Table Entry for RMA operations. */
@@ -251,6 +251,8 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
 
   return rc;
 
+err_ptl_freedev:
+  ucs_free(md->device);
 err_ptl_nifini:
   PtlNIFini(md->nih);
 err_ptl_fini:

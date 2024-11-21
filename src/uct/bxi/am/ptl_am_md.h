@@ -32,4 +32,6 @@ typedef struct uct_ptl_am_md {
   uct_ptl_me_t me;
 } uct_ptl_am_md_t;
 
+extern uct_component_t uct_ptl_am_component;
+
 #endif

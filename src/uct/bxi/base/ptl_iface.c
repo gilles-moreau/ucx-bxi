@@ -64,7 +64,17 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
     {NULL},
 };
 
-void uct_ptl_iface_get_attr(uct_iface_h iface, uct_iface_attr_t *attr) {
+ucs_status_t
+uct_ptl_iface_query_tl_devices(uct_md_h md,
+                               uct_tl_device_resource_t **tl_devices_p,
+                               unsigned *num_tl_devices_p) {
+  uct_ptl_md_t *ptl_md = ucs_derived_of(md, uct_ptl_md_t);
+  return uct_single_device_resource(md, ptl_md->device, UCT_DEVICE_TYPE_NET,
+                                    UCS_SYS_DEVICE_ID_UNKNOWN, tl_devices_p,
+                                    num_tl_devices_p);
+}
+
+ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   uct_ptl_iface_t *ptl_if = ucs_derived_of(iface, uct_ptl_iface_t);
 
   attr->cap.am.max_bcopy = ptl_if->config.eager_block_size;
@@ -94,6 +104,8 @@ void uct_ptl_iface_get_attr(uct_iface_h iface, uct_iface_attr_t *attr) {
                     UCT_IFACE_FLAG_INTER_NODE;
   attr->cap.event_flags =
       UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
+
+  return UCS_OK;
 }
 
 #define seqn_gt(a, b) ((int64_t)((a) - (b)) > 0)
@@ -131,7 +143,7 @@ err:
   return rc;
 }
 
-ucs_status_t uct_ptl_iface_progress(uct_iface_h super) {
+unsigned uct_ptl_iface_progress(uct_iface_t *super) {
   ucs_status_t rc;
   int ret;
   ptl_event_t ev;
@@ -168,6 +180,15 @@ ucs_status_t uct_ptl_iface_progress(uct_iface_h super) {
 
 out:
   return rc;
+}
+
+ucs_status_t uct_ptl_iface_flush(uct_iface_h tl_iface, unsigned flags,
+                                 uct_completion_t *comp) {
+  return UCS_ERR_UNSUPPORTED;
+}
+
+ucs_status_t uct_ptl_iface_fence(uct_iface_h tl_iface, unsigned flags) {
+  return UCS_ERR_UNSUPPORTED;
 }
 
 UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,

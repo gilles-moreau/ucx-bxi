@@ -19,4 +19,5 @@ typedef struct uct_ptl_ep {
 } uct_ptl_ep_t;
 
 UCS_CLASS_DECLARE(uct_ptl_ep_t, uct_ptl_iface_t *, const uct_ep_params_t *);
+
 #endif
