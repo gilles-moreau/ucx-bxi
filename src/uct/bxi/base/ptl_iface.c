@@ -22,10 +22,9 @@ char *uct_ptl_event_str[] = {
     [PTL_EVENT_AUTO_FREE] = "PTL_EVENT_AUTO_FREE",
     [PTL_EVENT_SEARCH] = "PTL_EVENT_SEARCH",
 };
-
 ucs_config_field_t uct_ptl_iface_config_table[] = {
-    {"", "", NULL, ucs_offsetof(uct_ptl_md_config_t, super),
-     UCS_CONFIG_TYPE_TABLE(uct_md_config_table)},
+    {"", "ALLOC=heap", NULL, ucs_offsetof(uct_ptl_iface_config_t, super),
+     UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
     {"MAX_EVENTS", "2048",
      "Maximum number of events per event queue (default: 2048).",
@@ -101,7 +100,7 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
                     UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_PUT_ZCOPY |
                     UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
                     UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
-                    UCT_IFACE_FLAG_INTER_NODE;
+                    UCT_IFACE_FLAG_INTER_NODE | UCT_IFACE_FLAG_CONNECT_TO_IFACE;
   attr->cap.event_flags =
       UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
 
