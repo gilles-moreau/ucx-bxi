@@ -108,16 +108,14 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
   return;
 }
 
-static ucs_status_t uct_ptl_am_iface_get_addr(uct_iface_h iface,
-                                              uct_iface_addr_t *addr) {
-  uct_ptl_am_iface_addr_t *ptl_addr = (uct_ptl_am_iface_addr_t *)addr;
-  uct_ptl_am_iface_t *ptl_iface = ucs_derived_of(iface, uct_ptl_am_iface_t);
-  uct_ptl_am_md_t *ptl_ms =
-      ucs_derived_of(ptl_iface->super.super.md, uct_ptl_am_md_t);
+static ucs_status_t uct_ptl_am_iface_get_addr(uct_iface_h tl_iface,
+                                              uct_iface_addr_t *tl_addr) {
+  uct_ptl_am_iface_addr_t *addr = (void *)tl_addr;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+  uct_ptl_am_md_t *md = ucs_derived_of(iface->super.super.md, uct_ptl_am_md_t);
 
-  ptl_addr->super.pid = ptl_ms->super.pid;
-  ptl_addr->rma_pti = ptl_ms->me.idx;
-  ptl_addr->am_pti = ptl_iface->rq.pti;
+  addr->rma_pti = md->super.pti;
+  addr->am_pti = iface->rq.pti;
 
   return UCS_OK;
 }
@@ -211,6 +209,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   if (rc != UCS_OK)
     goto err;
 
+  self->super.config.device_addr_size = sizeof(uct_ptl_device_addr_t);
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
 
   self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
@@ -259,7 +258,7 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .iface_close = UCS_CLASS_DELETE_FUNC_NAME(uct_ptl_am_iface_t),
     .iface_query = uct_ptl_iface_query,
     .iface_get_address = uct_ptl_am_iface_get_addr,
-    .iface_get_device_address = ucs_empty_function_return_unsupported,
+    .iface_get_device_address = uct_ptl_iface_get_device_address,
     .iface_is_reachable = uct_base_iface_is_reachable,
 };
 

@@ -15,7 +15,6 @@
 #define UCT_PTL_HDR_SET(_hdr, _am_id) (_hdr = (_am_id & 0xff))
 
 typedef struct uct_ptl_am_iface_addr {
-  uct_ptl_iface_addr_t super;
   ptl_pt_index_t am_pti;
   ptl_pt_index_t rma_pti;
 } uct_ptl_am_iface_addr_t;
