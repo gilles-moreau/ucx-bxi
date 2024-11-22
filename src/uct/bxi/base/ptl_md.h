@@ -57,7 +57,6 @@ typedef struct uct_ptl_me_param {
 } uct_ptl_me_param_t;
 
 typedef struct uct_ptl_me {
-  ptl_pt_index_t idx;
   ptl_handle_me_t meh;
   ptl_match_bits_t match;
   uint64_t offset;

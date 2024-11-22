@@ -9,9 +9,9 @@
 typedef ucs_status_t (*handle_ev_func_t)(uct_ptl_iface_t *iface,
                                          ptl_event_t *ev);
 
-typedef struct uct_ptl_iface_addr {
+typedef struct uct_ptl_device_addr {
   ptl_process_t pid;
-} uct_ptl_iface_addr_t;
+} uct_ptl_device_addr_t;
 
 typedef struct uct_ptl_iface_ops {
   uct_iface_internal_ops_t super;
@@ -47,6 +47,7 @@ typedef struct uct_ptl_iface {
     ptl_ni_limits_t limits;
     unsigned features;
     size_t iface_addr_size;
+    size_t device_addr_size;
   } config;
   uct_ptl_iface_ops_t ops;
   ptl_handle_eq_t eqh; // Event Queue
@@ -64,6 +65,8 @@ ucs_status_t uct_ptl_query_devices(uct_md_h component,
                                    uct_tl_resource_desc_t **resources_p,
                                    unsigned *num_resources_p);
 unsigned uct_ptl_iface_progress(uct_iface_t *super);
+ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h tl_iface,
+                                              uct_device_addr_t *tl_addr);
 ucs_status_t uct_ptl_iface_query(uct_iface_t *iface, uct_iface_attr_t *attr);
 ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd);
 

@@ -95,14 +95,25 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   attr->cap.get.max_iov = ptl_if->config.max_iovecs;
 
   attr->iface_addr_len = ptl_if->config.iface_addr_size;
+  attr->device_addr_len = ptl_if->config.device_addr_size;
 
-  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_AM_ZCOPY |
-                    UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_PUT_ZCOPY |
-                    UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
-                    UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
-                    UCT_IFACE_FLAG_INTER_NODE | UCT_IFACE_FLAG_CONNECT_TO_IFACE;
+  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
+                    UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_BCOPY |
+                    UCT_IFACE_FLAG_GET_ZCOPY | UCT_IFACE_FLAG_PENDING |
+                    UCT_IFACE_FLAG_CB_SYNC | UCT_IFACE_FLAG_INTER_NODE |
+                    UCT_IFACE_FLAG_CONNECT_TO_IFACE;
   attr->cap.event_flags =
       UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
+
+  return UCS_OK;
+}
+
+ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h tl_iface,
+                                              uct_device_addr_t *tl_addr) {
+  uct_ptl_device_addr_t *addr = (void *)tl_addr;
+  uct_ptl_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_iface_t);
+
+  addr->pid = uct_ptl_iface_md(iface)->pid;
 
   return UCS_OK;
 }
