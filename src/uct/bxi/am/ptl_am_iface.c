@@ -27,8 +27,8 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   switch (ev->type) {
   case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_PUT:
-    /* First, invoke AM handle. */
-    am_id = UCT_PTL_HDR_GET_AM_ID(ev->hdr_data);
+    /* First, invoke AM handler. */
+    am_id = UCT_PTL_HDR_GET_AM_ID(ev->match_bits);
     rc = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
     break;
   case PTL_EVENT_AUTO_UNLINK:
@@ -72,13 +72,13 @@ ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
 
   /* Load the sequence number of the last rma operations. */
   // TODO:  atomic load
-  last_seqn = ptl_iface->rma_md->seqn - 1;
+  last_seqn = ptl_iface->rma_mmd->seqn - 1;
 
-  rc = uct_ptl_md_progress(ptl_iface->rma_md);
+  rc = uct_ptl_md_progress(ptl_iface->rma_mmd);
   if (rc != UCS_OK)
     goto err;
 
-  if (!ucs_queue_is_empty(&ptl_iface->rma_md->opq)) {
+  if (!ucs_queue_is_empty(&ptl_iface->rma_mmd->opq)) {
     rc = UCS_INPROGRESS;
 
     op = ucs_mpool_get(&ptl_iface->rma_mp);
@@ -91,7 +91,7 @@ ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
     op->seqn = last_seqn;
 
     // TODO: lock
-    ucs_queue_push(&ptl_iface->rma_md->opq, &op->elem);
+    ucs_queue_push(&ptl_iface->rma_mmd->opq, &op->elem);
   }
 
 err:
@@ -145,7 +145,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
                             &ptl_config->super);
 
   /* Get MS MD for convenience. */
-  self->rma_md = &ptl_ms->mmd;
+  self->rma_mmd = &ptl_ms->mmd;
 
   /* Enable progression of RMA operation. */
   uct_ptl_iface_enable_progression(&self->super, &ptl_ms->mmd);
@@ -172,11 +172,11 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   md_param = (uct_ptl_mmd_param_t){
       .flags = PTL_CT_ACK_REQ,
   };
-  rc = uct_ptl_md_mdesc_init(&ptl_ms->super, &md_param, &self->am_md);
+  rc = uct_ptl_md_mdesc_init(&ptl_ms->super, &md_param, &self->am_mmd);
   if (rc != UCS_OK)
     goto err;
 
-  uct_ptl_iface_enable_progression(&self->super, &self->am_md);
+  uct_ptl_iface_enable_progression(&self->super, &self->am_mmd);
 
   /* Work pool of operation. */
   mp_ops_param = (ucs_mpool_params_t){
@@ -209,6 +209,8 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   if (rc != UCS_OK)
     goto err;
 
+  self->super.config.max_short =
+      uct_ptl_iface_md(&self->super)->limits.max_volatile_size;
   self->super.config.device_addr_size = sizeof(uct_ptl_device_addr_t);
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
 
