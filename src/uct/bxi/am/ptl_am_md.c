@@ -88,7 +88,7 @@ static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
   }
 
   mmd_param = (uct_ptl_mmd_param_t){
-      .flags = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_CT_REPLY,
+      .flags = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_CT_REPLY | PTL_MD_VOLATILE,
   };
   rc = uct_ptl_md_mdesc_init(&ptl_md->super, &mmd_param, &ptl_md->mmd);
   if (rc != UCS_OK)

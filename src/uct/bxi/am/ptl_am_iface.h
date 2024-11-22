@@ -29,8 +29,8 @@ typedef struct uct_ptl_am_iface {
   struct {
     int id;
   } config;
-  uct_ptl_mmd_t am_md;
-  uct_ptl_mmd_t *rma_md;
+  uct_ptl_mmd_t am_mmd;
+  uct_ptl_mmd_t *rma_mmd;
   ucs_mpool_t am_mp;
   ucs_mpool_t rma_mp;
   uct_ptl_rq_t rq;

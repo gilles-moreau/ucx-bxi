@@ -76,6 +76,7 @@ uct_ptl_iface_query_tl_devices(uct_md_h md,
 ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   uct_ptl_iface_t *ptl_if = ucs_derived_of(iface, uct_ptl_iface_t);
 
+  attr->cap.am.max_short = ptl_if->config.max_short;
   attr->cap.am.max_bcopy = ptl_if->config.eager_block_size;
   attr->cap.am.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.am.max_iov = ptl_if->config.max_iovecs;

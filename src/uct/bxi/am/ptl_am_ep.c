@@ -3,7 +3,16 @@
 
 ucs_status_t uct_ptl_am_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                     const void *buffer, unsigned length) {
-  return UCS_ERR_UNSUPPORTED;
+  ucs_status_t rc;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t);
+
+  ucs_assert(length <= iface->super.config.max_short);
+  rc = uct_ptl_wrap(PtlPut(ep->am_md->mdh, (ptl_size_t)buffer, length,
+                           PTL_CT_ACK_REQ, ep->super.pid, ep->am_pti, id, 0,
+                           NULL, hdr));
+
+  return rc;
 }
 
 ucs_status_t uct_ptl_am_ep_am_short_iov(uct_ep_h ep, uint8_t id,
@@ -15,7 +24,7 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h ep, uint8_t id,
                                uct_pack_callback_t pack, void *arg,
                                unsigned flags) {
   ucs_status_t rc = UCS_OK;
-  ptl_hdr_data_t hdr;
+  ptl_match_bits_t hdr = 0;
   uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(ep, uct_ptl_am_ep_t);
 
   void *start = NULL;
@@ -42,8 +51,8 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h ep, uint8_t id,
   }
 
   rc = uct_ptl_wrap(PtlPut(ptl_ep->am_md->mdh, (ptl_size_t)start, size,
-                           PTL_CT_ACK_REQ, ptl_ep->super.pid, ptl_ep->am_pti, 0,
-                           0, NULL, UCT_PTL_HDR_SET(hdr, id)));
+                           PTL_CT_ACK_REQ, ptl_ep->super.pid, ptl_ep->am_pti,
+                           UCT_PTL_HDR_SET(hdr, id), 0, NULL, 0));
 
   if (rc != UCS_OK) {
     ucs_mpool_put(op);
@@ -265,8 +274,8 @@ UCS_CLASS_INIT_FUNC(uct_ptl_am_ep_t, const uct_ep_params_t *params) {
 
   self->am_mp = &iface->am_mp;
   self->rma_mp = &iface->rma_mp;
-  self->am_md = &iface->am_md;
-  self->rma_md = iface->rma_md;
+  self->am_md = &iface->am_mmd;
+  self->rma_md = iface->rma_mmd;
 
   self->am_pti = addr->am_pti;
   self->rma_pti = addr->rma_pti;
