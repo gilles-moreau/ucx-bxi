@@ -4,40 +4,63 @@
 ucs_status_t uct_ptl_am_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                     const void *buffer, unsigned length) {
   ucs_status_t rc;
+  ptl_match_bits_t am_hdr = 0;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t);
 
+  return UCS_ERR_UNSUPPORTED;
+
   ucs_assert(length <= iface->super.config.max_short);
-  rc = uct_ptl_wrap(PtlPut(ep->am_md->mdh, (ptl_size_t)buffer, length,
-                           PTL_CT_ACK_REQ, ep->super.pid, ep->am_pti, id, 0,
+
+  UCT_PTL_HDR_SET(am_hdr, id, UCT_PTL_AM_SHORT);
+  ep->am_mmd->seqn++;
+
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)buffer, length,
+                           PTL_CT_ACK_REQ, ep->super.pid, ep->am_pti, am_hdr, 0,
                            NULL, hdr));
 
   return rc;
 }
 
-ucs_status_t uct_ptl_am_ep_am_short_iov(uct_ep_h ep, uint8_t id,
+ucs_status_t uct_ptl_am_ep_am_short_iov(uct_ep_h tl_ep, uint8_t id,
                                         const uct_iov_t *iov, size_t iovcnt) {
+  ucs_status_t rc;
+  ptl_match_bits_t am_hdr = 0;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t);
+
   return UCS_ERR_UNSUPPORTED;
+
+  ucs_assert(iovcnt == 1 && iov->length <= iface->super.config.max_short);
+
+  UCT_PTL_HDR_SET(am_hdr, id, UCT_PTL_AM_BCOPY);
+  ep->am_mmd->seqn++;
+
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)iov->buffer,
+                           iov->length, PTL_CT_ACK_REQ, ep->super.pid,
+                           ep->am_pti, am_hdr, 0, NULL, 0));
+
+  return rc;
 }
 
-ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h ep, uint8_t id,
+ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
                                uct_pack_callback_t pack, void *arg,
                                unsigned flags) {
   ucs_status_t rc = UCS_OK;
   ptl_match_bits_t hdr = 0;
-  uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(ep, uct_ptl_am_ep_t);
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
 
   void *start = NULL;
   ssize_t size = 0;
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->am_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->bcopy_mp);
 
   if (op == NULL) {
-    ucs_warn("PTL: reached max outstanding operations.");
+    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
   op->comp = NULL;
-  op->seqn = ptl_ep->am_md->seqn++;
+  op->seqn = ep->am_mmd->seqn++;
 
   start = (void *)(op + 1);
   if (start == NULL) {
@@ -50,18 +73,22 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h ep, uint8_t id,
     goto err;
   }
 
-  rc = uct_ptl_wrap(PtlPut(ptl_ep->am_md->mdh, (ptl_size_t)start, size,
-                           PTL_CT_ACK_REQ, ptl_ep->super.pid, ptl_ep->am_pti,
-                           UCT_PTL_HDR_SET(hdr, id), 0, NULL, 0));
+  UCT_PTL_HDR_SET(hdr, id, UCT_PTL_AM_BCOPY);
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)start, size,
+                           PTL_CT_ACK_REQ, ep->super.pid, ep->am_pti, hdr, 0,
+                           NULL, 0));
 
   if (rc != UCS_OK) {
     ucs_mpool_put(op);
+    ep->am_mmd->seqn++;
     size = UCS_ERR_IO_ERROR;
     goto err;
   }
 
-  ucs_queue_push(&ptl_ep->am_md->opq, &op->elem);
+  ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
+  uct_ptl_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t),
+                         UCT_AM_TRACE_TYPE_SEND, id, start, size);
 err:
   return size;
 }
@@ -140,21 +167,21 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc = UCS_OK;
   uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->rma_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
 
   ucs_assert(iovcnt == 1);
 
   if (op == NULL) {
-    ucs_warn("PTL: reached max outstanding operations.");
+    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
   op->comp = comp;
   op->size = iov[0].length;
-  op->seqn = ptl_ep->rma_md->seqn++;
+  op->seqn = ptl_ep->rma_mmd->seqn++;
 
-  rc = uct_ptl_wrap(PtlPut(ptl_ep->rma_md->mdh, (ptl_size_t)iov[0].buffer,
+  rc = uct_ptl_wrap(PtlPut(ptl_ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
                            op->size, PTL_CT_ACK_REQ, ptl_ep->super.pid,
                            ptl_ep->rma_pti, 0, remote_addr, NULL, 0));
 
@@ -164,7 +191,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     goto err;
   }
 
-  ucs_queue_push(&ptl_ep->rma_md->opq, &op->elem);
+  ucs_queue_push(&ptl_ep->rma_mmd->opq, &op->elem);
 
 err:
   return rc;
@@ -182,19 +209,19 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc = UCS_OK;
   uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->rma_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_warn("PTL: reached max outstanding operations.");
+    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
   op->comp = comp;
   op->size = iov[0].length;
-  op->seqn = ptl_ep->rma_md->seqn++;
+  op->seqn = ptl_ep->rma_mmd->seqn++;
 
-  rc = uct_ptl_wrap(PtlGet(ptl_ep->rma_md->mdh, (ptl_size_t)iov[0].buffer,
+  rc = uct_ptl_wrap(PtlGet(ptl_ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
                            op->size, ptl_ep->super.pid, ptl_ep->rma_pti, 0,
                            remote_addr, NULL));
 
@@ -204,7 +231,7 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     goto err;
   }
 
-  ucs_queue_push(&ptl_ep->rma_md->opq, &op->elem);
+  ucs_queue_push(&ptl_ep->rma_mmd->opq, &op->elem);
 
 err:
   return rc;
@@ -272,10 +299,10 @@ UCS_CLASS_INIT_FUNC(uct_ptl_am_ep_t, const uct_ep_params_t *params) {
 
   UCS_CLASS_CALL_SUPER_INIT(uct_ptl_ep_t, &iface->super, params);
 
-  self->am_mp = &iface->am_mp;
-  self->rma_mp = &iface->rma_mp;
-  self->am_md = &iface->am_mmd;
-  self->rma_md = iface->rma_mmd;
+  self->bcopy_mp = &iface->bcopy_mp;
+  self->zcopy_mp = &iface->zcopy_mp;
+  self->am_mmd = &iface->am_mmd;
+  self->rma_mmd = iface->rma_mmd;
 
   self->am_pti = addr->am_pti;
   self->rma_pti = addr->rma_pti;

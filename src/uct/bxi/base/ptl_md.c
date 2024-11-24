@@ -41,6 +41,7 @@ ucs_status_t uct_ptl_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr) {
   size_t component_name_length = strlen(md->super.component->name);
 
   uct_md_base_md_query(md_attr);
+  md_attr->max_alloc = ULONG_MAX;
   md_attr->max_reg = ULONG_MAX;
   md_attr->flags = md->cap_flags;
   md_attr->access_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);

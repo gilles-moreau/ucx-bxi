@@ -14,10 +14,10 @@ typedef struct uct_ptl_am_ep {
   } config;
   ptl_pt_index_t am_pti;
   ptl_pt_index_t rma_pti;
-  ucs_mpool_t *am_mp;
-  ucs_mpool_t *rma_mp;
-  uct_ptl_mmd_t *am_md;
-  uct_ptl_mmd_t *rma_md;
+  ucs_mpool_t *bcopy_mp;
+  ucs_mpool_t *zcopy_mp;
+  uct_ptl_mmd_t *am_mmd;
+  uct_ptl_mmd_t *rma_mmd;
 } uct_ptl_am_ep_t;
 
 ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
