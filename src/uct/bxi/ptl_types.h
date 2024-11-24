@@ -97,6 +97,13 @@ typedef struct uct_ptl_op {
     loc_rc;                                                                    \
   })
 
+#define uct_ptl_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
+  uct_iface_trace_am(&(_iface)->super.super, _type, _am_id, _data, _length,    \
+                     "%cX",                                                    \
+                     ((_type) == UCT_AM_TRACE_TYPE_RECV)   ? 'R'               \
+                     : ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T'               \
+                                                           : '?')
+
 extern uct_component_t ptl_am_component;
 extern uct_component_t ptl_rma_component;
 extern uct_component_t ptl_tag_component;
