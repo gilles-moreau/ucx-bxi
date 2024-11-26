@@ -26,12 +26,11 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   uint8_t prot_id = UCT_PTL_HDR_GET_PROT_ID(ev->match_bits);
   uct_ptl_recv_block_t *block;
 
-  ucs_info("PORTALS: EQS EVENT '%s' eqh=%lu, idx=%d, "
+  ucs_info("PORTALS: EQS EVENT '%s' idx=%d, "
            "sz=%lu, user=%p, start=%p, "
-           "remote_offset=%lu, iface=%lu",
-           uct_ptl_event_str[ev->type], (uint64_t)iface->eqh, ev->pt_index,
-           ev->mlength, ev->user_ptr, ev->start, ev->remote_offset,
-           (uint64_t)0);
+           "remote_offset=%lu",
+           uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength, ev->user_ptr,
+           ev->start, ev->remote_offset);
 
   switch (ev->type) {
   case PTL_EVENT_PUT_OVERFLOW:
@@ -198,7 +197,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
       .alignment = 64,
       .align_offset = 0,
       .ops = &uct_ptl_am_mpool_ops,
-      .name = "am-am-ops",
+      .name = "short-am-ops",
       .grow_factor = 1,
   };
   rc = ucs_mpool_init(&mp_param, &self->short_mp);
@@ -248,7 +247,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
       .alignment = 64,
       .align_offset = 0,
       .ops = &uct_ptl_am_mpool_ops,
-      .name = "am-am-ops",
+      .name = "bcopy-am-ops",
       .grow_factor = 1,
   };
   rc = ucs_mpool_init(&mp_param, &self->bcopy_mp);
@@ -258,7 +257,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   rq_param = (uct_ptl_rq_param_t){
       .items_per_chunk = self->super.config.num_eager_blocks,
       .min_items = 2,
-      .max_items = self->super.config.num_eager_blocks,
+      .max_items = 64 * self->super.config.num_eager_blocks,
       .item_size = self->super.config.eager_block_size,
       .options = ECR_PTL_BLOCK_AM,
       .min_free = self->super.config.eager_block_size,
