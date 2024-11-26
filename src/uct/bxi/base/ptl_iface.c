@@ -35,7 +35,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
      UCS_CONFIG_TYPE_UINT},
 
-    {"COPYIN_BUF_PER_BLOCK", "2",
+    {"COPYIN_BUF_PER_BLOCK", "8",
      "Number of copyin buffers allocated per block (default: 2)",
      ucs_offsetof(uct_ptl_iface_config_t, copyin_buf_per_block),
      UCS_CONFIG_TYPE_UINT},
@@ -50,7 +50,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"NUM_EAGER_BLOCKS", "8",
+    {"NUM_EAGER_BLOCKS", "32",
      "Number of eager blocks for receiving unexpected messages (default: 32).",
      ucs_offsetof(uct_ptl_iface_config_t, num_eager_blocks),
      UCS_CONFIG_TYPE_UINT},
