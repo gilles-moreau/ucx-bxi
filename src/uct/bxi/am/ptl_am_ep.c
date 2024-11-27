@@ -237,17 +237,155 @@ err:
   return rc;
 }
 
+static ucs_status_t
+uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
+                                 uint64_t value, size_t size, ptl_datatype_t dt,
+                                 uint64_t remote_addr, uct_rkey_t rkey) {
+  ucs_status_t rc;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+
+  if (op == NULL) {
+    ucs_debug("PTL: reached max outstanding operations.");
+    rc = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+
+  op->comp = NULL;
+  op->seqn = ep->rma_mmd->seqn++;
+  op->ato.value = value;
+
+  rc = uct_ptl_wrap(PtlAtomic(ep->rma_mmd->mdh, (uint64_t)&op->ato.value, size,
+                              PTL_CT_ACK_REQ, ep->super.pid, ep->rma_pti, 0,
+                              remote_addr, NULL, 0,
+                              uct_ptl_atomic_op_table[opcode], dt));
+
+  if (rc != UCS_OK) {
+    ucs_mpool_put(op);
+    rc = UCS_ERR_IO_ERROR;
+    goto err;
+  }
+
+  ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
+
+err:
+  return rc;
+}
+
+static ucs_status_t
+uct_ptl_am_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode,
+                                  uint64_t value, uint64_t *result, size_t size,
+                                  ptl_datatype_t dt, uint64_t remote_addr,
+                                  uct_rkey_t rkey, uct_completion_t *comp) {
+
+  ucs_status_t rc;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+
+  if (op == NULL) {
+    ucs_debug("PTL: reached max outstanding operations.");
+    rc = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+
+  op->comp = NULL;
+  op->seqn = ep->rma_mmd->seqn++;
+  op->ato.value = value;
+
+  rc = uct_ptl_wrap(PtlFetchAtomic(
+      ep->rma_mmd->mdh, (uint64_t)result, ep->rma_mmd->mdh,
+      (uint64_t)&op->ato.value, size, ep->super.pid, ep->rma_pti, 0,
+      remote_addr, NULL, 0, uct_ptl_atomic_op_table[opcode], dt));
+
+  if (rc != UCS_OK) {
+    ucs_mpool_put(op);
+    rc = UCS_ERR_IO_ERROR;
+    goto err;
+  }
+
+  ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
+
+err:
+  return rc;
+}
+
+static ucs_status_t
+uct_ptl_am_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare,
+                                  uint64_t swap, size_t size, ptl_datatype_t dt,
+                                  uint64_t remote_addr, uct_rkey_t rkey,
+                                  uint64_t *result, uct_completion_t *comp) {
+  ucs_status_t rc;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+
+  if (op == NULL) {
+    ucs_debug("PTL: reached max outstanding operations.");
+    rc = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+
+  op->comp = NULL;
+  op->seqn = ep->rma_mmd->seqn++;
+  op->ato.value = swap;
+  op->ato.compare = compare;
+
+  rc = uct_ptl_wrap(PtlSwap(ep->rma_mmd->mdh, (uint64_t)result,
+                            ep->rma_mmd->mdh, (uint64_t)&op->ato.value, size,
+                            ep->super.pid, ep->rma_pti, 0, remote_addr, NULL, 0,
+                            &op->ato.compare, PTL_CSWAP, dt));
+
+  if (rc != UCS_OK) {
+    ucs_mpool_put(op);
+    rc = UCS_ERR_IO_ERROR;
+    goto err;
+  }
+
+  ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
+
+err:
+  return rc;
+}
+
+ucs_status_t uct_ptl_am_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
+                                          uint32_t swap, uint64_t remote_addr,
+                                          uct_rkey_t rkey, uint32_t *result,
+                                          uct_completion_t *comp) {
+  return uct_ptl_am_ep_atomic_cswap_common(
+      tl_ep, (uint64_t)compare, (uint64_t)swap, sizeof(uint32_t), PTL_UINT32_T,
+      remote_addr, rkey, (uint64_t *)result, comp);
+}
+
+ucs_status_t uct_ptl_am_ep_atomic32_post(uct_ep_h tl_ep, unsigned opcode,
+                                         uint32_t value, uint64_t remote_addr,
+                                         uct_rkey_t rkey) {
+  return uct_ptl_am_ep_atomic_post_common(
+      tl_ep, opcode, value, sizeof(uint32_t), PTL_UINT32_T, remote_addr, rkey);
+}
+
+ucs_status_t uct_ptl_am_ep_atomic32_fetch(uct_ep_h tl_ep, unsigned opcode,
+                                          uint32_t value, uint32_t *result,
+                                          uint64_t remote_addr, uct_rkey_t rkey,
+                                          uct_completion_t *comp) {
+  return uct_ptl_am_ep_atomic_fetch_common(
+      tl_ep, opcode, (uint64_t)value, (uint64_t *)result, sizeof(uint32_t),
+      PTL_UINT32_T, remote_addr, rkey, comp);
+}
+
 ucs_status_t uct_ptl_am_ep_atomic_cswap64(uct_ep_h tl_ep, uint64_t compare,
                                           uint64_t swap, uint64_t remote_addr,
                                           uct_rkey_t rkey, uint64_t *result,
                                           uct_completion_t *comp) {
-  return UCS_ERR_UNSUPPORTED;
+  return uct_ptl_am_ep_atomic_cswap_common(tl_ep, compare, swap,
+                                           sizeof(uint64_t), PTL_UINT64_T,
+                                           remote_addr, rkey, result, comp);
 }
 
 ucs_status_t uct_ptl_am_ep_atomic64_post(uct_ep_h tl_ep, unsigned opcode,
                                          uint64_t value, uint64_t remote_addr,
                                          uct_rkey_t rkey) {
-  return UCS_ERR_UNSUPPORTED;
+
+  return uct_ptl_am_ep_atomic_post_common(
+      tl_ep, opcode, value, sizeof(uint64_t), PTL_UINT64_T, remote_addr, rkey);
 }
 
 ucs_status_t uct_ptl_am_ep_atomic64_fetch(uct_ep_h tl_ep,
@@ -255,7 +393,9 @@ ucs_status_t uct_ptl_am_ep_atomic64_fetch(uct_ep_h tl_ep,
                                           uint64_t value, uint64_t *result,
                                           uint64_t remote_addr, uct_rkey_t rkey,
                                           uct_completion_t *comp) {
-  return UCS_ERR_UNSUPPORTED;
+  return uct_ptl_am_ep_atomic_fetch_common(tl_ep, opcode, value, result,
+                                           sizeof(uint64_t), PTL_UINT64_T,
+                                           remote_addr, rkey, comp);
 }
 
 ucs_status_t uct_ptl_am_ep_flush(uct_ep_h tl_ep, unsigned flags,

@@ -21,6 +21,8 @@ static ucs_status_t uct_ptl_recv_block_init(uct_ptl_rq_t *rq,
   block->meh = PTL_INVALID_HANDLE;
   block->rq = rq;
 
+  ucs_debug("PTL: rq block. start=%p.", block->start);
+
   *block_p = block;
 
 err:

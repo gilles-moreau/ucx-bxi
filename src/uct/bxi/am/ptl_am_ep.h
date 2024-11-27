@@ -56,14 +56,28 @@ ucs_status_t uct_ptl_am_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id,
                                     const uct_iov_t *iov, size_t iovcnt,
                                     unsigned flags, uct_completion_t *comp);
 
+ucs_status_t uct_ptl_am_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
+                                          uint32_t swap, uint64_t remote_addr,
+                                          uct_rkey_t rkey, uint32_t *result,
+                                          uct_completion_t *comp);
+
 ucs_status_t uct_ptl_am_ep_atomic_cswap64(uct_ep_h tl_ep, uint64_t compare,
                                           uint64_t swap, uint64_t remote_addr,
                                           uct_rkey_t rkey, uint64_t *result,
                                           uct_completion_t *comp);
 
+ucs_status_t uct_ptl_am_ep_atomic32_post(uct_ep_h tl_ep, unsigned opcode,
+                                         uint32_t value, uint64_t remote_addr,
+                                         uct_rkey_t rkey);
+
 ucs_status_t uct_ptl_am_ep_atomic64_post(uct_ep_h tl_ep, unsigned opcode,
                                          uint64_t value, uint64_t remote_addr,
                                          uct_rkey_t rkey);
+
+ucs_status_t uct_ptl_am_ep_atomic32_fetch(uct_ep_h tl_ep, unsigned opcode,
+                                          uint32_t value, uint32_t *result,
+                                          uint64_t remote_addr, uct_rkey_t rkey,
+                                          uct_completion_t *comp);
 
 ucs_status_t uct_ptl_am_ep_atomic64_fetch(uct_ep_h tl_ep,
                                           uct_atomic_op_t opcode,

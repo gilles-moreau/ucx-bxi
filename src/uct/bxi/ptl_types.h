@@ -63,6 +63,10 @@ typedef struct uct_ptl_op {
       uct_tag_context_t *ctx;
       ptl_handle_me_t meh;
     } tag;
+    struct {
+      uint64_t value;
+      uint64_t compare;
+    } ato;
   };
 
 } uct_ptl_op_t;

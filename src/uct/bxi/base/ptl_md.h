@@ -95,8 +95,8 @@ ucs_status_t uct_ptl_md_me_fini(uct_ptl_md_t *md, uct_ptl_me_t *me);
 uct_ptl_md_t *uct_ptl_md_alloc(size_t size, const char *name);
 ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
                              const uct_ptl_md_config_t *config);
+void uct_ptl_md_fini(uct_ptl_md_t *md);
 ucs_status_t uct_ptl_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
-void uct_ptl_md_close(uct_ptl_md_t *md);
 ucs_status_t uct_ptl_query_md_resources(uct_component_t *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);

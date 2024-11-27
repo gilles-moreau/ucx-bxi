@@ -1,5 +1,11 @@
 #include "ptl_ep.h"
 
+ptl_op_t uct_ptl_atomic_op_table[] = {
+    [UCT_ATOMIC_OP_ADD] = PTL_SUM,   [UCT_ATOMIC_OP_AND] = PTL_BAND,
+    [UCT_ATOMIC_OP_OR] = PTL_BOR,    [UCT_ATOMIC_OP_XOR] = PTL_BXOR,
+    [UCT_ATOMIC_OP_SWAP] = PTL_SWAP, [UCT_ATOMIC_OP_CSWAP] = PTL_CSWAP,
+};
+
 UCS_CLASS_INIT_FUNC(uct_ptl_ep_t, uct_ptl_iface_t *iface,
                     const uct_ep_params_t *params) {
   uct_ptl_iface_t *ptl_iface = ucs_derived_of(iface, uct_ptl_iface_t);
