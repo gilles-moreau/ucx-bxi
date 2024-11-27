@@ -758,7 +758,7 @@ public:
     {
         if (has_ugni() || has_gpu() || has_transport("tcp") ||
             has_transport("cma") || has_transport("knem") ||
-            has_transport("xpmem")) {
+            has_transport("ptl_am") || has_transport("xpmem")) {
             UCS_TEST_SKIP_R(GetParam()->tl_name +
                             " does not support AM alignment");
         }

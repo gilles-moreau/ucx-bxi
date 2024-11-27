@@ -104,17 +104,19 @@ ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
   if (!ucs_queue_is_empty(&ptl_iface->rma_mmd->opq)) {
     rc = UCS_INPROGRESS;
 
-    op = ucs_mpool_get(&ptl_iface->zcopy_mp);
-    if (op == NULL) {
-      ucs_error("PTL: could not allocate flush operation.");
-      rc = UCS_ERR_NO_MEMORY;
-      goto err;
-    }
-    op->comp = comp;
-    op->seqn = last_seqn;
+    if (comp != NULL) {
+      op = ucs_mpool_get(&ptl_iface->zcopy_mp);
+      if (op == NULL) {
+        ucs_error("PTL: could not allocate flush operation.");
+        rc = UCS_ERR_NO_MEMORY;
+        goto err;
+      }
+      op->comp = comp;
+      op->seqn = last_seqn;
 
-    // TODO: lock
-    ucs_queue_push(&ptl_iface->rma_mmd->opq, &op->elem);
+      // TODO: lock
+      ucs_queue_push(&ptl_iface->rma_mmd->opq, &op->elem);
+    }
   }
 
 err:
@@ -125,6 +127,8 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
 
   uct_base_iface_progress_disable(&self->super.super.super,
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
+
+  ucs_mpool_cleanup(&self->short_mp, 0);
 
   ucs_mpool_cleanup(&self->bcopy_mp, 0);
 
@@ -255,10 +259,11 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
     goto err;
 
   rq_param = (uct_ptl_rq_param_t){
-      .items_per_chunk = self->super.config.num_eager_blocks,
+      .items_per_chunk = 8,
       .min_items = 2,
       .max_items = 64 * self->super.config.num_eager_blocks,
-      .item_size = self->super.config.eager_block_size,
+      .item_size = self->super.config.eager_block_size *
+                   self->super.config.num_eager_blocks,
       .options = ECR_PTL_BLOCK_AM,
       .min_free = self->super.config.eager_block_size,
   };
@@ -286,12 +291,9 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .ep_atomic_cswap64 = uct_ptl_am_ep_atomic_cswap64,
     .ep_atomic64_post = uct_ptl_am_ep_atomic64_post,
     .ep_atomic64_fetch = uct_ptl_am_ep_atomic64_fetch,
-    .ep_atomic_cswap32 =
-        (uct_ep_atomic_cswap32_func_t)ucs_empty_function_return_unsupported,
-    .ep_atomic32_post =
-        (uct_ep_atomic32_post_func_t)ucs_empty_function_return_unsupported,
-    .ep_atomic32_fetch =
-        (uct_ep_atomic32_fetch_func_t)ucs_empty_function_return_unsupported,
+    .ep_atomic_cswap32 = uct_ptl_am_ep_atomic_cswap32,
+    .ep_atomic32_post = uct_ptl_am_ep_atomic32_post,
+    .ep_atomic32_fetch = uct_ptl_am_ep_atomic32_fetch,
     .ep_pending_add = uct_ptl_am_ep_pending_add,
     .ep_pending_purge = uct_ptl_am_ep_pending_purge,
     .ep_flush = uct_ptl_am_ep_flush,

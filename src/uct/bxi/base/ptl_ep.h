@@ -6,6 +6,8 @@
 #include <ucs/debug/debug_int.h>
 #include <uct/api/uct.h>
 
+extern ptl_op_t uct_ptl_atomic_op_table[];
+
 typedef struct uct_ptl_ep_config {
   int id;
 } uct_ptl_ep_config_t;

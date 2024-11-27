@@ -64,6 +64,18 @@ void uct_ptl_am_md_close(uct_md_h uct_md) {
 
   uct_ptl_md_mdesc_fini(&md->mmd);
   uct_ptl_md_me_fini(&md->super, &md->me);
+
+  uct_ptl_wrap(PtlPTFree(md->super.nih, md->super.pti));
+
+  uct_ptl_wrap(PtlNIFini(md->super.nih));
+
+  // FIXME: there seems to be a problem due to static definition of this call in
+  // Bull Portails.
+  //  PtlFini();
+
+  ucs_free(md->super.device);
+
+  ucs_free(md);
 }
 
 static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
@@ -88,11 +100,12 @@ static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
   }
 
   mmd_param = (uct_ptl_mmd_param_t){
-      .flags = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_CT_REPLY | PTL_MD_VOLATILE,
+      .flags = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_CT_REPLY,
   };
   rc = uct_ptl_md_mdesc_init(&ptl_md->super, &mmd_param, &ptl_md->mmd);
-  if (rc != UCS_OK)
-    goto err;
+  if (rc != UCS_OK) {
+    goto err_md_fini;
+  }
 
   /* Memory entry for remote access. */
   me_param = (uct_ptl_me_param_t){
@@ -104,8 +117,9 @@ static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
                PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE,
   };
   rc = uct_ptl_md_me_init(&ptl_md->super, &me_param, &ptl_md->me);
-  if (rc != UCS_OK)
-    goto err;
+  if (rc != UCS_OK) {
+    goto err_mmd_fini;
+  }
 
   ptl_md->super.cap_flags |=
       UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_MEMH | UCT_MD_FLAG_NEED_RKEY;
@@ -116,6 +130,11 @@ static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
   *md_p = &ptl_md->super.super;
 
   return rc;
+
+err_mmd_fini:
+  uct_ptl_md_mdesc_fini(&ptl_md->mmd);
+err_md_fini:
+  uct_ptl_md_fini(&ptl_md->super);
 err_clean_md:
   ucs_free(ptl_md);
 err:

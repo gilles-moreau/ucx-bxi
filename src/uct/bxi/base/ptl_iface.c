@@ -50,7 +50,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"NUM_EAGER_BLOCKS", "32",
+    {"NUM_EAGER_BLOCKS", "8",
      "Number of eager blocks for receiving unexpected messages (default: 32).",
      ucs_offsetof(uct_ptl_iface_config_t, num_eager_blocks),
      UCS_CONFIG_TYPE_UINT},
@@ -103,6 +103,21 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
                     UCT_IFACE_FLAG_GET_ZCOPY | UCT_IFACE_FLAG_PENDING |
                     UCT_IFACE_FLAG_CB_SYNC | UCT_IFACE_FLAG_INTER_NODE |
                     UCT_IFACE_FLAG_CONNECT_TO_IFACE;
+
+  attr->cap.atomic32.op_flags |=
+      UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  // attr->cap.atomic32.fop_flags |=
+  //     UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+  //     UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.atomic64.op_flags |=
+      UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  // attr->cap.atomic64.fop_flags |=
+  //     UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+  //     UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
+
   attr->cap.event_flags =
       UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
 

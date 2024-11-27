@@ -273,12 +273,14 @@ uct_ptl_md_t *uct_ptl_md_alloc(size_t size, const char *name) {
   return md;
 }
 
-void uct_ptl_md_close(uct_ptl_md_t *md) {
+void uct_ptl_md_fini(uct_ptl_md_t *md) {
   uct_ptl_wrap(PtlPTFree(md->nih, md->pti));
 
   uct_ptl_wrap(PtlNIFini(md->nih));
 
   PtlFini();
+
+  ucs_free(md->device);
 
   return;
 }
