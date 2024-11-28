@@ -30,6 +30,11 @@ typedef struct uct_ptl_am_iface_addr {
   ptl_pt_index_t rma_pti;
 } uct_ptl_am_iface_addr_t;
 
+typedef struct uct_ptl_am_ep_addr {
+  uct_ptl_ep_addr_t super;
+  uct_ptl_am_iface_addr_t iface_addr;
+} uct_ptl_am_ep_addr_t;
+
 typedef struct uct_ptl_am_iface_config {
   uct_ptl_iface_config_t super;
   int id;
@@ -47,5 +52,15 @@ typedef struct uct_ptl_am_iface {
   ucs_mpool_t zcopy_mp;
   uct_ptl_rq_t rq;
 } uct_ptl_am_iface_t;
+
+static inline int
+uct_ptl_am_iface_cmp_iface_addr(uct_ptl_am_iface_addr_t *addr1,
+                                uct_ptl_am_iface_addr_t *addr2) {
+  return addr1->am_pti == addr2->am_pti && addr1->rma_pti == addr2->rma_pti;
+}
+
+ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
+                                    uct_completion_t *comp);
+ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 #endif

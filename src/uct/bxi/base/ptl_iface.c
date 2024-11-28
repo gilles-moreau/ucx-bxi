@@ -87,22 +87,25 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   attr->cap.tag.eager.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.tag.eager.max_iov = ptl_if->config.max_iovecs;
 
+  attr->cap.put.max_short = ptl_if->config.max_short;
   attr->cap.put.max_bcopy = ptl_if->config.eager_block_size;
   attr->cap.put.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.put.max_iov = ptl_if->config.max_iovecs;
 
+  attr->cap.get.max_short = ptl_if->config.max_short;
   attr->cap.get.max_bcopy = ptl_if->config.eager_block_size;
   attr->cap.get.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.get.max_iov = ptl_if->config.max_iovecs;
 
+  attr->ep_addr_len = ptl_if->config.ep_addr_size;
   attr->iface_addr_len = ptl_if->config.iface_addr_size;
   attr->device_addr_len = ptl_if->config.device_addr_size;
 
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
-                    UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_BCOPY |
-                    UCT_IFACE_FLAG_GET_ZCOPY | UCT_IFACE_FLAG_PENDING |
-                    UCT_IFACE_FLAG_CB_SYNC | UCT_IFACE_FLAG_INTER_NODE |
-                    UCT_IFACE_FLAG_CONNECT_TO_IFACE;
+                    UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
+                    UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
+                    UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
+                    UCT_IFACE_FLAG_INTER_NODE | UCT_IFACE_FLAG_CONNECT_TO_IFACE;
 
   attr->cap.atomic32.op_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
@@ -157,9 +160,20 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   ucs_queue_for_each_safe(op, iter, &mmd->opq, elem) {
     if (seqn_gt(mmd->p_cnt.success, op->seqn)) {
       ucs_queue_del_iter(&mmd->opq, iter);
+
+      switch (op->type) {
+      case UCT_PTL_OP_RMA_GET_BCOPY:
+        op->get_bcopy.unpack(op->get_bcopy.arg, op + 1, op->size);
+        break;
+      case UCT_PTL_OP_ATOMIC_POST:
+        ucs_debug("PTL: atomic add op complete. op=%p, seqn=%lu", op, op->seqn);
+        break;
+      default:
+        break;
+      }
+
       if (op->comp != NULL) {
-        op->comp->count = op->size;
-        op->comp->func(op->comp);
+        uct_invoke_completion(op->comp, UCS_OK);
       }
       ucs_mpool_put(op);
     }

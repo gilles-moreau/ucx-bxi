@@ -1,6 +1,8 @@
 #ifndef PTL_AM_EP_H
 #define PTL_AM_EP_H
 
+#include "ptl_am_iface.h"
+
 #include <uct/bxi/base/ptl_ep.h>
 
 typedef struct uct_ptl_am_ep_config {
@@ -12,8 +14,7 @@ typedef struct uct_ptl_am_ep {
   struct {
     int id;
   } config;
-  ptl_pt_index_t am_pti;
-  ptl_pt_index_t rma_pti;
+  uct_ptl_am_iface_addr_t iface_addr;
   ucs_mpool_t *bcopy_mp;
   ucs_mpool_t *zcopy_mp;
   uct_ptl_mmd_t *am_mmd;
