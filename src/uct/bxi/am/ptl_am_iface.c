@@ -24,13 +24,13 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   size_t size;
   uint8_t am_id = UCT_PTL_HDR_GET_AM_ID(ev->match_bits);
   uint8_t prot_id = UCT_PTL_HDR_GET_PROT_ID(ev->match_bits);
-  uct_ptl_recv_block_t *block;
+  uct_ptl_recv_block_t *block = (uct_ptl_recv_block_t *)ev->user_ptr;
 
   ucs_info("PORTALS: EQS EVENT '%s' idx=%d, "
-           "sz=%lu, user=%p, start=%p, "
+           "sz=%lu, user=%p, start=%p, block offset=%d, "
            "remote_offset=%lu",
            uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength, ev->user_ptr,
-           ev->start, ev->remote_offset);
+           ev->start, (int)(ev->start - block->start), ev->remote_offset);
 
   switch (ev->type) {
   case PTL_EVENT_PUT_OVERFLOW:
@@ -55,7 +55,6 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
                            UCT_AM_TRACE_TYPE_RECV, am_id, recv_buf, size);
     break;
   case PTL_EVENT_AUTO_UNLINK:
-    block = (uct_ptl_recv_block_t *)ev->user_ptr;
     rc = uct_ptl_recv_block_activate(block);
     break;
 
@@ -123,6 +122,17 @@ err:
   return rc;
 }
 
+ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags) {
+  ucs_status_t rc;
+
+  do {
+  rc = uct_ptl_am_iface_flush(tl_iface, flags, NULL);
+  } while (rc == UCS_INPROGRESS);
+                                     return rc;
+                                              }
+
+
+
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
 
   uct_base_iface_progress_disable(&self->super.super.super,
@@ -184,6 +194,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->super.config.max_iovecs = 1;
   self->super.config.device_addr_size = sizeof(uct_ptl_device_addr_t);
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
+  self->super.config.ep_addr_size = sizeof(uct_ptl_am_ep_addr_t);
 
   /* Set internal ptl operations */
   self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
@@ -304,7 +315,7 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .ep_get_address = uct_ptl_am_ep_get_address,
     .ep_connect_to_ep = uct_base_ep_connect_to_ep,
     .iface_flush = uct_ptl_am_iface_flush,
-    .iface_fence = uct_ptl_iface_fence,
+    .iface_fence = uct_ptl_am_iface_fence,
     .iface_progress_enable = uct_base_iface_progress_enable,
     .iface_progress_disable = uct_base_iface_progress_disable,
     .iface_progress = uct_ptl_iface_progress,
@@ -330,8 +341,7 @@ static uct_ptl_iface_ops_t uct_ptl_am_iface_ops = {
             .ep_connect_to_ep_v2 = ucs_empty_function_return_unsupported,
             .iface_is_reachable_v2 = *(uct_iface_is_reachable_v2_func_t)
                                          ucs_empty_function_return_unsupported,
-            .ep_is_connected = (uct_ep_is_connected_func_t)
-                ucs_empty_function_return_unsupported,
+            .ep_is_connected = uct_ptl_am_ep_is_connected,
         },
     .handle_ev = uct_ptl_am_iface_handle_ev,
 };

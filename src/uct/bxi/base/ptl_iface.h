@@ -13,6 +13,10 @@ typedef struct uct_ptl_device_addr {
   ptl_process_t pid;
 } uct_ptl_device_addr_t;
 
+typedef struct uct_ptl_ep_addr {
+  uct_ptl_device_addr_t dev_addr;
+} uct_ptl_ep_addr_t;
+
 typedef struct uct_ptl_iface_ops {
   uct_iface_internal_ops_t super;
   handle_ev_func_t handle_ev;
@@ -48,6 +52,7 @@ typedef struct uct_ptl_iface {
     unsigned features;
     size_t iface_addr_size;
     size_t device_addr_size;
+    size_t ep_addr_size;
   } config;
   uct_ptl_iface_ops_t ops;
   ptl_handle_eq_t eqh; // Event Queue
@@ -60,6 +65,13 @@ UCS_CLASS_DECLARE(uct_ptl_iface_t, uct_iface_ops_t *, uct_ptl_iface_ops_t *,
 
 extern ucs_config_field_t uct_ptl_iface_config_table[];
 extern ucs_config_field_t uct_ptl_iface_common_config_table[];
+
+// FIXME: use UCX INLINE MACROS
+static inline int uct_ptl_iface_cmp_device_addr(uct_ptl_device_addr_t *dev1,
+                                                uct_ptl_device_addr_t *dev2) {
+  return dev1->pid.phys.pid == dev2->pid.phys.nid &&
+         dev1->pid.phys.nid == dev2->pid.phys.nid;
+}
 
 ucs_status_t uct_ptl_query_devices(uct_md_h component,
                                    uct_tl_resource_desc_t **resources_p,

@@ -17,7 +17,7 @@ typedef struct uct_ptl_ep {
   struct {
     int id;
   } config;
-  ptl_process_t pid;
+  uct_ptl_device_addr_t dev_addr;
 } uct_ptl_ep_t;
 
 UCS_CLASS_DECLARE(uct_ptl_ep_t, uct_ptl_iface_t *, const uct_ep_params_t *);

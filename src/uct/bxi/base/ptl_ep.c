@@ -8,11 +8,9 @@ ptl_op_t uct_ptl_atomic_op_table[] = {
 
 UCS_CLASS_INIT_FUNC(uct_ptl_ep_t, uct_ptl_iface_t *iface,
                     const uct_ep_params_t *params) {
-  uct_ptl_iface_t *ptl_iface = ucs_derived_of(iface, uct_ptl_iface_t);
-
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
-  self->pid = uct_ptl_iface_md(ptl_iface)->pid;
+  self->dev_addr = *(uct_ptl_device_addr_t *)params->dev_addr;
 
   return UCS_OK;
 }

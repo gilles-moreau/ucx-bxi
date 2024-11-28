@@ -36,7 +36,8 @@ typedef enum {
   UCT_PTL_OP_TAG_SEARCH,
   /* RMA operations. */
   UCT_PTL_OP_RMA_PUT,
-  UCT_PTL_OP_RMA_GET,
+  UCT_PTL_OP_RMA_GET_ZCOPY,
+  UCT_PTL_OP_RMA_GET_BCOPY,
   UCT_PTL_OP_RMA_FLUSH,
   /* Atomic operations. */
   UCT_PTL_OP_ATOMIC_POST,
@@ -63,6 +64,10 @@ typedef struct uct_ptl_op {
       uct_tag_context_t *ctx;
       ptl_handle_me_t meh;
     } tag;
+    struct {
+      uct_unpack_callback_t unpack;
+      void *arg;
+    } get_bcopy;
     struct {
       uint64_t value;
       uint64_t compare;
