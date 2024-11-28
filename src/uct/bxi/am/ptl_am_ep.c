@@ -387,7 +387,6 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = value;
 
-  ucs_debug("PTL: atomic add op start. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlAtomic(ep->rma_mmd->mdh, (uint64_t)&op->ato.value, size,
                               PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                               ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0,
@@ -399,7 +398,6 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
     goto err;
   }
 
-  rc = UCS_INPROGRESS;
   ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
 
 err:

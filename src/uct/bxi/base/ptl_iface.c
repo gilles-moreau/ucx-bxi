@@ -165,9 +165,6 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
       case UCT_PTL_OP_RMA_GET_BCOPY:
         op->get_bcopy.unpack(op->get_bcopy.arg, op + 1, op->size);
         break;
-      case UCT_PTL_OP_ATOMIC_POST:
-        ucs_debug("PTL: atomic add op complete. op=%p, seqn=%lu", op, op->seqn);
-        break;
       default:
         break;
       }
