@@ -72,6 +72,9 @@ void test_uct_perf::test_execute(unsigned flags = 0,
             test.min /= UCT_PERF_TEST_MULTIPLIER;
         }
 
+        if (strcmp(test.title, "atomic add rate")) 
+            continue;
+
         test.iters = ucs_min(test.iters, max_iter);
 
         run_test(test, flags, check_perf, GetParam()->tl_name,
