@@ -3,11 +3,6 @@
 ## UCT
 
 TODO:
-- Atomic (MEDIUM): fetch and cswap
-  - ptl_am/uct_amo_fand_for_test
-  - ptl_am/uct_amo_swap_test
-  - ptl_am/uct_amo_fadd_fxor_test
-  - ptl_am/uct_amo_cswap_test
 - Flush (HIGH): 
   - ptl_am/uct_flush_test
 - Fence (LOW):
