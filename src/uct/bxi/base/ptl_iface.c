@@ -110,15 +110,15 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   attr->cap.atomic32.op_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
       UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
-  // attr->cap.atomic32.fop_flags |=
-  //     UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-  //     UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.atomic32.fop_flags |=
+      UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
   attr->cap.atomic64.op_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
       UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
-  // attr->cap.atomic64.fop_flags |=
-  //     UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-  //     UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.atomic64.fop_flags |=
+      UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
   attr->cap.event_flags =
@@ -161,6 +161,7 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
     if (seqn_gt(mmd->p_cnt.success, op->seqn)) {
       ucs_queue_del_iter(&mmd->opq, iter);
 
+      ucs_debug("PTL: fetch complete. op=%p, seqn=%lu", op, op->seqn);
       switch (op->type) {
       case UCT_PTL_OP_RMA_GET_BCOPY:
         op->get_bcopy.unpack(op->get_bcopy.arg, op + 1, op->size);

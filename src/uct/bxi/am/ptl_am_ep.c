@@ -60,7 +60,6 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   op = ucs_mpool_get(ep->bcopy_mp);
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -160,7 +159,6 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -202,7 +200,6 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   op = ucs_mpool_get(ep->bcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -251,7 +248,6 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   ucs_assert(iovcnt == 1);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -294,7 +290,6 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
 
   op = ucs_mpool_get(ep->bcopy_mp);
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -337,7 +332,6 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -377,7 +371,6 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
   uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -415,15 +408,15 @@ uct_ptl_am_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode,
   uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
-  op->comp = NULL;
+  op->comp = comp;
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = value;
 
+  ucs_debug("PTL: fetch start. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlFetchAtomic(ep->rma_mmd->mdh, (uint64_t)result,
                                    ep->rma_mmd->mdh, (uint64_t)&op->ato.value,
                                    size, ep->super.dev_addr.pid,
@@ -453,12 +446,11 @@ uct_ptl_am_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare,
   uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
 
   if (op == NULL) {
-    ucs_debug("PTL: reached max outstanding operations.");
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
-  op->comp = NULL;
+  op->comp = comp;
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = swap;
   op->ato.compare = compare;

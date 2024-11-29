@@ -126,12 +126,10 @@ ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags) {
   ucs_status_t rc;
 
   do {
-  rc = uct_ptl_am_iface_flush(tl_iface, flags, NULL);
+    rc = uct_ptl_am_iface_flush(tl_iface, flags, NULL);
   } while (rc == UCS_INPROGRESS);
-                                     return rc;
-                                              }
-
-
+  return rc;
+}
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
 
@@ -357,4 +355,5 @@ UCT_TL_DEFINE_ENTRY(&uct_ptl_am_component, ptl_am,
                     "PTL_AM_", uct_ptl_am_iface_config_table,
                     uct_ptl_am_iface_config_t);
 
-UCT_SINGLE_TL_INIT(&uct_ptl_am_component, ptl_am, ctor, , )
+UCT_SINGLE_TL_INIT(&uct_ptl_am_component, ptl_am, ctor, ucs_debug("PtlInit.");
+                   PtlInit(), ucs_debug("PtlFini."); PtlFini())

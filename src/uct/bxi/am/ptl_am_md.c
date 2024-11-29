@@ -68,10 +68,7 @@ void uct_ptl_am_md_close(uct_md_h uct_md) {
   uct_ptl_wrap(PtlPTFree(md->super.nih, md->super.pti));
 
   uct_ptl_wrap(PtlNIFini(md->super.nih));
-
-  // FIXME: there seems to be a problem due to static definition of this call in
-  // Bull Portails.
-  //  PtlFini();
+  ucs_debug("PtlNIFini");
 
   ucs_free(md->super.device);
 

@@ -134,6 +134,8 @@ ucs_status_t uct_ptl_md_mkey_pack(uct_md_h md, uct_mem_h memh, void *address,
   return UCS_OK;
 }
 
+// FIXME: different NET interface needs to be given a unique ptl_interface_t
+// value.
 static inline ptl_interface_t uct_ptl_parse_device(const char *ptl_device) {
   ptl_interface_t iface;
   if (strstr(ptl_device, "bxi") == NULL) {
@@ -217,18 +219,14 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
                              const uct_ptl_md_config_t *config) {
 
   ucs_status_t rc;
-  /* init the driver */
-  rc = uct_ptl_wrap(PtlInit());
-  if (rc != UCS_OK) {
-    goto err;
-  }
 
   /* init one physical interface */
   rc = uct_ptl_wrap(PtlNIInit(uct_ptl_parse_device(ptl_device),
                               PTL_NI_MATCHING | PTL_NI_PHYSICAL, PTL_PID_ANY,
                               &default_limits, &md->limits, &md->nih));
+  ucs_debug("PtlNIInit");
   if (rc != UCS_OK) {
-    goto err_ptl_fini;
+    goto err;
   }
 
   md->device = ucs_strdup(ptl_device, "md-name-dup");
@@ -256,8 +254,6 @@ err_ptl_freedev:
   ucs_free(md->device);
 err_ptl_nifini:
   PtlNIFini(md->nih);
-err_ptl_fini:
-  PtlFini();
 err:
   return rc;
 }
@@ -277,8 +273,6 @@ void uct_ptl_md_fini(uct_ptl_md_t *md) {
   uct_ptl_wrap(PtlPTFree(md->nih, md->pti));
 
   uct_ptl_wrap(PtlNIFini(md->nih));
-
-  PtlFini();
 
   ucs_free(md->device);
 
