@@ -15,8 +15,9 @@ typedef struct uct_ptl_am_ep {
     int id;
   } config;
   uct_ptl_am_iface_addr_t iface_addr;
-  ucs_mpool_t *bcopy_mp;
-  ucs_mpool_t *zcopy_mp;
+  ucs_mpool_t *copyin_mp;
+  ucs_mpool_t *ops_mp;
+  ucs_queue_head_t pending_q; /* Pending operations */
   uct_ptl_mmd_t *am_mmd;
   uct_ptl_mmd_t *rma_mmd;
 } uct_ptl_am_ep_t;

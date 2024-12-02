@@ -26,10 +26,6 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
     {"", "ALLOC=heap", NULL, ucs_offsetof(uct_ptl_iface_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
-    {"MAX_EVENTS", "2048",
-     "Maximum number of events per event queue (default: 2048).",
-     ucs_offsetof(uct_ptl_iface_config_t, max_events), UCS_CONFIG_TYPE_UINT},
-
     {"MAX_OUTSTANDING_OPS", "2048",
      "Maximum number of outstanding operations (default: 2048).",
      ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
@@ -105,20 +101,25 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
                     UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
                     UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
-                    UCT_IFACE_FLAG_INTER_NODE | UCT_IFACE_FLAG_CONNECT_TO_IFACE;
+                    UCT_IFACE_FLAG_INTER_NODE |
+                    UCT_IFACE_FLAG_CONNECT_TO_IFACE | UCT_IFACE_FLAG_EP_CHECK;
 
   attr->cap.atomic32.op_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
+      UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.atomic32.fop_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
+      UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.atomic64.op_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
+      UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.atomic64.fop_flags |=
       UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+      UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
+      UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
   attr->cap.event_flags =
@@ -161,7 +162,6 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
     if (seqn_gt(mmd->p_cnt.success, op->seqn)) {
       ucs_queue_del_iter(&mmd->opq, iter);
 
-      ucs_debug("PTL: fetch complete. op=%p, seqn=%lu", op, op->seqn);
       switch (op->type) {
       case UCT_PTL_OP_RMA_GET_BCOPY:
         op->get_bcopy.unpack(op->get_bcopy.arg, op + 1, op->size);
@@ -172,6 +172,9 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
 
       if (op->comp != NULL) {
         uct_invoke_completion(op->comp, UCS_OK);
+      }
+      if (op->buffer != NULL) {
+        ucs_mpool_put(op->buffer);
       }
       ucs_mpool_put(op);
     }
@@ -188,15 +191,10 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super) {
   ptl_event_t ev;
   uct_ptl_mmd_t *mmd;
   uct_ptl_iface_t *iface = ucs_derived_of(super, uct_ptl_iface_t);
-
-  ucs_list_for_each(mmd, &iface->mds, elem) {
-    rc = uct_ptl_md_progress(mmd);
-    if (rc != UCS_OK)
-      goto out;
-  }
+  uct_ptl_md_t *md = ucs_derived_of(iface->super.md, uct_ptl_md_t);
 
   while (1) {
-    ret = PtlEQGet(iface->eqh, &ev);
+    ret = PtlEQGet(md->eqh, &ev);
 
     switch (ret) {
     case PTL_OK:
@@ -217,18 +215,23 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super) {
     }
   }
 
+  ucs_list_for_each(mmd, &iface->mds, elem) {
+    rc = uct_ptl_md_progress(mmd);
+    if (rc != UCS_OK)
+      goto out;
+  }
+
 out:
   return rc;
 }
 
-ucs_status_t uct_ptl_iface_flush(uct_iface_h tl_iface, unsigned flags,
-                                 uct_completion_t *comp) {
-  return UCS_ERR_UNSUPPORTED;
-}
-
-ucs_status_t uct_ptl_iface_fence(uct_iface_h tl_iface, unsigned flags) {
-  return UCS_ERR_UNSUPPORTED;
-}
+static ucs_mpool_ops_t uct_ptl_mpool_ops = {
+    .chunk_alloc = ucs_mpool_chunk_malloc,
+    .chunk_release = ucs_mpool_chunk_free,
+    .obj_init = NULL,
+    .obj_cleanup = NULL,
+    .obj_str = NULL,
+};
 
 UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,
                     uct_ptl_iface_ops_t *ops, uct_md_h tl_md,
@@ -236,6 +239,7 @@ UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,
                     const uct_ptl_iface_config_t *config) {
   ucs_status_t rc = UCS_OK;
   uct_ptl_md_t *ptl_md = ucs_derived_of(tl_md, uct_ptl_md_t);
+  ucs_mpool_params_t mp_param;
 
   UCS_CLASS_CALL_SUPER_INIT(
       uct_base_iface_t, tl_ops, &ops->super, tl_md, worker, params,
@@ -257,17 +261,28 @@ UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,
   self->config.max_msg_size = ptl_md->limits.max_msg_size;
   self->config.max_short = ptl_md->limits.max_waw_ordered_size;
 
-  rc = uct_ptl_wrap(
-      PtlEQAlloc(ptl_md->nih, self->config.max_events, &self->eqh));
-
   ucs_list_head_init(&self->mds);
 
+  /* Work pool of operation. */
+  mp_param = (ucs_mpool_params_t){
+      .max_chunk_size = self->config.max_outstanding_ops * sizeof(uct_ptl_op_t),
+      .elems_per_chunk = self->config.max_outstanding_ops,
+      .max_elems = self->config.max_outstanding_ops,
+      .elem_size = sizeof(uct_ptl_op_t),
+      .alignment = 64,
+      .align_offset = 0,
+      .ops = &uct_ptl_mpool_ops,
+      .name = "ptl-ops",
+      .grow_factor = 1,
+  };
+  rc = ucs_mpool_init(&mp_param, &self->ops_mp);
+
+err:
   return rc;
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_iface_t) {
-  uct_ptl_wrap(PtlEQFree(self->eqh));
-
+  ucs_mpool_cleanup(&self->ops_mp, 0);
   return;
 }
 

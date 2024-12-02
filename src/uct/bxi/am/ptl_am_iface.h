@@ -48,8 +48,7 @@ typedef struct uct_ptl_am_iface {
   uct_ptl_mmd_t am_mmd;
   uct_ptl_mmd_t *rma_mmd;
   ucs_mpool_t short_mp;
-  ucs_mpool_t bcopy_mp;
-  ucs_mpool_t zcopy_mp;
+  ucs_mpool_t copyin_mp;
   uct_ptl_rq_t rq;
 } uct_ptl_am_iface_t;
 
