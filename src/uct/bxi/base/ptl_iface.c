@@ -56,6 +56,11 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, eager_block_size),
      UCS_CONFIG_TYPE_UINT},
 
+    {"MAX_EP_RETRIES", "16",
+     "Maximum nunber of send retry on a given endpoint (default: 16).",
+     ucs_offsetof(uct_ptl_iface_config_t, max_ep_retries),
+     UCS_CONFIG_TYPE_UINT},
+
     {NULL},
 };
 
@@ -154,7 +159,6 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   }
 
   if (mmd->p_cnt.failure > 0) {
-    rc = UCS_ERR_IO_ERROR;
     goto err;
   }
 

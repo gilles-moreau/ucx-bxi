@@ -30,6 +30,7 @@ typedef struct uct_ptl_iface_ops {
 typedef struct uct_ptl_iface_config {
   uct_iface_config_t super;
   size_t max_events;
+  int max_ep_retries;
   int max_outstanding_ops;
   int copyin_buf_per_block;
   int min_copyin_buf;
@@ -43,6 +44,7 @@ typedef struct uct_ptl_iface {
   uct_base_iface_t super;
   struct {
     size_t max_events;
+    int max_ep_retries;
     int max_outstanding_ops;
     int copyin_buf_per_block;
     int min_copyin_buf;
@@ -62,6 +64,7 @@ typedef struct uct_ptl_iface {
   uct_ptl_iface_ops_t ops;
   ucs_list_link_t mds; // Memory descriptors
   ucs_mpool_t ops_mp;
+  ucs_mpool_t copyin_mp;
 } uct_ptl_iface_t;
 
 UCS_CLASS_DECLARE(uct_ptl_iface_t, uct_iface_ops_t *, uct_ptl_iface_ops_t *,

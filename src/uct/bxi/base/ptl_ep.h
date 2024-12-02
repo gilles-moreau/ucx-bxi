@@ -11,6 +11,7 @@ extern ptl_op_t uct_ptl_atomic_op_table[];
 enum {
   UCT_PTL_EP_CONN_CONNECTED,
   UCT_PTL_EP_CONN_PT_DISABLED,
+  UCT_PTL_EP_CONN_CLOSED,
 };
 
 typedef struct uct_ptl_ep_config {
@@ -20,10 +21,13 @@ typedef struct uct_ptl_ep_config {
 typedef struct uct_ptl_ep {
   uct_base_ep_t super;
   struct {
-    int id;
+    int max_retries;
   } config;
   uct_ptl_device_addr_t dev_addr;
+  ucs_mpool_t *ops_mp;
+  ucs_mpool_t *copyin_mp;
   uint8_t conn_state;
+  int retry_count;
 } uct_ptl_ep_t;
 
 typedef struct uct_ptl_ep_pending_req {
@@ -37,5 +41,9 @@ typedef struct uct_ptl_ep_pending_purge_arg {
 } uct_ptl_ep_pending_purge_arg_t;
 
 UCS_CLASS_DECLARE(uct_ptl_ep_t, uct_ptl_iface_t *, const uct_ep_params_t *);
+
+ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
+                                   uct_completion_t *comp, uct_ptl_ep_t *ep,
+                                   ptl_size_t seqn, uct_ptl_op_t **op_p);
 
 #endif
