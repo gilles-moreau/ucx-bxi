@@ -3,6 +3,7 @@
 
 #include <uct/base/uct_md.h>
 
+#include <ucs/arch/atomic.h>
 #include <ucs/datastruct/mpool.h>
 #include <ucs/datastruct/queue.h>
 #include <ucs/debug/log.h>
@@ -56,7 +57,6 @@ typedef enum {
 } uct_ptl_op_type_t;
 
 typedef struct uct_ptl_op {
-  int64_t id;             /* Operation identifier. */
   uct_ptl_op_type_t type; /* Type of operation */
   uct_completion_t *comp; /* Completion callback */
   uct_ptl_ep_t *ep;

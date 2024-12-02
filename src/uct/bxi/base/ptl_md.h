@@ -45,7 +45,7 @@ typedef struct uct_ptl_mmd {
   ptl_handle_ct_t cth;
   ucs_queue_head_t opq;
   ptl_ct_event_t p_cnt;
-  ptl_size_t seqn;
+  uint64_t seqn;
 } uct_ptl_mmd_t;
 
 typedef struct uct_ptl_me_param {
