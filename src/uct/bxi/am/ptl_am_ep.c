@@ -54,12 +54,12 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   ptl_match_bits_t hdr = 0;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
-  void *start = NULL;
   ssize_t size = 0;
 
   UCT_CHECK_AM_ID(id);
 
-  size = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_BCOPY, 1, NULL, &ep->super,
+  size = uct_ptl_ep_prepare_op(UCT_PTL_OP_AM_BCOPY, 1, NULL, &ep->super,
+                               ep->am_mmd,
                                ucs_atomic_fadd64(&ep->am_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -156,6 +156,7 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   uct_ptl_op_t *op;
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_SHORT, 0, NULL, &ep->super,
+                             ep->rma_mmd,
                              ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -191,6 +192,7 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   ssize_t size = 0;
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_BCOPY, 1, NULL, &ep->super,
+                             ep->rma_mmd,
                              ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -233,6 +235,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   ucs_assert(iovcnt == 1);
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_ZCOPY, 0, comp, &ep->super,
+                             ep->rma_mmd,
                              ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -244,8 +247,8 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
 
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
-                           op->size, PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
-                           ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
+                           op->size, PTL_ACK_REQ, ep->super.dev_addr.pid,
+                           ep->iface_addr.rma_pti, 0, remote_addr, op, 0));
 
   if (rc != UCS_OK) {
     ucs_mpool_put(op);
@@ -269,6 +272,7 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
   uct_ptl_op_t *op;
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_BCOPY, 1, comp, &ep->super,
+                             ep->rma_mmd,
                              ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -306,6 +310,7 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   uct_ptl_op_t *op;
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_ZCOPY, 0, comp, &ep->super,
+                             ep->rma_mmd,
                              ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
@@ -341,8 +346,9 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, NULL, &ep->super,
-                             ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
+  rc =
+      uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, NULL, &ep->super, ep->rma_mmd,
+                            ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -375,8 +381,9 @@ uct_ptl_am_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode,
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super,
-                             ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
+  rc =
+      uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super, ep->rma_mmd,
+                            ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -411,8 +418,9 @@ uct_ptl_am_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare,
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super,
-                             ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
+  rc =
+      uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super, ep->rma_mmd,
+                            ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1), &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -576,7 +584,8 @@ ucs_status_t uct_ptl_am_ep_check(uct_ep_h tl_ep, unsigned flags,
   rc = uct_ptl_am_ep_put_zcopy(tl_ep, &iov, 1, 0, 0, comp);
   if (rc != UCS_OK) {
     // FIXME: if no resource, add to pending requests
-    return (rc == UCS_ERR_NO_RESOURCE) ? UCS_OK : rc;
+    return ((rc == UCS_ERR_NO_RESOURCE) || (rc == UCS_INPROGRESS)) ? UCS_OK
+                                                                   : rc;
   }
 
   return rc;
