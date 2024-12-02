@@ -15,6 +15,10 @@ ucs_config_field_t uct_ptl_md_config_table[] = {
     {"", "", NULL, ucs_offsetof(uct_ptl_md_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_md_config_table)},
 
+    {"MAX_EVENTS", "2048",
+     "Maximum number of events per event queue (default: 2048).",
+     ucs_offsetof(uct_ptl_md_config_t, max_events), UCS_CONFIG_TYPE_UINT},
+
     {NULL}};
 
 static const ptl_ni_limits_t default_limits = {
@@ -203,6 +207,8 @@ ucs_status_t uct_ptl_query_md_resources(uct_component_t *component,
 
       strcpy(resources[num_devices].md_name, entry->d_name);
       ++num_devices;
+      if (i == 1)
+        break;
     }
 
   close_dir:
@@ -242,8 +248,13 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
     goto err_ptl_freedev;
   }
 
+  rc = uct_ptl_wrap(PtlEQAlloc(md->nih, md->config.max_events, &md->eqh));
+  if (rc != UCS_OK) {
+    goto err;
+  }
+
   /* Allocate Portals Table Entry for RMA operations. */
-  rc = uct_ptl_wrap(PtlPTAlloc(md->nih, 0, PTL_EQ_NONE, PTL_PT_ANY, &md->pti));
+  rc = uct_ptl_wrap(PtlPTAlloc(md->nih, 0, md->eqh, PTL_PT_ANY, &md->pti));
   if (rc != UCS_OK) {
     goto err;
   }
@@ -271,6 +282,8 @@ uct_ptl_md_t *uct_ptl_md_alloc(size_t size, const char *name) {
 
 void uct_ptl_md_fini(uct_ptl_md_t *md) {
   uct_ptl_wrap(PtlPTFree(md->nih, md->pti));
+
+  uct_ptl_wrap(PtlEQFree(md->eqh));
 
   uct_ptl_wrap(PtlNIFini(md->nih));
 

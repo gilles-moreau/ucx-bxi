@@ -20,6 +20,7 @@ typedef struct uct_ptl_iface uct_ptl_iface_t;
 typedef struct uct_ptl_wp uct_ptl_wp_t;
 typedef struct uct_ptl_rq uct_ptl_rq_t;
 typedef struct uct_ptl_md uct_ptl_md_t;
+typedef struct uct_ptl_ep uct_ptl_ep_t;
 
 /*********************************/
 /********** PTL TYPES   **********/
@@ -28,6 +29,8 @@ typedef struct uct_ptl_md uct_ptl_md_t;
 
 /* Operation types. */
 typedef enum {
+  UCT_PTL_OP_AM_BCOPY,
+  UCT_PTL_OP_AM_ZCOPY,
   /* Block operation. */
   UCT_PTL_OP_BLOCK,
   /* Tag Matching operations. */
@@ -35,14 +38,14 @@ typedef enum {
   UCT_PTL_OP_TAG_ZCOPY,
   UCT_PTL_OP_TAG_SEARCH,
   /* RMA operations. */
-  UCT_PTL_OP_RMA_PUT,
+  UCT_PTL_OP_RMA_PUT_SHORT,
+  UCT_PTL_OP_RMA_PUT_BCOPY,
+  UCT_PTL_OP_RMA_PUT_ZCOPY,
   UCT_PTL_OP_RMA_GET_ZCOPY,
   UCT_PTL_OP_RMA_GET_BCOPY,
   UCT_PTL_OP_RMA_FLUSH,
   /* Atomic operations. */
-  UCT_PTL_OP_ATOMIC_POST,
-  UCT_PTL_OP_ATOMIC_FETCH,
-  UCT_PTL_OP_ATOMIC_CSWAP,
+  UCT_PTL_OP_ATOMIC,
 #if defined(MPC_USE_PORTALS_CONTROL_FLOW)
   /* Token operations. */
   UCT_PTL_OP_TK_INIT,
@@ -56,6 +59,8 @@ typedef struct uct_ptl_op {
   int64_t id;             /* Operation identifier. */
   uct_ptl_op_type_t type; /* Type of operation */
   uct_completion_t *comp; /* Completion callback */
+  uct_ptl_ep_t *ep;
+  void *buffer;
   ptl_size_t seqn;
   ucs_queue_elem_t elem;
   size_t size;

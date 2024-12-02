@@ -68,6 +68,7 @@ typedef struct uct_ptl_mr {
 
 typedef struct uct_ptl_md_config {
   uct_md_config_t super;
+  size_t max_events;
 } uct_ptl_md_config_t;
 
 extern ucs_config_field_t uct_ptl_md_config_table[];
@@ -76,10 +77,12 @@ typedef struct uct_ptl_md {
   uct_md_t super;
   struct {
     int id;
+    size_t max_events;
   } config;
   char *device;
   ptl_handle_ni_t nih;
   ptl_process_t pid;
+  ptl_handle_eq_t eqh;
   ptl_ni_limits_t limits;
   ptl_pt_index_t pti;
   uint64_t cap_flags;

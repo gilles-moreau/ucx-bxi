@@ -9,6 +9,10 @@
 typedef ucs_status_t (*handle_ev_func_t)(uct_ptl_iface_t *iface,
                                          ptl_event_t *ev);
 
+typedef void (*handle_failure_func_t)(uct_ptl_iface_t *iface,
+                                      uct_ptl_mmd_t *mmd,
+                                      ucs_status_t ep_status);
+
 typedef struct uct_ptl_device_addr {
   ptl_process_t pid;
 } uct_ptl_device_addr_t;
@@ -20,6 +24,7 @@ typedef struct uct_ptl_ep_addr {
 typedef struct uct_ptl_iface_ops {
   uct_iface_internal_ops_t super;
   handle_ev_func_t handle_ev;
+  handle_failure_func_t handle_failure;
 } uct_ptl_iface_ops_t;
 
 typedef struct uct_ptl_iface_config {
@@ -55,8 +60,8 @@ typedef struct uct_ptl_iface {
     size_t ep_addr_size;
   } config;
   uct_ptl_iface_ops_t ops;
-  ptl_handle_eq_t eqh; // Event Queue
   ucs_list_link_t mds; // Memory descriptors
+  ucs_mpool_t ops_mp;
 } uct_ptl_iface_t;
 
 UCS_CLASS_DECLARE(uct_ptl_iface_t, uct_iface_ops_t *, uct_ptl_iface_ops_t *,

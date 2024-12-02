@@ -2,6 +2,7 @@
 #include "ptl_am_iface.h"
 #include "ptl_types.h"
 
+#include <time.h>
 #include <uct/base/uct_log.h>
 
 ucs_status_t uct_ptl_am_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
@@ -58,30 +59,37 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   UCT_CHECK_AM_ID(id);
 
-  op = ucs_mpool_get(ep->bcopy_mp);
+  // TODO: macro operation get
+  op = ucs_mpool_get(ep->ops_mp);
   if (op == NULL) {
     size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
   op->comp = NULL;
+  op->ep = &ep->super;
+  op->type = UCT_PTL_OP_AM_BCOPY;
   op->seqn = ep->am_mmd->seqn++;
+  op->buffer = ucs_mpool_get(ep->copyin_mp);
+  if (op->buffer == NULL) {
+    ucs_mpool_put(op);
+    size = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
 
-  start = (void *)(op + 1);
-  ucs_assert(start != NULL);
-
-  size = pack(start, arg);
+  size = pack(op->buffer, arg);
   if (size < 0) {
     goto err;
   }
 
   UCT_PTL_HDR_SET(hdr, id, UCT_PTL_AM_BCOPY);
-  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)start, size,
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
-                           ep->iface_addr.am_pti, hdr, 0, NULL, 0));
+                           ep->iface_addr.am_pti, hdr, 0, op, 0));
 
   if (rc != UCS_OK) {
+    ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
-    ep->am_mmd->seqn++;
+    ep->am_mmd->seqn--;
     size = UCS_ERR_IO_ERROR;
     goto err;
   }
@@ -156,7 +164,7 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                      uct_rkey_t rkey) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->ops_mp);
 
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
@@ -164,7 +172,9 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   }
 
   op->comp = NULL;
+  op->type = UCT_PTL_OP_RMA_PUT_SHORT;
   op->seqn = ptl_ep->rma_mmd->seqn++;
+  op->buffer = NULL;
 
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
@@ -194,25 +204,25 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   ucs_status_t rc = UCS_OK; // FIXME: remove rc?
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
-  void *start = NULL;
   ssize_t size = 0;
 
-  op = ucs_mpool_get(ep->bcopy_mp);
-
+  op = ucs_mpool_get(ep->ops_mp);
   if (op == NULL) {
     size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
   op->comp = NULL;
+  op->ep = &ep->super;
+  op->type = UCT_PTL_OP_RMA_PUT_BCOPY;
   op->seqn = ep->rma_mmd->seqn++;
-
-  start = (void *)(op + 1);
-  if (start == NULL) {
-    ucs_error("PTL: could not allocate bcopy buffer.");
+  op->buffer = ucs_mpool_get(ep->copyin_mp);
+  if (op->buffer == NULL) {
+    ucs_mpool_put(op);
     size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-  size = pack_cb(start, arg);
+
+  size = pack_cb(op->buffer, arg);
   if (size < 0) {
     goto err;
   }
@@ -222,11 +232,12 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)start, size,
+  rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
 
   if (rc != UCS_OK) {
+    ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
     size = UCS_ERR_IO_ERROR;
     goto err;
@@ -242,8 +253,8 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      size_t iovcnt, uint64_t remote_addr,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc;
-  uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->ops_mp);
 
   ucs_assert(iovcnt == 1);
 
@@ -251,20 +262,21 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-
+  op->type = UCT_PTL_OP_RMA_PUT_ZCOPY;
   op->comp = comp;
+  op->ep = &ep->super;
   op->size = iov[0].length;
-  op->seqn = ptl_ep->rma_mmd->seqn++;
+  op->seqn = ep->rma_mmd->seqn++;
+  op->buffer = NULL;
 
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  rc =
-      uct_ptl_wrap(PtlPut(ptl_ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
-                          op->size, PTL_CT_ACK_REQ, ptl_ep->super.dev_addr.pid,
-                          ptl_ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
+  rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
+                           op->size, PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
+                           ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
 
   if (rc != UCS_OK) {
     ucs_mpool_put(op);
@@ -273,7 +285,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
 
   rc = UCS_INPROGRESS;
-  ucs_queue_push(&ptl_ep->rma_mmd->opq, &op->elem);
+  ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
 
 err:
   return rc;
@@ -286,33 +298,37 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
   ucs_status_t rc = UCS_OK; // FIXME: remove rc?
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
   uct_ptl_op_t *op;
-  void *start = NULL;
 
-  op = ucs_mpool_get(ep->bcopy_mp);
+  op = ucs_mpool_get(ep->ops_mp);
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
   op->type = UCT_PTL_OP_RMA_GET_BCOPY;
   op->comp = comp;
+  op->ep = &ep->super;
   op->seqn = ep->rma_mmd->seqn++;
   op->size = length;
   op->get_bcopy.unpack = unpack_cb;
   op->get_bcopy.arg = arg;
-
-  start = (void *)(op + 1);
-  ucs_assert(start != NULL);
+  op->buffer = ucs_mpool_get(ep->copyin_mp);
+  if (op->buffer == NULL) {
+    ucs_mpool_put(op);
+    rc = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
 
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  rc = uct_ptl_wrap(PtlGet(ep->rma_mmd->mdh, (uint64_t)start, length,
+  rc = uct_ptl_wrap(PtlGet(ep->rma_mmd->mdh, (ptl_size_t)op->buffer, length,
                            ep->super.dev_addr.pid, ep->iface_addr.rma_pti, 0,
                            remote_addr, NULL));
 
   if (rc != UCS_OK) {
+    ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
     rc = UCS_ERR_IO_ERROR;
     goto err;
@@ -328,26 +344,28 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      size_t iovcnt, uint64_t remote_addr,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc;
-  uct_ptl_am_ep_t *ptl_ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ptl_ep->zcopy_mp);
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->ops_mp);
 
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-
+  op->type = UCT_PTL_OP_RMA_GET_ZCOPY;
+  op->ep = &ep->super;
   op->comp = comp;
   op->size = iov[0].length;
-  op->seqn = ptl_ep->rma_mmd->seqn++;
+  op->seqn = ep->rma_mmd->seqn++;
+  op->buffer = NULL;
 
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  rc = uct_ptl_wrap(PtlGet(ptl_ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
-                           op->size, ptl_ep->super.dev_addr.pid,
-                           ptl_ep->iface_addr.rma_pti, 0, remote_addr, NULL));
+  rc = uct_ptl_wrap(PtlGet(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
+                           op->size, ep->super.dev_addr.pid,
+                           ep->iface_addr.rma_pti, 0, remote_addr, NULL));
 
   if (rc != UCS_OK) {
     ucs_mpool_put(op);
@@ -356,7 +374,7 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
 
   rc = UCS_INPROGRESS;
-  ucs_queue_push(&ptl_ep->rma_mmd->opq, &op->elem);
+  ucs_queue_push(&ep->rma_mmd->opq, &op->elem);
 
 err:
   return rc;
@@ -368,17 +386,18 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
                                  uint64_t remote_addr, uct_rkey_t rkey) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->ops_mp);
 
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-
-  op->type = UCT_PTL_OP_ATOMIC_POST;
+  op->type = UCT_PTL_OP_ATOMIC;
+  op->ep = &ep->super;
   op->comp = NULL;
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = value;
+  op->buffer = NULL;
 
   rc = uct_ptl_wrap(PtlAtomic(ep->rma_mmd->mdh, (uint64_t)&op->ato.value, size,
                               PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
@@ -405,16 +424,18 @@ uct_ptl_am_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode,
 
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->ops_mp);
 
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-
+  op->type = UCT_PTL_OP_ATOMIC;
   op->comp = comp;
+  op->ep = &ep->super;
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = value;
+  op->buffer = NULL;
 
   ucs_debug("PTL: fetch start. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlFetchAtomic(ep->rma_mmd->mdh, (uint64_t)result,
@@ -443,17 +464,19 @@ uct_ptl_am_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare,
                                   uint64_t *result, uct_completion_t *comp) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
-  uct_ptl_op_t *op = ucs_mpool_get(ep->zcopy_mp);
+  uct_ptl_op_t *op = ucs_mpool_get(ep->ops_mp);
 
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
-
+  op->type = UCT_PTL_OP_ATOMIC;
   op->comp = comp;
+  op->ep = &ep->super;
   op->seqn = ep->rma_mmd->seqn++;
   op->ato.value = swap;
   op->ato.compare = compare;
+  op->buffer = NULL;
 
   rc = uct_ptl_wrap(PtlSwap(ep->rma_mmd->mdh, (uint64_t)result,
                             ep->rma_mmd->mdh, (uint64_t)&op->ato.value, size,
@@ -567,19 +590,55 @@ int uct_ptl_am_ep_is_connected(const uct_ep_h tl_ep,
   return is_connected;
 }
 
-ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *n,
+ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                        unsigned flags) {
-  return UCS_ERR_UNSUPPORTED;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+
+  if (ucs_mpool_is_empty(ep->ops_mp)) {
+    return UCS_ERR_BUSY;
+  }
+
+  uct_pending_req_queue_push(&ep->pending_q, req);
+  UCT_TL_EP_STAT_PEND(&ep->super);
+  return UCS_OK;
 }
 
-void uct_ptl_am_ep_pending_purge(uct_ep_h ep, uct_pending_purge_callback_t cb,
-                                 void *arg) {
-  return;
+static void uct_ptl_am_ep_pending_purge_cb(uct_pending_req_t *self, void *arg) {
+  uct_ptl_ep_pending_purge_arg_t *purge_arg = arg;
+
+  purge_arg->cb(self, purge_arg->arg);
+}
+
+void uct_ptl_am_ep_pending_purge(uct_ep_h tl_ep,
+                                 uct_pending_purge_callback_t cb, void *arg) {
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_pending_req_priv_queue_t UCS_V_UNUSED *priv;
+  uct_ptl_ep_pending_purge_arg_t purge_arg;
+
+  purge_arg.cb = cb;
+  purge_arg.arg = arg;
+
+  uct_pending_queue_purge(priv, &ep->pending_q, 1,
+                          uct_ptl_am_ep_pending_purge_cb, &purge_arg);
 }
 
 ucs_status_t uct_ptl_am_ep_check(uct_ep_h tl_ep, unsigned flags,
                                  uct_completion_t *comp) {
-  return UCS_ERR_UNSUPPORTED;
+  ucs_status_t rc;
+  uct_iov_t iov;
+
+  UCT_EP_KEEPALIVE_CHECK_PARAM(flags, comp);
+
+  iov.buffer = NULL;
+  iov.length = 0;
+  // Send 0 length message.
+  rc = uct_ptl_am_ep_put_zcopy(tl_ep, &iov, 1, 0, 0, comp);
+  if (rc != UCS_OK) {
+    // FIXME: if no resource, add to pending requests
+    return (rc == UCS_ERR_NO_RESOURCE) ? UCS_OK : rc;
+  }
+
+  return rc;
 }
 
 UCS_CLASS_INIT_FUNC(uct_ptl_am_ep_t, const uct_ep_params_t *params) {
@@ -588,12 +647,15 @@ UCS_CLASS_INIT_FUNC(uct_ptl_am_ep_t, const uct_ep_params_t *params) {
 
   UCS_CLASS_CALL_SUPER_INIT(uct_ptl_ep_t, &iface->super, params);
 
-  self->bcopy_mp = &iface->bcopy_mp;
-  self->zcopy_mp = &iface->zcopy_mp;
+  ucs_queue_head_init(&self->pending_q);
+  self->ops_mp = &iface->super.ops_mp;
+  self->copyin_mp = &iface->copyin_mp;
   self->am_mmd = &iface->am_mmd;
   self->rma_mmd = iface->rma_mmd;
 
   self->iface_addr = *addr;
+
+  self->super.conn_state = UCT_PTL_EP_CONN_CONNECTED;
 
   return UCS_OK;
 }
