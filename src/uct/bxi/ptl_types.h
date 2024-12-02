@@ -21,6 +21,7 @@ typedef struct uct_ptl_iface uct_ptl_iface_t;
 typedef struct uct_ptl_wp uct_ptl_wp_t;
 typedef struct uct_ptl_rq uct_ptl_rq_t;
 typedef struct uct_ptl_md uct_ptl_md_t;
+typedef struct uct_ptl_mmd uct_ptl_mmd_t;
 typedef struct uct_ptl_ep uct_ptl_ep_t;
 
 /*********************************/
@@ -60,6 +61,7 @@ typedef struct uct_ptl_op {
   uct_ptl_op_type_t type; /* Type of operation */
   uct_completion_t *comp; /* Completion callback */
   uct_ptl_ep_t *ep;
+  uct_ptl_mmd_t *mmd;
   void *buffer;
   ptl_size_t seqn;
   ucs_queue_elem_t elem;

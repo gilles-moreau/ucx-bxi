@@ -37,6 +37,7 @@ typedef struct uct_ptl_rkey {
 
 typedef struct uct_ptl_mmd_param {
   unsigned flags;
+  ptl_handle_eq_t eqh;
 } uct_ptl_mmd_param_t;
 
 typedef struct uct_ptl_mmd {

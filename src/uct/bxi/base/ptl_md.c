@@ -75,7 +75,7 @@ ucs_status_t uct_ptl_md_mdesc_init(uct_ptl_md_t *md,
       .start = 0,
       .length = PTL_SIZE_MAX,
       .ct_handle = mmd->cth,
-      .eq_handle = PTL_EQ_NONE,
+      .eq_handle = params->eqh,
       .options = params->flags,
   };
 
@@ -225,6 +225,8 @@ ucs_status_t uct_ptl_md_init(uct_ptl_md_t *md, const char *ptl_device,
                              const uct_ptl_md_config_t *config) {
 
   ucs_status_t rc;
+
+  md->config.max_events = config->max_events;
 
   /* init one physical interface */
   rc = uct_ptl_wrap(PtlNIInit(uct_ptl_parse_device(ptl_device),

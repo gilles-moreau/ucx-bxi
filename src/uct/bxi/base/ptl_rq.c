@@ -122,7 +122,8 @@ ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,
   ucs_mpool_params_t mp_block_params;
 
   rc = uct_ptl_wrap(PtlPTAlloc(uct_ptl_iface_md(iface)->nih, PTL_PT_FLOWCTRL,
-                               iface->eqh, PTL_PT_ANY, &rq->pti));
+                               uct_ptl_iface_md(iface)->eqh, PTL_PT_ANY,
+                               &rq->pti));
   if (rc != UCS_OK) {
     goto err;
   }

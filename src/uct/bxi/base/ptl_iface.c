@@ -159,6 +159,7 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   }
 
   if (mmd->p_cnt.failure > 0) {
+    rc = UCT_ERR_PTL_CT_FAILURE;
     goto err;
   }
 
@@ -197,6 +198,7 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super) {
   uct_ptl_iface_t *iface = ucs_derived_of(super, uct_ptl_iface_t);
   uct_ptl_md_t *md = ucs_derived_of(iface->super.md, uct_ptl_md_t);
 
+handle_error:
   while (1) {
     ret = PtlEQGet(md->eqh, &ev);
 
@@ -204,28 +206,33 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super) {
     case PTL_OK:
       rc = iface->ops.handle_ev(iface, &ev);
       if (rc != UCS_OK)
-        goto out;
+        goto err;
       break;
     case PTL_EQ_EMPTY:
       goto out;
       break;
     case PTL_EQ_DROPPED:
-      goto out;
+      ucs_error("PTL: EQ event dropped.");
+      goto err;
       break;
     default:
       uct_ptl_rc_log(ret);
       rc = UCS_ERR_IO_ERROR;
-      goto out;
+      goto err;
     }
   }
 
+out:
   ucs_list_for_each(mmd, &iface->mds, elem) {
     rc = uct_ptl_md_progress(mmd);
-    if (rc != UCS_OK)
-      goto out;
+    if (rc == (ucs_status_t)UCT_ERR_PTL_CT_FAILURE) {
+      goto handle_error;
+    } else if (rc != UCS_OK) {
+      goto err;
+    }
   }
 
-out:
+err:
   return rc;
 }
 
@@ -287,6 +294,7 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_iface_t) {
   ucs_mpool_cleanup(&self->ops_mp, 0);
+  ucs_mpool_cleanup(&self->copyin_mp, 0);
   return;
 }
 

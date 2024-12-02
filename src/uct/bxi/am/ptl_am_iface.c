@@ -20,67 +20,23 @@ static inline void uct_ptl_am_copy_short(const void *src, size_t length,
 static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
                                       uct_ptl_op_t *op, ptl_ni_fail_t fail) {
   ucs_status_t status;
-  int disable = 0;
+  ptl_ct_event_t fail_dec = {.success = 1, .failure = -1};
   uct_ptl_am_iface_t *iface = ucs_derived_of(ptl_iface, uct_ptl_am_iface_t);
   uct_ptl_am_ep_t *ep = ucs_derived_of(op->ep, uct_ptl_am_ep_t);
 
-  switch (ep->super.conn_state) {
-  case UCT_PTL_EP_CONN_CONNECTED:
-    if (fail == PTL_NI_DROPPED || fail == PTL_NI_PT_DISABLED) {
-      ep->super.conn_state = UCT_PTL_EP_CONN_PT_DISABLED;
-      status = UCS_ERR_CONNECTION_RESET;
-    } else {
-      ep->super.conn_state = UCT_PTL_EP_CONN_CLOSED;
-      status = UCS_ERR_TIMED_OUT;
-    }
-  case UCT_PTL_EP_CONN_PT_DISABLED:
-    ++ep->super.retry_count;
-    if (fail == PTL_NI_DROPPED || fail == PTL_NI_PT_DISABLED) {
-      if (ep->super.retry_count >= ep->super.config.max_retries) {
-        ep->super.conn_state = UCT_PTL_EP_CONN_CLOSED;
-      }
-    } else {
-      ep->super.conn_state = UCT_PTL_EP_CONN_CLOSED;
-    }
-    break;
-  case UCT_PTL_EP_CONN_CLOSED:
-    // Nothing to do
-    break;
-  default:
-    break;
-  }
+  // TODO: add support for retry if error.
+  ep->super.conn_state = UCT_PTL_EP_CONN_CLOSED;
 
-  switch (fail) {
-  case PTL_NI_DROPPED:
-  case PTL_NI_PT_DISABLED:
-    if (++ep->super.retry_count >= ep->super.config.max_retries) {
-      disable = 1;
-    }
-    status = UCS_ERR_CONNECTION_RESET;
-    break;
-  case PTL_NI_UNDELIVERABLE:
-  default:
-    disable = 1;
-    status = UCS_ERR_TIMED_OUT;
-    break;
-  }
-  ep->super.conn_state =
-      disable ? UCT_PTL_EP_CONN_CLOSED : UCT_PTL_EP_CONN_PT_DISABLED;
+  status = uct_ptl_wrap(PtlCTInc(op->mmd->cth, fail_dec));
 
-  switch (op->type) {
-  case UCT_PTL_OP_AM_BCOPY:
-  case UCT_PTL_OP_RMA_PUT_BCOPY:
-  case UCT_PTL_OP_RMA_GET_BCOPY:
-    ucs_assert(op->buffer != NULL);
+  if (op->buffer != NULL) {
     ucs_mpool_put_inline(op->buffer);
-  default:
-    ucs_mpool_put_inline(op);
-    break;
   }
+  ucs_mpool_put_inline(op);
 
-  // TODO: all operations should be drained.
-  status = uct_iface_handle_ep_err(&iface->super.super.super,
-                                   &ep->super.super.super, UCS_ERR_TIMED_OUT);
+  status =
+      uct_iface_handle_ep_err(&iface->super.super.super, &ep->super.super.super,
+                              UCS_ERR_ENDPOINT_TIMEOUT);
 
   ucs_assert(status == UCS_OK);
 }
@@ -96,12 +52,17 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   uct_ptl_recv_block_t *block;
 
   ucs_info("PORTALS: EQS EVENT '%s' idx=%d, "
-           "sz=%lu, user=%p, start=%p, block offset=%d, "
+           "sz=%lu, user=%p, start=%p, "
            "remote_offset=%lu",
            uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength, ev->user_ptr,
-           ev->start, (int)(ev->start - block->start), ev->remote_offset);
+           ev->start, ev->remote_offset);
 
   switch (ev->type) {
+  case PTL_EVENT_ACK:
+    if (ev->ni_fail_type != PTL_NI_OK) {
+      uct_ptl_am_handle_failure(iface, op, ev->ni_fail_type);
+    }
+    break;
   case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_PUT:
     if (prot_id == UCT_PTL_AM_SHORT) {
@@ -130,7 +91,6 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_GET:
   case PTL_EVENT_AUTO_FREE:
-  case PTL_EVENT_ACK:
   case PTL_EVENT_ATOMIC:
   case PTL_EVENT_FETCH_ATOMIC:
   case PTL_EVENT_SEARCH:
@@ -143,7 +103,8 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
     rc = UCS_ERR_IO_ERROR;
     break;
   case PTL_EVENT_PT_DISABLED:
-    uct_ptl_am_handle_failure(iface, op, ev->ni_fail_type);
+    ucs_error("PTL: event %s. Control flow not implemented.",
+              uct_ptl_event_str[ev->type]);
     rc = UCS_ERR_IO_ERROR;
     break;
   default:
@@ -204,7 +165,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
   uct_base_iface_progress_disable(&self->super.super.super,
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
 
-  ucs_mpool_cleanup(&self->copyin_mp, 0);
+  ucs_mpool_cleanup(&self->short_mp, 0);
   uct_ptl_rq_fini(&self->rq);
 
   return;
@@ -308,7 +269,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
       .name = "copyin-mp",
       .grow_factor = 1,
   };
-  rc = ucs_mpool_init(&mp_param, &self->copyin_mp);
+  rc = ucs_mpool_init(&mp_param, &self->super.copyin_mp);
   if (rc != UCS_OK)
     goto err;
 

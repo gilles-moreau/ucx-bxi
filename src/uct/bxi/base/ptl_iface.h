@@ -2,16 +2,21 @@
 #define PTL_IFACE_H
 
 #include "ptl_md.h"
+#include "ucs/type/status.h"
 
 #include <uct/base/uct_iface.h>
 #include <uct/bxi/ptl_types.h>
+#include <unistd.h>
+
+enum {
+  UCT_ERR_PTL_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
+};
 
 typedef ucs_status_t (*handle_ev_func_t)(uct_ptl_iface_t *iface,
                                          ptl_event_t *ev);
 
-typedef void (*handle_failure_func_t)(uct_ptl_iface_t *iface,
-                                      uct_ptl_mmd_t *mmd,
-                                      ucs_status_t ep_status);
+typedef void (*handle_failure_func_t)(uct_ptl_iface_t *iface, uct_ptl_op_t *op,
+                                      ptl_ni_fail_t fail);
 
 typedef struct uct_ptl_device_addr {
   ptl_process_t pid;
