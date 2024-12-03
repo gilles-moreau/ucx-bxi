@@ -60,7 +60,7 @@ int uct_ptl_recv_block_activate(uct_ptl_recv_block_t *block) {
                                                   : PTL_PRIORITY_LIST;
 
   return uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(rq->iface)->nih, rq->pti,
-                                  &me, list, block, &block->meh));
+                                  &me, list, &block->op, &block->meh));
 }
 
 static ucs_status_t uct_ptl_recv_blocks_enable(uct_ptl_rq_t *rq) {

@@ -446,6 +446,7 @@ std::vector<ucp_test_param> enum_test_params(const std::string& tls)
     UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, shm_ib, "shm,ib") \
     UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, ugni,   "ugni") \
     UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, self,   "self") \
+    UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, ptl_am, "ptl_am") \
     UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, tcp,    "tcp")
 
 

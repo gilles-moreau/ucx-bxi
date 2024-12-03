@@ -3,6 +3,7 @@
 #endif
 
 #include "ptl_iface.h"
+#include <ucs/sys/math.h>
 
 char *uct_ptl_event_str[] = {
     [PTL_EVENT_GET] = "PTL_EVENT_GET",
@@ -36,6 +37,11 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, copyin_buf_per_block),
      UCS_CONFIG_TYPE_UINT},
 
+    {"COPYOUT_BUF_PER_BLOCK", "8",
+     "Number of copyout buffers allocated per block (default: 2)",
+     ucs_offsetof(uct_ptl_iface_config_t, copyout_buf_per_block),
+     UCS_CONFIG_TYPE_UINT},
+
     {"MIN_COPYIN_BUF", "2",
      "Minimum number of copyin buffers per working queues (default: 2)",
      ucs_offsetof(uct_ptl_iface_config_t, min_copyin_buf),
@@ -46,7 +52,12 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"NUM_EAGER_BLOCKS", "8",
+    {"MAX_COPYOUT_BUF", "32",
+     "Maximum number of copyout buffers per working queues (default: 8)",
+     ucs_offsetof(uct_ptl_iface_config_t, max_copyout_buf),
+     UCS_CONFIG_TYPE_UINT},
+
+    {"NUM_EAGER_BLOCKS", "16",
      "Number of eager blocks for receiving unexpected messages (default: 32).",
      ucs_offsetof(uct_ptl_iface_config_t, num_eager_blocks),
      UCS_CONFIG_TYPE_UINT},
@@ -90,11 +101,13 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
 
   attr->cap.put.max_short = ptl_if->config.max_short;
   attr->cap.put.max_bcopy = ptl_if->config.eager_block_size;
+  attr->cap.put.min_zcopy = 0;
   attr->cap.put.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.put.max_iov = ptl_if->config.max_iovecs;
 
   attr->cap.get.max_short = ptl_if->config.max_short;
   attr->cap.get.max_bcopy = ptl_if->config.eager_block_size;
+  attr->cap.get.min_zcopy = 0;
   attr->cap.get.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.get.max_iov = ptl_if->config.max_iovecs;
 
@@ -143,7 +156,6 @@ ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h tl_iface,
   return UCS_OK;
 }
 
-#define seqn_gt(a, b) ((int64_t)((a) - (b)) > 0)
 ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   ucs_status_t rc = UCS_OK;
   ucs_queue_iter_t iter;
@@ -164,12 +176,12 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   }
 
   ucs_queue_for_each_safe(op, iter, &mmd->opq, elem) {
-    if (seqn_gt(mmd->p_cnt.success, op->seqn)) {
+    if (UCS_CIRCULAR_COMPARE64(mmd->p_cnt.success, >, op->seqn)) {
       ucs_queue_del_iter(&mmd->opq, iter);
 
       switch (op->type) {
       case UCT_PTL_OP_RMA_GET_BCOPY:
-        op->get_bcopy.unpack(op->get_bcopy.arg, op + 1, op->size);
+        op->get_bcopy.unpack(op->get_bcopy.arg, op->buffer, op->size);
         break;
       default:
         break;
@@ -197,6 +209,7 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super) {
   uct_ptl_mmd_t *mmd;
   uct_ptl_iface_t *iface = ucs_derived_of(super, uct_ptl_iface_t);
   uct_ptl_md_t *md = ucs_derived_of(iface->super.md, uct_ptl_md_t);
+  uct_pending_req_priv_queue_t *priv;
 
 handle_error:
   while (1) {
@@ -223,6 +236,8 @@ handle_error:
   }
 
 out:
+  uct_pending_queue_dispatch(priv, &iface->pending_q, 1);
+
   ucs_list_for_each(mmd, &iface->mds, elem) {
     rc = uct_ptl_md_progress(mmd);
     if (rc == (ucs_status_t)UCT_ERR_PTL_CT_FAILURE) {
@@ -267,12 +282,15 @@ UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,
   self->config.num_eager_blocks = config->num_eager_blocks;
   self->config.max_events = config->max_events;
   self->config.max_outstanding_ops = config->max_outstanding_ops;
+  self->config.max_copyout_buf = config->max_copyout_buf;
+  self->config.copyout_buf_per_block = config->copyout_buf_per_block;
 
   self->config.max_iovecs = ptl_md->limits.max_iovecs;
   self->config.max_msg_size = ptl_md->limits.max_msg_size;
   self->config.max_short = ptl_md->limits.max_waw_ordered_size;
 
   ucs_list_head_init(&self->mds);
+  ucs_queue_head_init(&self->pending_q);
 
   /* Work pool of operation. */
   mp_param = (ucs_mpool_params_t){

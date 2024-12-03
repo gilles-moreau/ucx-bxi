@@ -38,8 +38,10 @@ typedef struct uct_ptl_iface_config {
   int max_ep_retries;
   int max_outstanding_ops;
   int copyin_buf_per_block;
+  int copyout_buf_per_block;
   int min_copyin_buf;
   int max_copyin_buf;
+  int max_copyout_buf;
   int num_eager_blocks;
   int eager_block_size;
   unsigned features;
@@ -54,6 +56,8 @@ typedef struct uct_ptl_iface {
     int copyin_buf_per_block;
     int min_copyin_buf;
     int max_copyin_buf;
+    int copyout_buf_per_block;
+    int max_copyout_buf;
     int num_eager_blocks;
     int max_iovecs;
     int max_short;
@@ -70,6 +74,7 @@ typedef struct uct_ptl_iface {
   ucs_list_link_t mds; // Memory descriptors
   ucs_mpool_t ops_mp;
   ucs_mpool_t copyin_mp;
+  ucs_queue_head_t pending_q;
 } uct_ptl_iface_t;
 
 UCS_CLASS_DECLARE(uct_ptl_iface_t, uct_iface_ops_t *, uct_ptl_iface_ops_t *,

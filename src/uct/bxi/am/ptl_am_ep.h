@@ -16,7 +16,6 @@ typedef struct uct_ptl_am_ep {
   } config;
   uct_ptl_am_iface_addr_t iface_addr;
   ucs_mpool_t *copyin_mp;
-  ucs_queue_head_t pending_q; /* Pending operations */
   uct_ptl_mmd_t *am_mmd;
   uct_ptl_mmd_t *rma_mmd;
 } uct_ptl_am_ep_t;
@@ -97,12 +96,6 @@ ucs_status_t uct_ptl_am_ep_get_address(uct_ep_h tl_ep, uct_ep_addr_t *addr);
 
 int uct_ptl_am_ep_is_connected(const uct_ep_h tl_ep,
                                const uct_ep_is_connected_params_t *params);
-
-ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *n,
-                                       unsigned flags);
-
-void uct_ptl_am_ep_pending_purge(uct_ep_h ep, uct_pending_purge_callback_t cb,
-                                 void *arg);
 
 ucs_status_t uct_ptl_am_ep_check(uct_ep_h tl_ep, unsigned flags,
                                  uct_completion_t *comp);
