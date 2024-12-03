@@ -117,33 +117,46 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
 ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                     uct_completion_t *comp) {
   ucs_status_t rc;
-  ptl_size_t last_seqn;
+  ptl_size_t last_seqn = 0;
   uct_ptl_op_t *op = NULL;
-  uct_ptl_am_iface_t *ptl_iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+  uct_ptl_mmd_t *mmd, *last_mmd;
+  int not_empty = 0;
+  uct_pending_req_priv_queue_t *priv;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
 
-  /* Load the sequence number of the last rma operations. */
-  // TODO:  atomic load
-  last_seqn = ptl_iface->rma_mmd->seqn - 1;
+  uct_pending_queue_dispatch(priv, &iface->super.pending_q, 1);
 
-  rc = uct_ptl_md_progress(ptl_iface->rma_mmd);
-  if (rc != UCS_OK)
-    goto err;
+  ucs_list_for_each(mmd, &iface->super.mds, elem) {
+    /* Load the sequence number of the last operations. */
+    if (last_seqn < mmd->seqn) {
+      last_seqn = mmd->seqn;
+      last_mmd = mmd;
+    }
 
-  if (!ucs_queue_is_empty(&ptl_iface->rma_mmd->opq)) {
+    rc = uct_ptl_md_progress(mmd);
+    if (rc != UCS_OK)
+      goto err;
+
+    if (!ucs_queue_is_empty(&mmd->opq)) {
+      not_empty = 1;
+    }
+  }
+
+  if (not_empty) {
     rc = UCS_INPROGRESS;
 
     if (comp != NULL) {
-      op = ucs_mpool_get(&ptl_iface->super.ops_mp);
+      op = ucs_mpool_get(&iface->super.ops_mp);
       if (op == NULL) {
         ucs_error("PTL: could not allocate flush operation.");
         rc = UCS_ERR_NO_MEMORY;
         goto err;
       }
       op->comp = comp;
-      op->seqn = last_seqn;
+      op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
 
       // TODO: lock
-      ucs_queue_push(&ptl_iface->rma_mmd->opq, &op->elem);
+      ucs_queue_push(&last_mmd->opq, &op->elem);
     }
   }
 
@@ -274,9 +287,9 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
     goto err;
 
   rq_param = (uct_ptl_rq_param_t){
-      .items_per_chunk = 8,
+      .items_per_chunk = self->super.config.copyout_buf_per_block,
       .min_items = 2,
-      .max_items = 64 * self->super.config.num_eager_blocks,
+      .max_items = self->super.config.max_copyout_buf,
       .item_size = self->super.config.eager_block_size *
                    self->super.config.num_eager_blocks,
       .options = ECR_PTL_BLOCK_AM,
@@ -309,8 +322,8 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .ep_atomic_cswap32 = uct_ptl_am_ep_atomic_cswap32,
     .ep_atomic32_post = uct_ptl_am_ep_atomic32_post,
     .ep_atomic32_fetch = uct_ptl_am_ep_atomic32_fetch,
-    .ep_pending_add = uct_ptl_am_ep_pending_add,
-    .ep_pending_purge = uct_ptl_am_ep_pending_purge,
+    .ep_pending_add = uct_ptl_ep_pending_add,
+    .ep_pending_purge = uct_ptl_ep_pending_purge,
     .ep_flush = uct_ptl_am_ep_flush,
     .ep_fence = uct_ptl_am_ep_fence,
     .ep_check = uct_ptl_am_ep_check,
