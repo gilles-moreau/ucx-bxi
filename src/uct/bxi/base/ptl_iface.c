@@ -5,6 +5,9 @@
 #include "ptl_iface.h"
 #include <ucs/sys/math.h>
 
+#define UCT_PTL_IFACE_OVERHEAD 10e-8
+#define UCT_PTL_IFACE_LATENCY ucs_linear_func_make(80e-8, 0)
+
 char *uct_ptl_event_str[] = {
     [PTL_EVENT_GET] = "PTL_EVENT_GET",
     [PTL_EVENT_GET_OVERFLOW] = "PTL_EVENT_GET_OVERFLOW",
@@ -88,9 +91,11 @@ uct_ptl_iface_query_tl_devices(uct_md_h md,
 ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   uct_ptl_iface_t *ptl_if = ucs_derived_of(iface, uct_ptl_iface_t);
 
+  uct_base_iface_query(&ptl_if->super, attr);
+
   attr->cap.am.max_short = ptl_if->config.max_short - sizeof(uint64_t);
   attr->cap.am.max_bcopy = ptl_if->config.eager_block_size;
-  attr->cap.am.max_zcopy = ptl_if->config.max_msg_size;
+  attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov = ptl_if->config.max_iovecs;
 
   attr->cap.tag.recv.min_recv = 0;
@@ -142,6 +147,12 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
 
   attr->cap.event_flags =
       UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
+
+  attr->latency = UCT_PTL_IFACE_LATENCY;
+  attr->bandwidth.dedicated = 8192 * UCS_MBYTE;
+  attr->bandwidth.shared = 0;
+  attr->overhead = UCT_PTL_IFACE_OVERHEAD;
+  attr->priority = 1;
 
   return UCS_OK;
 }
