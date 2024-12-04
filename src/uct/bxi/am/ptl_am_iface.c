@@ -116,10 +116,11 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
 
 ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                     uct_completion_t *comp) {
-  ucs_status_t rc;
+  ucs_status_t rc = UCS_OK;
   ptl_size_t last_seqn = 0;
   uct_ptl_op_t *op = NULL;
   uct_ptl_mmd_t *mmd, *last_mmd;
+  int progressed = 0;
   int not_empty = 0;
   uct_pending_req_priv_queue_t *priv;
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
@@ -133,9 +134,11 @@ ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
       last_mmd = mmd;
     }
 
-    rc = uct_ptl_md_progress(mmd);
-    if (rc != UCS_OK)
+    progressed = uct_ptl_md_progress(mmd);
+    if (progressed < 0) {
+      rc = progressed;
       goto err;
+    }
 
     if (!ucs_queue_is_empty(&mmd->opq)) {
       not_empty = 1;
@@ -300,6 +303,9 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   if (rc != UCS_OK)
     goto err;
 
+  ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d",
+            self, ptl_ms->super.pid.phys.nid, ptl_ms->super.pid.phys.pid,
+            self->rq.pti, ptl_ms->super.pti);
 err:
   return rc;
 }

@@ -126,6 +126,7 @@ static ucs_status_t uct_ptl_am_md_open(uct_component_t *component,
   ptl_md->super.super.ops = &uct_ptl_am_md_ops;
   ptl_md->super.super.component = component;
 
+  ucs_debug("PTL: MD Init.");
   *md_p = &ptl_md->super.super;
 
   return rc;

@@ -171,28 +171,31 @@ ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h tl_iface,
   return UCS_OK;
 }
 
-ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
+int uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   ucs_status_t rc = UCS_OK;
   ucs_queue_iter_t iter;
   uct_ptl_op_t *op;
+  int progressed = 0;
 
   if (ucs_queue_is_empty(&mmd->opq)) {
-    return rc;
+    return progressed;
   }
 
   rc = uct_ptl_wrap(PtlCTGet(mmd->cth, &mmd->p_cnt));
   if (rc != UCS_OK) {
+    progressed = rc;
     goto err;
   }
 
   if (mmd->p_cnt.failure > 0) {
-    rc = UCT_ERR_PTL_CT_FAILURE;
+    progressed = UCT_ERR_PTL_CT_FAILURE;
     goto err;
   }
 
   ucs_queue_for_each_safe(op, iter, &mmd->opq, elem) {
     if (UCS_CIRCULAR_COMPARE64(mmd->p_cnt.success, >, op->seqn)) {
       ucs_queue_del_iter(&mmd->opq, iter);
+      progressed++;
 
       switch (op->type) {
       case UCT_PTL_OP_RMA_GET_BCOPY:
@@ -213,13 +216,14 @@ ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd) {
   }
 
 err:
-  return rc;
+  return progressed;
 }
 
 // FIXME: make use of UCT_PROGRESS_{SEND,RECV} flags.
 unsigned uct_ptl_iface_progress(uct_iface_t *super) {
   ucs_status_t rc;
   int ret;
+  int progressed = 0, tmp;
   ptl_event_t ev;
   uct_ptl_mmd_t *mmd;
   uct_ptl_iface_t *iface = ucs_derived_of(super, uct_ptl_iface_t);
@@ -235,6 +239,7 @@ handle_error:
       rc = iface->ops.handle_ev(iface, &ev);
       if (rc != UCS_OK)
         goto err;
+      progressed++;
       break;
     case PTL_EQ_EMPTY:
       goto out;
@@ -254,16 +259,18 @@ out:
   uct_pending_queue_dispatch(priv, &iface->pending_q, 1);
 
   ucs_list_for_each(mmd, &iface->mds, elem) {
-    rc = uct_ptl_md_progress(mmd);
-    if (rc == (ucs_status_t)UCT_ERR_PTL_CT_FAILURE) {
+    tmp = uct_ptl_md_progress(mmd);
+    if (tmp == UCT_ERR_PTL_CT_FAILURE) {
       goto handle_error;
-    } else if (rc != UCS_OK) {
+    } else if (tmp < 0) {
+      progressed = tmp;
       goto err;
     }
+    progressed += tmp;
   }
 
 err:
-  return rc;
+  return progressed;
 }
 
 static ucs_mpool_ops_t uct_ptl_mpool_ops = {

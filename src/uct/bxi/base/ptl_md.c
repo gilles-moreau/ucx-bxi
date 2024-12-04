@@ -170,7 +170,7 @@ ucs_status_t uct_ptl_query_md_resources(uct_component_t *component,
   do {
     dir = opendir(bxi_dir[i]);
     if (dir == NULL) {
-      ucs_warn("PTL: could not open bxi directory %s.", bxi_dir[i]);
+      ucs_debug("PTL: could not open bxi directory %s.", bxi_dir[i]);
       continue;
     }
 

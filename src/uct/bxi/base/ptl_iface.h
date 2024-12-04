@@ -98,7 +98,7 @@ unsigned uct_ptl_iface_progress(uct_iface_t *super);
 ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h tl_iface,
                                               uct_device_addr_t *tl_addr);
 ucs_status_t uct_ptl_iface_query(uct_iface_t *iface, uct_iface_attr_t *attr);
-ucs_status_t uct_ptl_md_progress(uct_ptl_mmd_t *mmd);
+int uct_ptl_md_progress(uct_ptl_mmd_t *mmd);
 
 ucs_status_t
 uct_ptl_iface_query_tl_devices(uct_md_h md,
