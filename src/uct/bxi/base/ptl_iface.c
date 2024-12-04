@@ -109,12 +109,16 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
   attr->cap.put.min_zcopy = 0;
   attr->cap.put.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.put.max_iov = ptl_if->config.max_iovecs;
+  attr->cap.put.opt_zcopy_align = 1;
+  attr->cap.put.align_mtu = attr->cap.put.opt_zcopy_align;
 
   attr->cap.get.max_short = ptl_if->config.max_short;
   attr->cap.get.max_bcopy = ptl_if->config.eager_block_size;
   attr->cap.get.min_zcopy = 0;
   attr->cap.get.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.get.max_iov = ptl_if->config.max_iovecs;
+  attr->cap.get.opt_zcopy_align = 1;
+  attr->cap.get.align_mtu = attr->cap.get.opt_zcopy_align;
 
   attr->ep_addr_len = ptl_if->config.ep_addr_size;
   attr->iface_addr_len = ptl_if->config.iface_addr_size;
