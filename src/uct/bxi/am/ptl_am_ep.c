@@ -168,6 +168,7 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
+  ucs_debug("PTL: put short. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)buffer, length,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
@@ -210,6 +211,7 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
+  ucs_debug("PTL: put bcopy. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
@@ -249,6 +251,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
+  ucs_debug("PTL: put zcopy. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
                            iov[0].length, PTL_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, op, 0));
@@ -291,6 +294,7 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
+  ucs_debug("PTL: get bcopy. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlGet(ep->rma_mmd->mdh, (ptl_size_t)op->buffer, length,
                            ep->super.dev_addr.pid, ep->iface_addr.rma_pti, 0,
                            remote_addr, NULL));

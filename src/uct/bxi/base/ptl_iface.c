@@ -30,7 +30,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
     {"", "ALLOC=heap", NULL, ucs_offsetof(uct_ptl_iface_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
-    {"MAX_OUTSTANDING_OPS", "2048",
+    {"MAX_OUTSTANDING_OPS", "16",
      "Maximum number of outstanding operations (default: 2048).",
      ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
      UCS_CONFIG_TYPE_UINT},
@@ -148,9 +148,6 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {
       UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
       UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
-
-  attr->cap.event_flags =
-      UCT_IFACE_FLAG_EVENT_SEND_COMP | UCT_IFACE_FLAG_EVENT_RECV;
 
   attr->latency = UCT_PTL_IFACE_LATENCY;
   attr->bandwidth.dedicated = 8192 * UCS_MBYTE;

@@ -60,6 +60,7 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   switch (ev->type) {
   case PTL_EVENT_ACK:
     if (ev->ni_fail_type != PTL_NI_OK) {
+      ucs_debug("PTL: handle failure. op=%p, seqn=%lu", op, op->seqn);
       uct_ptl_am_handle_failure(iface, op, ev->ni_fail_type);
     }
     break;
@@ -105,7 +106,7 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   case PTL_EVENT_PT_DISABLED:
     ucs_error("PTL: event %s. Control flow not implemented.",
               uct_ptl_event_str[ev->type]);
-    rc = UCS_ERR_IO_ERROR;
+    rc = UCS_OK;
     break;
   default:
     break;

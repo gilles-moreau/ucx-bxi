@@ -29,6 +29,7 @@ err:
   return rc;
 }
 
+// FIXME: change return type to ucs_status_t
 int uct_ptl_recv_block_activate(uct_ptl_recv_block_t *block) {
   ptl_me_t me;
   ptl_match_bits_t match = 0;
