@@ -24,6 +24,7 @@ static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
   uct_ptl_am_iface_t *iface = ucs_derived_of(ptl_iface, uct_ptl_am_iface_t);
   uct_ptl_am_ep_t *ep = ucs_derived_of(op->ep, uct_ptl_am_ep_t);
 
+  ucs_assert(ep != NULL);
   // TODO: add support for retry if error.
   ep->super.conn_state = UCT_PTL_EP_CONN_CLOSED;
 
@@ -51,11 +52,11 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
   uct_ptl_op_t *op = (uct_ptl_op_t *)ev->user_ptr;
   uct_ptl_recv_block_t *block;
 
-  ucs_info("PORTALS: EQS EVENT '%s' idx=%d, "
-           "sz=%lu, user=%p, start=%p, "
-           "remote_offset=%lu",
-           uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength, ev->user_ptr,
-           ev->start, ev->remote_offset);
+  // ucs_debug("PORTALS: EQS EVENT '%s' idx=%d, "
+  //           "sz=%lu, user=%p, start=%p, "
+  //           "remote_offset=%lu",
+  //           uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength,
+  //           ev->user_ptr, ev->start, ev->remote_offset);
 
   switch (ev->type) {
   case PTL_EVENT_ACK:
@@ -117,55 +118,44 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
 
 ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                     uct_completion_t *comp) {
-  ucs_status_t rc = UCS_OK;
+  ucs_status_t rc, status = UCS_OK;
   ptl_size_t last_seqn = 0;
   uct_ptl_op_t *op = NULL;
-  uct_ptl_mmd_t *mmd, *last_mmd;
-  int progressed = 0;
-  int not_empty = 0;
-  uct_pending_req_priv_queue_t *priv;
+  uct_ptl_mmd_t *mmd, *last_mmd = NULL;
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
 
-  uct_pending_queue_dispatch(priv, &iface->super.pending_q, 1);
-
   ucs_list_for_each(mmd, &iface->super.mds, elem) {
+    if (ucs_queue_is_empty(&mmd->opq)) {
+      continue;
+    }
+
     /* Load the sequence number of the last operations. */
     if (last_seqn < mmd->seqn) {
       last_seqn = mmd->seqn;
       last_mmd = mmd;
     }
 
-    progressed = uct_ptl_md_progress(mmd);
-    if (progressed < 0) {
-      rc = progressed;
+    status = UCS_INPROGRESS;
+  }
+
+  if (status == UCS_INPROGRESS && comp != NULL) {
+    rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_FLUSH, 0, comp, &iface->super,
+                               NULL, NULL, &op);
+    if (rc != UCS_OK) {
+      status = rc;
       goto err;
     }
 
-    if (!ucs_queue_is_empty(&mmd->opq)) {
-      not_empty = 1;
-    }
-  }
-
-  if (not_empty) {
-    rc = UCS_INPROGRESS;
-
     if (comp != NULL) {
-      op = ucs_mpool_get(&iface->super.ops_mp);
-      if (op == NULL) {
-        ucs_error("PTL: could not allocate flush operation.");
-        rc = UCS_ERR_NO_MEMORY;
-        goto err;
-      }
-      op->comp = comp;
+      // FIXME: uniformize pending and outstanding operation count
       op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
 
-      // TODO: lock
       ucs_queue_push(&last_mmd->opq, &op->elem);
     }
   }
 
 err:
-  return rc;
+  return status;
 }
 
 ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags) {

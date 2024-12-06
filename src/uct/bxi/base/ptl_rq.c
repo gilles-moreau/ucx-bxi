@@ -152,7 +152,7 @@ ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,
   rq->config.blk_opts = params->options;
   rq->config.blk_size = params->item_size;
   rq->config.blk_min_free = params->min_free;
-  rq->config.num_blk = params->items_per_chunk;
+  rq->config.num_blk = params->max_items;
   rq->iface = iface;
 
   rc = uct_ptl_recv_blocks_enable(rq);

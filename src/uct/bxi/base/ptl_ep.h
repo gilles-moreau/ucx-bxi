@@ -41,7 +41,8 @@ typedef struct uct_ptl_ep_pending_purge_arg {
 UCS_CLASS_DECLARE(uct_ptl_ep_t, uct_ptl_iface_t *, const uct_ep_params_t *);
 
 ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
-                                   uct_completion_t *comp, uct_ptl_ep_t *ep,
+                                   uct_completion_t *comp,
+                                   uct_ptl_iface_t *iface, uct_ptl_ep_t *ep,
                                    uct_ptl_mmd_t *mmd, uct_ptl_op_t **op_p);
 ucs_status_t uct_ptl_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags);
@@ -49,4 +50,6 @@ void uct_ptl_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_ptl_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
+#define uct_ptl_ep_iface(_ep, _type)                                           \
+  ucs_derived_of((_ep)->super.super.super.iface, _type)
 #endif
