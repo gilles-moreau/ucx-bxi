@@ -35,12 +35,12 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
      UCS_CONFIG_TYPE_UINT},
 
-    {"COPYIN_BUF_PER_BLOCK", "8",
+    {"COPYIN_BUF_PER_BLOCK", "16",
      "Number of copyin buffers allocated per block (default: 2)",
      ucs_offsetof(uct_ptl_iface_config_t, copyin_buf_per_block),
      UCS_CONFIG_TYPE_UINT},
 
-    {"COPYOUT_BUF_PER_BLOCK", "8",
+    {"COPYOUT_BUF_PER_BLOCK", "16",
      "Number of copyout buffers allocated per block (default: 2)",
      ucs_offsetof(uct_ptl_iface_config_t, copyout_buf_per_block),
      UCS_CONFIG_TYPE_UINT},
@@ -50,17 +50,17 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
      ucs_offsetof(uct_ptl_iface_config_t, min_copyin_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"MAX_COPYIN_BUF", "8",
+    {"MAX_COPYIN_BUF", "16",
      "Maximum number of copyin buffers per working queues (default: 8)",
      ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"MAX_COPYOUT_BUF", "32",
+    {"MAX_COPYOUT_BUF", "256",
      "Maximum number of copyout buffers per working queues (default: 8)",
      ucs_offsetof(uct_ptl_iface_config_t, max_copyout_buf),
      UCS_CONFIG_TYPE_UINT},
 
-    {"NUM_EAGER_BLOCKS", "16",
+    {"NUM_EAGER_BLOCKS", "32",
      "Number of eager blocks for receiving unexpected messages (default: 32).",
      ucs_offsetof(uct_ptl_iface_config_t, num_eager_blocks),
      UCS_CONFIG_TYPE_UINT},
@@ -86,6 +86,17 @@ uct_ptl_iface_query_tl_devices(uct_md_h md,
   return uct_single_device_resource(md, ptl_md->device, UCT_DEVICE_TYPE_NET,
                                     UCS_SYS_DEVICE_ID_UNKNOWN, tl_devices_p,
                                     num_tl_devices_p);
+}
+
+int uct_ptl_iface_is_reachable_v2(
+    const uct_iface_h tl_iface, const uct_iface_is_reachable_params_t *params) {
+
+  if (!uct_iface_is_reachable_params_valid(
+          params, UCT_IFACE_IS_REACHABLE_FIELD_DEVICE_ADDR)) {
+    return 0;
+  }
+
+  return uct_iface_scope_is_reachable(tl_iface, params);
 }
 
 ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr) {

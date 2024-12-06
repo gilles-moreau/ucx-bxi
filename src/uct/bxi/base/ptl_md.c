@@ -15,7 +15,7 @@ ucs_config_field_t uct_ptl_md_config_table[] = {
     {"", "", NULL, ucs_offsetof(uct_ptl_md_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_md_config_table)},
 
-    {"MAX_EVENTS", "2048",
+    {"MAX_EVENTS", "65536",
      "Maximum number of events per event queue (default: 2048).",
      ucs_offsetof(uct_ptl_md_config_t, max_events), UCS_CONFIG_TYPE_UINT},
 

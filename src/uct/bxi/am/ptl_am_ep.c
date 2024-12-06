@@ -53,13 +53,19 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   ucs_status_t rc = UCS_OK;
   ptl_match_bits_t hdr = 0;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
   ssize_t size = 0;
 
   UCT_CHECK_AM_ID(id);
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_AM_BCOPY, 1, NULL, &ep->super,
-                             ep->am_mmd, &op);
+  if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
+    rc = UCS_ERR_TIMED_OUT;
+    goto err;
+  }
+
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_AM_BCOPY, 1, NULL, &iface->super,
+                             &ep->super, ep->am_mmd, &op);
   if (rc != UCS_OK) {
     size = UCS_ERR_NO_RESOURCE;
     goto err;
@@ -154,10 +160,11 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                      uct_rkey_t rkey) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_SHORT, 0, NULL, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_SHORT, 0, NULL, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -168,7 +175,6 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  ucs_debug("PTL: put short. op=%p, seqn=%lu", op, op->seqn);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)buffer, length,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
@@ -191,12 +197,14 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
                                 uct_rkey_t rkey) {
   ucs_status_t rc = UCS_OK; // FIXME: remove rc?
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
   ssize_t size = 0;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_BCOPY, 1, NULL, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_BCOPY, 1, NULL, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
+    size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
@@ -211,7 +219,7 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  ucs_debug("PTL: put bcopy. op=%p, seqn=%lu", op, op->seqn);
+  ucs_debug("PTL: put bcopy. op=%p, seqn=%lu, length=%lu", op, op->seqn, size);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL, 0));
@@ -235,12 +243,13 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
   ucs_assert(iovcnt == 1);
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_ZCOPY, 0, comp, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_PUT_ZCOPY, 0, comp, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -251,7 +260,8 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
-  ucs_debug("PTL: put zcopy. op=%p, seqn=%lu", op, op->seqn);
+  ucs_debug("PTL: put zcopy. op=%p, seqn=%lu, length=%lu", op, op->seqn,
+            iov->length);
   rc = uct_ptl_wrap(PtlPut(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
                            iov[0].length, PTL_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, op, 0));
@@ -276,10 +286,11 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc = UCS_OK; // FIXME: remove rc?
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_BCOPY, 1, comp, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_BCOPY, 1, comp, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -318,10 +329,11 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      uct_rkey_t rkey, uct_completion_t *comp) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_ZCOPY, 0, comp, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_GET_ZCOPY, 0, comp, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -356,10 +368,11 @@ uct_ptl_am_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode,
                                  uint64_t remote_addr, uct_rkey_t rkey) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, NULL, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, NULL, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -393,10 +406,11 @@ uct_ptl_am_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode,
 
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }
@@ -432,10 +446,11 @@ uct_ptl_am_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare,
                                   uint64_t *result, uct_completion_t *comp) {
   ucs_status_t rc;
   uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &ep->super,
-                             ep->rma_mmd, &op);
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_ATOMIC, 0, comp, &iface->super,
+                             &ep->super, ep->rma_mmd, &op);
   if (rc != UCS_OK) {
     goto err;
   }

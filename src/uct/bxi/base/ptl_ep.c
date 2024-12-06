@@ -7,17 +7,13 @@ ptl_op_t uct_ptl_atomic_op_table[] = {
 };
 
 ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
-                                   uct_completion_t *comp, uct_ptl_ep_t *ep,
+                                   uct_completion_t *comp,
+                                   uct_ptl_iface_t *iface, uct_ptl_ep_t *ep,
                                    uct_ptl_mmd_t *mmd, uct_ptl_op_t **op_p) {
   ucs_status_t rc = UCS_OK;
   uct_ptl_op_t *op;
 
-  if (ep->conn_state == UCT_PTL_EP_CONN_CLOSED) {
-    rc = UCS_ERR_TIMED_OUT;
-    goto err;
-  }
-
-  op = ucs_mpool_get(ep->ops_mp);
+  op = ucs_mpool_get(&iface->ops_mp);
   if (op == NULL) {
     rc = UCS_ERR_NO_RESOURCE;
     goto err;
@@ -28,7 +24,7 @@ ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
   op->type = type;
   op->buffer = NULL;
   if (get_buf) {
-    op->buffer = ucs_mpool_get(ep->copyin_mp);
+    op->buffer = ucs_mpool_get(&iface->copyin_mp);
     if (op->buffer == NULL) {
       ucs_mpool_put(op);
       rc = UCS_ERR_NO_RESOURCE;
@@ -45,7 +41,8 @@ ucs_status_t uct_ptl_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags) {
   uct_ptl_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_iface_t);
 
-  if (ucs_mpool_is_empty(&iface->ops_mp)) {
+  if (!ucs_mpool_is_empty(&iface->ops_mp) &&
+      !ucs_mpool_is_empty(&iface->copyin_mp)) {
     return UCS_ERR_BUSY;
   }
 
