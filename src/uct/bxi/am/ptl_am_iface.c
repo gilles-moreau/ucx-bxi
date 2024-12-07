@@ -118,7 +118,7 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
 
 ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                     uct_completion_t *comp) {
-  ucs_status_t rc, status = UCS_OK;
+  ucs_status_t status = UCS_OK;
   ptl_size_t last_seqn = 0;
   uct_ptl_op_t *op = NULL;
   uct_ptl_mmd_t *mmd, *last_mmd = NULL;
@@ -139,19 +139,18 @@ ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
   }
 
   if (status == UCS_INPROGRESS && comp != NULL) {
-    rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RMA_FLUSH, 0, comp, &iface->super,
-                               NULL, NULL, &op);
-    if (rc != UCS_OK) {
-      status = rc;
-      goto err;
+    op = ucs_mpool_get(&iface->super.flush_ops_mp);
+    if (ucs_unlikely(op == NULL)) {
+      ucs_error("Failed to allocate flush completion");
+      return UCS_ERR_NO_MEMORY;
     }
+    op->type = UCT_PTL_OP_RMA_FLUSH;
+    op->comp = comp;
+    op->buffer = NULL;
+    // FIXME: uniformize pending and outstanding operation count
+    op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
 
-    if (comp != NULL) {
-      // FIXME: uniformize pending and outstanding operation count
-      op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
-
-      ucs_queue_push(&last_mmd->opq, &op->elem);
-    }
+    ucs_queue_push(&last_mmd->opq, &op->elem);
   }
 
 err:
@@ -160,10 +159,18 @@ err:
 
 ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags) {
   ucs_status_t rc;
+  unsigned progressed;
 
   do {
-    rc = uct_ptl_am_iface_flush(tl_iface, flags, NULL);
-  } while (rc == UCS_INPROGRESS);
+    progressed = uct_ptl_iface_progress(tl_iface);
+    if (progressed < 0) {
+      rc = progressed;
+      goto err;
+    }
+  } while ((rc = uct_ptl_am_iface_flush(tl_iface, flags, NULL)) ==
+           UCS_INPROGRESS);
+
+err:
   return rc;
 }
 

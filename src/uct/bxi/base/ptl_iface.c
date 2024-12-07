@@ -264,8 +264,6 @@ handle_error:
   }
 
 out:
-  uct_pending_queue_dispatch(priv, &iface->pending_q, 1);
-
   ucs_list_for_each(mmd, &iface->mds, elem) {
     tmp = uct_ptl_md_progress(mmd);
     if (tmp == UCT_ERR_PTL_CT_FAILURE) {
@@ -276,6 +274,8 @@ out:
     }
     progressed += tmp;
   }
+
+  uct_pending_queue_dispatch(priv, &iface->pending_q, 1);
 
 err:
   return progressed;
@@ -335,6 +335,20 @@ UCS_CLASS_INIT_FUNC(uct_ptl_iface_t, uct_iface_ops_t *tl_ops,
       .grow_factor = 1,
   };
   rc = ucs_mpool_init(&mp_param, &self->ops_mp);
+
+  /* Work pool of operation. */
+  mp_param = (ucs_mpool_params_t){
+      .max_chunk_size = self->config.max_outstanding_ops * sizeof(uct_ptl_op_t),
+      .elems_per_chunk = self->config.max_outstanding_ops,
+      .max_elems = self->config.max_outstanding_ops,
+      .elem_size = sizeof(uct_ptl_op_t),
+      .alignment = 64,
+      .align_offset = 0,
+      .ops = &uct_ptl_mpool_ops,
+      .name = "ptl-flush-ops",
+      .grow_factor = 1,
+  };
+  rc = ucs_mpool_init(&mp_param, &self->flush_ops_mp);
 
 err:
   return rc;

@@ -73,6 +73,7 @@ typedef struct uct_ptl_iface {
   uct_ptl_iface_ops_t ops;
   ucs_list_link_t mds; // Memory descriptors
   ucs_mpool_t ops_mp;
+  ucs_mpool_t flush_ops_mp;
   ucs_mpool_t copyin_mp;
   ucs_queue_head_t pending_q;
 } uct_ptl_iface_t;
