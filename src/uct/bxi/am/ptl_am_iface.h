@@ -20,6 +20,8 @@
   _hdr = (_hdr << 8);                                                          \
   _hdr |= ((_am_id) & 0xff)
 
+#define UCT_PTL_IFACE_TM_IS_ENABLED(iface) (iface)->tm.enabled
+
 enum {
   UCT_PTL_AM_SHORT = 0,
   UCT_PTL_AM_BCOPY,
@@ -38,6 +40,10 @@ typedef struct uct_ptl_am_ep_addr {
 typedef struct uct_ptl_am_iface_config {
   uct_ptl_iface_config_t super;
   int id;
+  struct {
+    int enable;
+    unsigned int list_size;
+  } tm;
 } uct_ptl_am_iface_config_t;
 
 typedef struct uct_ptl_am_iface {
@@ -45,6 +51,10 @@ typedef struct uct_ptl_am_iface {
   struct {
     int id;
   } config;
+  struct {
+    int enabled;
+    unsigned int num_tags;
+  } tm;
   uct_ptl_mmd_t am_mmd;
   uct_ptl_mmd_t *rma_mmd;
   ucs_mpool_t short_mp;

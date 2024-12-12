@@ -9,6 +9,18 @@ ucs_config_field_t uct_ptl_am_iface_config_table[] = {
     {"", "", NULL, ucs_offsetof(uct_ptl_am_iface_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_ptl_iface_config_table)},
 
+    {"TM_ENABLE", "n", "Enable HW tag matching",
+     ucs_offsetof(uct_ptl_am_iface_config_t, tm.enable), UCS_CONFIG_TYPE_BOOL},
+
+    {"TM_LIST_SIZE", "1024",
+     "Limits the number of tags posted to the HW for matching. The actual "
+     "limit \n"
+     "is a minimum between this value and the maximum value supported by the "
+     "HW. \n"
+     "-1 means no limit.",
+     ucs_offsetof(uct_ptl_am_iface_config_t, tm.list_size),
+     UCS_CONFIG_TYPE_UINT},
+
     {NULL}};
 
 static inline void uct_ptl_am_copy_short(const void *src, size_t length,
@@ -185,6 +197,41 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
   return;
 }
 
+static ucs_status_t uct_ptl_am_iface_query(uct_iface_h tl_iface,
+                                           uct_iface_attr_t *attr) {
+  ucs_status_t rc;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+
+  rc = uct_ptl_iface_query(tl_iface, attr);
+  if (rc != UCS_OK) {
+    goto err;
+  }
+
+  if (!UCT_PTL_IFACE_TM_IS_ENABLED(iface)) {
+    return rc;
+  }
+
+  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
+                     UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
+                     UCT_IFACE_FLAG_TAG_RNDV_ZCOPY;
+
+  attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
+
+  /* TMH can carry 2 additional bytes of private data */
+  attr->cap.tag.rndv.max_hdr = sizeof(ptl_hdr_data_t);
+  attr->cap.tag.rndv.max_iov = 1;
+  attr->cap.tag.recv.max_zcopy = iface->super.config.max_msg_size;
+  attr->cap.tag.recv.max_iov = 1;
+  attr->cap.tag.recv.min_recv = 0;
+  attr->cap.tag.recv.max_outstanding = iface->tm.num_tags;
+  attr->cap.tag.eager.max_iov = max_tag_eager_iov;
+  attr->cap.tag.eager.max_bcopy = iface->tm.max_bcopy - eager_hdr_size;
+  attr->cap.tag.eager.max_zcopy = iface->tm.max_zcopy - eager_hdr_size;
+
+err:
+  return rc;
+}
+
 static ucs_status_t uct_ptl_am_iface_get_addr(uct_iface_h tl_iface,
                                               uct_iface_addr_t *tl_addr) {
   uct_ptl_am_iface_addr_t *addr = (void *)tl_addr;
@@ -231,6 +278,8 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->super.config.device_addr_size = sizeof(uct_ptl_device_addr_t);
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
   self->super.config.ep_addr_size = sizeof(uct_ptl_am_ep_addr_t);
+
+  self->tm.num_tags = ptl_config->tm.list_size;
 
   /* Set internal ptl operations */
   self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
