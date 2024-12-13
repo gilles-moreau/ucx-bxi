@@ -8,6 +8,7 @@ ptl_op_t uct_ptl_atomic_op_table[] = {
 
 ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
                                    uct_completion_t *comp,
+                                   uct_tag_context_t *ctx,
                                    uct_ptl_iface_t *iface, uct_ptl_ep_t *ep,
                                    uct_ptl_mmd_t *mmd, uct_ptl_op_t **op_p) {
   ucs_status_t rc = UCS_OK;
@@ -22,6 +23,7 @@ ucs_status_t uct_ptl_ep_prepare_op(uct_ptl_op_type_t type, int get_buf,
   op->ep = ep;
   op->mmd = mmd;
   op->type = type;
+  op->tag.ctx = ctx;
   op->buffer = NULL;
   if (get_buf) {
     op->buffer = ucs_mpool_get(&iface->copyin_mp);

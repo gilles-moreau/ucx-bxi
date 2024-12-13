@@ -37,6 +37,7 @@ typedef enum {
   UCT_PTL_OP_BLOCK,
   /* Tag Matching operations. */
   UCT_PTL_OP_RECV,
+  UCT_PTL_OP_TAG_BCOPY,
   UCT_PTL_OP_TAG_ZCOPY,
   UCT_PTL_OP_TAG_SEARCH,
   /* RMA operations. */

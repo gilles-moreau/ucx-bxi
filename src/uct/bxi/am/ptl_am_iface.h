@@ -25,11 +25,13 @@
 enum {
   UCT_PTL_AM_SHORT = 0,
   UCT_PTL_AM_BCOPY,
+  UCT_PTL_TAG_RNDV,
 };
 
 typedef struct uct_ptl_am_iface_addr {
   ptl_pt_index_t am_pti;
   ptl_pt_index_t rma_pti;
+  ptl_pt_index_t tag_pti;
 } uct_ptl_am_iface_addr_t;
 
 typedef struct uct_ptl_am_ep_addr {
@@ -53,12 +55,22 @@ typedef struct uct_ptl_am_iface {
   } config;
   struct {
     int enabled;
+    unsigned int num_outstanding;
+    unsigned int unexpected_cnt;
     unsigned int num_tags;
+    struct {
+      void *arg;                   /* User defined arg */
+      uct_tag_unexp_eager_cb_t cb; /* Callback for unexpected eager messages */
+    } eager_unexp;
+    struct {
+      void *arg;                  /* User defined arg */
+      uct_tag_unexp_rndv_cb_t cb; /* Callback for unexpected rndv messages */
+    } rndv_unexp;
   } tm;
   uct_ptl_mmd_t am_mmd;
   uct_ptl_mmd_t *rma_mmd;
-  ucs_mpool_t short_mp;
-  uct_ptl_rq_t rq;
+  uct_ptl_rq_t am_rq;
+  uct_ptl_rq_t tag_rq;
 } uct_ptl_am_iface_t;
 
 static inline int

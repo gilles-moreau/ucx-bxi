@@ -54,21 +54,62 @@ static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
   ucs_assert(status == UCS_OK);
 }
 
+static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
+                                                   ptl_event_t *ev) {
+  ucs_status_t rc = UCS_OK;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(super, uct_ptl_am_iface_t);
+  uct_ptl_op_t *op = (uct_ptl_op_t *)ev->user_ptr;
+  uct_ptl_recv_block_t *block;
+  uct_tag_context_t *tag_ctx;
+
+  assert(op);
+
+  switch (ev->type) {
+  case PTL_EVENT_ACK:
+    if (ev->ni_fail_type != PTL_NI_OK) {
+      ucs_debug("PTL: handle failure. op=%p, seqn=%lu", op, op->seqn);
+      uct_ptl_am_handle_failure(&iface->super, op, ev->ni_fail_type);
+    }
+    break;
+  case PTL_EVENT_PUT_OVERFLOW:
+    iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start, ev->mlength,
+                             0, ev->match_bits, ev->hdr_data, NULL);
+    break;
+  case PTL_EVENT_PUT:
+    tag_ctx = op->tag.ctx;
+    break;
+  case PTL_EVENT_AUTO_UNLINK:
+    block = ucs_container_of(op, uct_ptl_recv_block_t, op);
+    uct_ptl_recv_block_activate(block);
+    break;
+  case PTL_EVENT_REPLY:
+  case PTL_EVENT_GET_OVERFLOW:
+  case PTL_EVENT_AUTO_FREE:
+  case PTL_EVENT_ATOMIC:
+  case PTL_EVENT_FETCH_ATOMIC:
+  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+  case PTL_EVENT_ATOMIC_OVERFLOW:
+  case PTL_EVENT_PT_DISABLED:
+  case PTL_EVENT_LINK:
+  case PTL_EVENT_SEARCH:
+  case PTL_EVENT_SEND:
+    ucs_error("PTL: event %s should not have been triggered",
+              uct_ptl_event_str[ev->type]);
+    rc = UCS_ERR_IO_ERROR;
+    break;
+  default:
+    break;
+  }
+
+  return rc;
+}
+
 static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
                                                ptl_event_t *ev) {
   ucs_status_t rc = UCS_OK;
-  void *recv_buf;
-  size_t size;
   uint8_t am_id = UCT_PTL_HDR_GET_AM_ID(ev->match_bits);
-  uint8_t prot_id = UCT_PTL_HDR_GET_PROT_ID(ev->match_bits);
   uct_ptl_op_t *op = (uct_ptl_op_t *)ev->user_ptr;
   uct_ptl_recv_block_t *block;
-
-  // ucs_debug("PORTALS: EQS EVENT '%s' idx=%d, "
-  //           "sz=%lu, user=%p, start=%p, "
-  //           "remote_offset=%lu",
-  //           uct_ptl_event_str[ev->type], ev->pt_index, ev->mlength,
-  //           ev->user_ptr, ev->start, ev->remote_offset);
 
   switch (ev->type) {
   case PTL_EVENT_ACK:
@@ -79,23 +120,11 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
     break;
   case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_PUT:
-    if (prot_id == UCT_PTL_AM_SHORT) {
-      recv_buf = ucs_alloca(iface->config.max_short);
-      if (recv_buf == NULL) {
-        ucs_error("PTL: could not alloca short buffer.");
-        rc = UCS_ERR_NO_MEMORY;
-      }
-      uct_ptl_am_copy_short(ev->start, ev->mlength, ev->hdr_data, recv_buf);
-      size = ev->mlength + sizeof(ev->hdr_data);
-    } else {
-      recv_buf = ev->start;
-      size = ev->mlength;
-    }
-
-    rc = uct_iface_invoke_am(&iface->super, am_id, recv_buf, size, 0);
+    rc = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
 
     uct_ptl_iface_trace_am(ucs_derived_of(iface, uct_ptl_am_iface_t),
-                           UCT_AM_TRACE_TYPE_RECV, am_id, recv_buf, size);
+                           UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
+                           ev->mlength);
     break;
   case PTL_EVENT_AUTO_UNLINK:
     block = ucs_container_of(op, uct_ptl_recv_block_t, op);
@@ -191,8 +220,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
   uct_base_iface_progress_disable(&self->super.super.super,
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
 
-  ucs_mpool_cleanup(&self->short_mp, 0);
-  uct_ptl_rq_fini(&self->rq);
+  uct_ptl_rq_fini(&self->am_rq);
 
   return;
 }
@@ -224,9 +252,10 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h tl_iface,
   attr->cap.tag.recv.max_iov = 1;
   attr->cap.tag.recv.min_recv = 0;
   attr->cap.tag.recv.max_outstanding = iface->tm.num_tags;
-  attr->cap.tag.eager.max_iov = max_tag_eager_iov;
-  attr->cap.tag.eager.max_bcopy = iface->tm.max_bcopy - eager_hdr_size;
-  attr->cap.tag.eager.max_zcopy = iface->tm.max_zcopy - eager_hdr_size;
+  attr->cap.tag.eager.max_iov = 1;
+  attr->cap.tag.eager.max_bcopy =
+      iface->super.config.eager_block_size - sizeof(uint64_t);
+  attr->cap.tag.eager.max_zcopy = iface->super.config.max_msg_size;
 
 err:
   return rc;
@@ -239,7 +268,7 @@ static ucs_status_t uct_ptl_am_iface_get_addr(uct_iface_h tl_iface,
   uct_ptl_am_md_t *md = ucs_derived_of(iface->super.super.md, uct_ptl_am_md_t);
 
   addr->rma_pti = md->super.pti;
-  addr->am_pti = iface->rq.pti;
+  addr->am_pti = iface->am_rq.pti;
 
   return UCS_OK;
 }
@@ -251,6 +280,23 @@ static ucs_mpool_ops_t uct_ptl_am_mpool_ops = {
     .obj_cleanup = NULL,
     .obj_str = NULL,
 };
+
+static ucs_status_t
+uct_ptl_am_iface_tag_init(uct_ptl_am_iface_t *iface,
+                          const uct_iface_params_t *params,
+                          const uct_ptl_am_iface_config_t *tl_config) {
+  iface->tm.eager_unexp.cb = params->eager_cb;
+  iface->tm.rndv_unexp.cb = params->rndv_cb;
+  iface->tm.eager_unexp.arg =
+      UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
+  iface->tm.rndv_unexp.arg =
+      UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_RNDV_ARG, NULL);
+  iface->tm.unexpected_cnt = 0;
+  iface->tm.num_outstanding = 0;
+  iface->tm.num_tags = tl_config->tm.list_size;
+
+  return UCS_OK;
+}
 
 static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
                            uct_worker_h worker,
@@ -278,31 +324,18 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->super.config.device_addr_size = sizeof(uct_ptl_device_addr_t);
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
   self->super.config.ep_addr_size = sizeof(uct_ptl_am_ep_addr_t);
-
   self->tm.num_tags = ptl_config->tm.list_size;
 
+  uct_ptl_am_iface_tag_init(self, params, ptl_config);
+
   /* Set internal ptl operations */
-  self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
+  if (UCT_PTL_IFACE_TM_IS_ENABLED(self)) {
+    self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
+  } else {
+  }
 
   /* Get MS MD for convenience. */
   self->rma_mmd = &ptl_ms->mmd;
-
-  /* Pool of short message buffer. */
-  mp_param = (ucs_mpool_params_t){
-      .max_chunk_size = self->super.config.copyin_buf_per_block *
-                        self->super.config.max_short,
-      .elems_per_chunk = self->super.config.copyin_buf_per_block,
-      .max_elems = self->super.config.max_copyin_buf,
-      .elem_size = self->super.config.max_short,
-      .alignment = 64,
-      .align_offset = 0,
-      .ops = &uct_ptl_am_mpool_ops,
-      .name = "short-am-ops",
-      .grow_factor = 1,
-  };
-  rc = ucs_mpool_init(&mp_param, &self->short_mp);
-  if (rc != UCS_OK)
-    goto err;
 
   /* Enable progression of RMA operation. */
   uct_ptl_iface_enable_progression(&self->super, &ptl_ms->mmd);
@@ -346,13 +379,13 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
       .min_free = self->super.config.eager_block_size,
   };
 
-  rc = uct_ptl_rq_init(&self->super, &rq_param, &self->rq);
+  rc = uct_ptl_rq_init(&self->super, &rq_param, &self->am_rq);
   if (rc != UCS_OK)
     goto err;
 
   ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d",
             self, ptl_ms->super.pid.phys.nid, ptl_ms->super.pid.phys.pid,
-            self->rq.pti, ptl_ms->super.pti);
+            self->am_rq.pti, ptl_ms->super.pti);
 err:
   return rc;
 }
