@@ -394,6 +394,9 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
     goto err;
   }
 
+  ucs_debug(
+      "PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
+      iface->tag_rq.pti, tag, imm, op);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, imm));
@@ -419,6 +422,23 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h ep, uct_tag_t tag,
   return UCS_ERR_NOT_IMPLEMENTED;
 }
 
+static inline size_t uct_ptl_am_pack_rndv(void *src, uint64_t remote_addr,
+                                          size_t length, const void *header,
+                                          unsigned header_length) {
+  size_t len = 0;
+  uct_ptl_am_hdr_rndv_t *hdr = src;
+
+  hdr->remote_addr = remote_addr;
+  len += sizeof(uint64_t);
+  hdr->length = length;
+  len += sizeof(size_t);
+
+  memcpy(hdr + 1, header, header_length);
+  len += header_length;
+
+  return len;
+}
+
 ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                               const void *header,
                                               unsigned header_length,
@@ -430,7 +450,8 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   ptl_hdr_data_t hdr = 0;
   uct_ptl_op_t *op = NULL;
-  ssize_t size = 0;
+
+  assert(iovcnt <= 1);
 
   if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
     rc = UCS_ERR_TIMED_OUT;
@@ -440,30 +461,30 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_BCOPY, 1, comp, NULL, &iface->super,
                              &ep->super, ep->am_mmd, &op);
   if (rc != UCS_OK) {
-    size = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
-  memcpy(op->buffer, header, header_length);
+  op->size = uct_ptl_am_pack_rndv(op->buffer, (uint64_t)iov[0].buffer,
+                                  iov[0].length, header, header_length);
 
   UCT_PTL_HDR_SET(hdr, UCT_PTL_OP_TAG_BCOPY, UCT_PTL_RNDV_MAGIC);
-  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
-                           PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
-                           ep->iface_addr.tag_pti, tag, 0, op, hdr));
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer,
+                           header_length + sizeof(uint64_t), PTL_CT_ACK_REQ,
+                           ep->super.dev_addr.pid, ep->iface_addr.tag_pti, tag,
+                           0, op, hdr));
 
   if (rc != UCS_OK) {
     ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
     ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
-    size = UCS_ERR_IO_ERROR;
-    goto err;
+    return (ucs_status_ptr_t)UCS_ERR_IO_ERROR;
   }
 
   ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
 err:
-  return UCS_STATUS_PTR(op);
+  return (ucs_status_ptr_t)op;
 }
 
 ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op) {
@@ -504,7 +525,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
       .length = iov[0].length,
       .start = iov[0].buffer,
       .uid = PTL_UID_ANY,
-      .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE,
+      .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
+                 PTL_ME_EVENT_UNLINK_DISABLE,
   };
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 1, NULL, ctx, &iface->super, NULL,
@@ -513,7 +535,9 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
     goto err;
   }
 
-  // FIXME: move to _lcr_ptl_do_op
+  ucs_debug(
+      "PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%08lx, op=%p",
+      iface->tag_rq.pti, tag, tag_mask, op);
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));

@@ -11,6 +11,8 @@ enum {
                       PTL_ME_MAY_ALIGN | PTL_ME_IS_ACCESSIBLE,
 };
 
+#define UCT_PTL_RQ_NAME_LENGTH_MAX 24
+
 typedef struct uct_ptl_recv_block {
   void *start;
   size_t size;
@@ -27,6 +29,7 @@ typedef struct uct_ptl_rq_param {
   ptl_size_t min_free;
   int items_per_chunk;
   unsigned int options;
+  char name[UCT_PTL_RQ_NAME_LENGTH_MAX];
 } uct_ptl_rq_param_t;
 
 typedef struct uct_ptl_rq {

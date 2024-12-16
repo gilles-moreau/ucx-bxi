@@ -57,9 +57,13 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       UCT_PTL_HDR_GET_PROT_ID(ev->hdr_data) == UCT_PTL_RNDV_MAGIC ? 1 : 0;
   uct_ptl_recv_block_t *block;
   uct_tag_context_t *tag_ctx;
+  uct_ptl_am_hdr_rndv_t *hdr;
 
   assert(op);
 
+  ucs_debug("PTL: event. type=%s", uct_ptl_event_str[ev->type]);
+
+  // TODO: check for truncated messages
   switch (ev->type) {
   case PTL_EVENT_ACK:
     if (ev->ni_fail_type != PTL_NI_OK) {
@@ -69,8 +73,11 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     break;
   case PTL_EVENT_PUT_OVERFLOW:
     if (is_rndv) {
+      hdr = ev->start;
       rc = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
-                                   ev->start, ev->mlength, 0, 0, NULL);
+                                   (const void *)(hdr + 1),
+                                   ev->mlength - sizeof(uct_ptl_am_hdr_rndv_t),
+                                   hdr->remote_addr, hdr->length, NULL);
     } else {
       rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                     ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
@@ -80,10 +87,14 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   case PTL_EVENT_PUT:
     tag_ctx = op->tag.ctx;
     if (is_rndv) {
-      tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength, UCS_OK,
+      hdr = ev->start;
+      tag_ctx->tag_consumed_cb(tag_ctx);
+      tag_ctx->rndv_cb(tag_ctx, ev->match_bits, hdr + 1, hdr->length, UCS_OK,
                        0);
     } else {
       tag_ctx->tag_consumed_cb(tag_ctx);
+      tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data, ev->mlength,
+                            NULL, UCS_OK);
     }
     break;
   case PTL_EVENT_AUTO_UNLINK:
@@ -247,9 +258,8 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h tl_iface,
     return rc;
   }
 
-  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
-                     UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-                     UCT_IFACE_FLAG_TAG_RNDV_ZCOPY;
+  attr->cap.flags |=
+      UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY;
 
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
@@ -277,6 +287,7 @@ static ucs_status_t uct_ptl_am_iface_get_addr(uct_iface_h tl_iface,
 
   addr->rma_pti = md->super.pti;
   addr->am_pti = iface->am_rq.pti;
+  addr->tag_pti = iface->tag_rq.pti;
 
   return UCS_OK;
 }
@@ -338,7 +349,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   uct_ptl_am_iface_tag_init(self, params, ptl_config);
 
   /* Set internal ptl operations */
-  if (UCT_PTL_IFACE_TM_IS_ENABLED(self)) {
+  if (!UCT_PTL_IFACE_TM_IS_ENABLED(self)) {
     self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
   } else {
     self->super.ops.handle_ev = uct_ptl_am_iface_handle_tag_ev;
@@ -387,15 +398,32 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
                    self->super.config.num_eager_blocks,
       .options = ECR_PTL_BLOCK_AM,
       .min_free = self->super.config.eager_block_size,
+      .name = "am-rq-blocks",
   };
 
   rc = uct_ptl_rq_init(&self->super, &rq_param, &self->am_rq);
   if (rc != UCS_OK)
     goto err;
 
-  ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d",
+  rq_param = (uct_ptl_rq_param_t){
+      .items_per_chunk = self->super.config.copyout_buf_per_block,
+      .min_items = 2,
+      .max_items = self->super.config.max_copyout_buf,
+      .item_size = self->super.config.eager_block_size *
+                   self->super.config.num_eager_blocks,
+      .options = ECR_PTL_BLOCK_TAG,
+      .min_free = self->super.config.eager_block_size,
+      .name = "tag-rq-blocks",
+  };
+
+  rc = uct_ptl_rq_init(&self->super, &rq_param, &self->tag_rq);
+  if (rc != UCS_OK)
+    goto err;
+
+  ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d, "
+            "tag pti=%d",
             self, ptl_ms->super.pid.phys.nid, ptl_ms->super.pid.phys.pid,
-            self->am_rq.pti, ptl_ms->super.pti);
+            self->am_rq.pti, ptl_ms->super.pti, self->tag_rq.pti);
 err:
   return rc;
 }
