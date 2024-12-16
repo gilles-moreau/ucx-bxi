@@ -8,24 +8,25 @@
 #include <uct/bxi/base/ptl_iface.h>
 #include <uct/bxi/base/ptl_rq.h>
 
-#define UCT_PTL_HDR_AM_ID_MASK 0x00000000000000ffULL
-#define UCT_PTL_HDR_PROT_ID_MASK 0x000000000000ff00ULL
+#define UCT_PTL_RNDV_MAGIC 0xDEADBEAFUL
 
-#define UCT_PTL_HDR_GET_AM_ID(_hdr) ((uint8_t)(_hdr & UCT_PTL_HDR_AM_ID_MASK))
+#define UCT_PTL_HDR_AM_ID_MASK 0x00000000ffffffffULL
+#define UCT_PTL_HDR_PROT_ID_MASK 0xffffffff00000000ULL
+
+#define UCT_PTL_HDR_GET_AM_ID(_hdr) ((uint32_t)(_hdr & UCT_PTL_HDR_AM_ID_MASK))
 #define UCT_PTL_HDR_GET_PROT_ID(_hdr)                                          \
-  ((uint8_t)((_hdr & UCT_PTL_HDR_PROT_ID_MASK) >> 8))
+  ((uint32_t)((_hdr & UCT_PTL_HDR_PROT_ID_MASK) >> 32))
 
 #define UCT_PTL_HDR_SET(_hdr, _am_id, _prot_id)                                \
-  _hdr = ((_prot_id) & 0xff);                                                  \
-  _hdr = (_hdr << 8);                                                          \
-  _hdr |= ((_am_id) & 0xff)
+  _hdr = ((_prot_id) & 0xffffffff);                                            \
+  _hdr = (_hdr << 32);                                                         \
+  _hdr |= ((_am_id) & 0xffffffff)
 
 #define UCT_PTL_IFACE_TM_IS_ENABLED(iface) (iface)->tm.enabled
 
 enum {
   UCT_PTL_AM_SHORT = 0,
   UCT_PTL_AM_BCOPY,
-  UCT_PTL_TAG_RNDV,
 };
 
 typedef struct uct_ptl_am_iface_addr {

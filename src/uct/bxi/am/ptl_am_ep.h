@@ -55,6 +55,42 @@ ucs_status_t uct_ptl_am_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id,
                                     const uct_iov_t *iov, size_t iovcnt,
                                     unsigned flags, uct_completion_t *comp);
 
+ucs_status_t uct_ptl_am_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
+                                           const void *data, size_t length);
+
+ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
+                                      uint64_t imm, uct_pack_callback_t pack_cb,
+                                      void *arg, unsigned flags);
+
+ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h ep, uct_tag_t tag,
+                                           uint64_t imm, const uct_iov_t *iov,
+                                           size_t iovcnt, unsigned flags,
+                                           uct_completion_t *comp);
+
+ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
+                                              const void *header,
+                                              unsigned header_length,
+                                              const uct_iov_t *iov,
+                                              size_t iovcnt, unsigned flags,
+                                              uct_completion_t *comp);
+
+ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
+
+ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
+                                            const void *header,
+                                            unsigned header_length,
+                                            unsigned flags);
+
+ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
+                                             uct_tag_t tag, uct_tag_t tag_mask,
+                                             const uct_iov_t *iov,
+                                             size_t iovcnt,
+                                             uct_tag_context_t *ctx);
+
+ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h iface,
+                                              uct_tag_context_t *ctx,
+                                              int force);
+
 ucs_status_t uct_ptl_am_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                           uint32_t swap, uint64_t remote_addr,
                                           uct_rkey_t rkey, uint32_t *result,

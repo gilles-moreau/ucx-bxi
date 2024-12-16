@@ -23,12 +23,6 @@ ucs_config_field_t uct_ptl_am_iface_config_table[] = {
 
     {NULL}};
 
-static inline void uct_ptl_am_copy_short(const void *src, size_t length,
-                                         uint64_t hdr, void *dest) {
-  *(uint64_t *)dest = hdr;
-  memcpy(UCS_PTR_BYTE_OFFSET(dest, sizeof(uint64_t)), src, length);
-}
-
 static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
                                       uct_ptl_op_t *op, ptl_ni_fail_t fail) {
   ucs_status_t status;
@@ -59,6 +53,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   ucs_status_t rc = UCS_OK;
   uct_ptl_am_iface_t *iface = ucs_derived_of(super, uct_ptl_am_iface_t);
   uct_ptl_op_t *op = (uct_ptl_op_t *)ev->user_ptr;
+  int is_rndv =
+      UCT_PTL_HDR_GET_PROT_ID(ev->hdr_data) == UCT_PTL_RNDV_MAGIC ? 1 : 0;
   uct_ptl_recv_block_t *block;
   uct_tag_context_t *tag_ctx;
 
@@ -72,11 +68,23 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     }
     break;
   case PTL_EVENT_PUT_OVERFLOW:
-    iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start, ev->mlength,
-                             0, ev->match_bits, ev->hdr_data, NULL);
+    if (is_rndv) {
+      rc = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
+                                   ev->start, ev->mlength, 0, 0, NULL);
+    } else {
+      rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
+                                    ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
+                                    ev->match_bits, ev->hdr_data, NULL);
+    }
     break;
   case PTL_EVENT_PUT:
     tag_ctx = op->tag.ctx;
+    if (is_rndv) {
+      tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength, UCS_OK,
+                       0);
+    } else {
+      tag_ctx->tag_consumed_cb(tag_ctx);
+    }
     break;
   case PTL_EVENT_AUTO_UNLINK:
     block = ucs_container_of(op, uct_ptl_recv_block_t, op);
@@ -325,6 +333,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->super.config.iface_addr_size = sizeof(uct_ptl_am_iface_addr_t);
   self->super.config.ep_addr_size = sizeof(uct_ptl_am_ep_addr_t);
   self->tm.num_tags = ptl_config->tm.list_size;
+  self->tm.enabled = ptl_config->tm.enable;
 
   uct_ptl_am_iface_tag_init(self, params, ptl_config);
 
@@ -332,6 +341,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   if (UCT_PTL_IFACE_TM_IS_ENABLED(self)) {
     self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
   } else {
+    self->super.ops.handle_ev = uct_ptl_am_iface_handle_tag_ev;
   }
 
   /* Get MS MD for convenience. */
@@ -402,6 +412,12 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .ep_put_zcopy = uct_ptl_am_ep_put_zcopy,
     .ep_get_bcopy = uct_ptl_am_ep_get_bcopy,
     .ep_get_zcopy = uct_ptl_am_ep_get_zcopy,
+    .ep_tag_rndv_zcopy = uct_ptl_am_ep_tag_rndv_zcopy,
+    .ep_tag_eager_zcopy = uct_ptl_am_ep_tag_eager_zcopy,
+    .ep_tag_eager_bcopy = uct_ptl_am_ep_tag_eager_bcopy,
+    .ep_tag_eager_short = ucs_empty_function_return_unsupported,
+    .ep_tag_rndv_cancel = uct_ptl_am_ep_tag_rndv_cancel,
+    .ep_tag_rndv_request = uct_ptl_am_ep_tag_rndv_request,
     .ep_atomic_cswap64 = uct_ptl_am_ep_atomic_cswap64,
     .ep_atomic64_post = uct_ptl_am_ep_atomic64_post,
     .ep_atomic64_fetch = uct_ptl_am_ep_atomic64_fetch,
@@ -425,10 +441,12 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .iface_event_fd_get = ucs_empty_function_return_unsupported,
     .iface_event_arm = ucs_empty_function_return_success,
     .iface_close = UCS_CLASS_DELETE_FUNC_NAME(uct_ptl_am_iface_t),
-    .iface_query = uct_ptl_iface_query,
+    .iface_query = uct_ptl_am_iface_query,
     .iface_get_address = uct_ptl_am_iface_get_addr,
     .iface_get_device_address = uct_ptl_iface_get_device_address,
     .iface_is_reachable = uct_base_iface_is_reachable,
+    .iface_tag_recv_zcopy = uct_ptl_am_iface_tag_recv_zcopy,
+    .iface_tag_recv_cancel = uct_ptl_am_iface_tag_recv_cancel,
 };
 
 static uct_ptl_iface_ops_t uct_ptl_am_iface_ops = {
