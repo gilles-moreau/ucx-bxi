@@ -138,7 +138,7 @@ ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,
       .alignment = 64,
       .align_offset = 0,
       .ops = &uct_ptl_rq_mpool_ops,
-      .name = "rq-blocks",
+      .name = params->name,
       .grow_factor = 1,
   };
 

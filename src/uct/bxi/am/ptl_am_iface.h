@@ -29,6 +29,11 @@ enum {
   UCT_PTL_AM_BCOPY,
 };
 
+typedef struct uct_ptl_am_hdr_rndv {
+  uint64_t remote_addr;
+  size_t length;
+} uct_ptl_am_hdr_rndv_t;
+
 typedef struct uct_ptl_am_iface_addr {
   ptl_pt_index_t am_pti;
   ptl_pt_index_t rma_pti;
