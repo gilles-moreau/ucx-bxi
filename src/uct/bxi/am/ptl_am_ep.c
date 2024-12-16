@@ -447,7 +447,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   memcpy(op->buffer, header, header_length);
 
-  UCT_PTL_HDR_SET(hdr, UCT_PTL_OP_TAG_BCOPY, UCT_PTL_TAG_RNDV);
+  UCT_PTL_HDR_SET(hdr, UCT_PTL_OP_TAG_BCOPY, UCT_PTL_RNDV_MAGIC);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, hdr));
@@ -478,7 +478,9 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op) {
 ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                             const void *header,
                                             unsigned header_length,
-                                            unsigned flags);
+                                            unsigned flags) {
+  return UCS_ERR_NOT_IMPLEMENTED;
+}
 
 ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                                              uct_tag_t tag, uct_tag_t tag_mask,
