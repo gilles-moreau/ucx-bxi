@@ -12,7 +12,7 @@ ucs_config_field_t uct_ptl_am_iface_config_table[] = {
     {"TM_ENABLE", "n", "Enable HW tag matching",
      ucs_offsetof(uct_ptl_am_iface_config_t, tm.enable), UCS_CONFIG_TYPE_BOOL},
 
-    {"TM_LIST_SIZE", "1024",
+    {"TM_LIST_SIZE", "32",
      "Limits the number of tags posted to the HW for matching. The actual "
      "limit \n"
      "is a minimum between this value and the maximum value supported by the "
@@ -48,6 +48,23 @@ static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
   ucs_assert(status == UCS_OK);
 }
 
+static ucs_status_t uct_ptl_am_iface_cancel_ops(uct_ptl_iface_t *tl_iface) {
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+  uct_ptl_op_t *op;
+  ucs_queue_iter_t iter;
+
+  ucs_queue_for_each_safe(op, iter, &iface->tm.canceled_ops, elem) {
+    if (op->tag.cancel) {
+      op->tag.ctx->completed_cb(op->tag.ctx, op->tag.tag, 0, op->size, NULL,
+                                UCS_ERR_CANCELED);
+    }
+    uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
+    ucs_queue_del_iter(&iface->tm.canceled_ops, iter);
+  }
+
+  return UCS_OK;
+}
+
 static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
                                                    ptl_event_t *ev) {
   ucs_status_t rc = UCS_OK;
@@ -70,6 +87,11 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       ucs_debug("PTL: handle failure. op=%p, seqn=%lu", op, op->seqn);
       uct_ptl_am_handle_failure(&iface->super, op, ev->ni_fail_type);
     }
+    break;
+  case PTL_EVENT_AUTO_UNLINK:
+  case PTL_EVENT_PUT_OVERFLOW:
+    op->tag.flags |= UCT_PTL_OP_FLAG_OVERFLOW;
+    iface->tm.num_tags++;
     break;
   case PTL_EVENT_PUT:
     if (op->type == UCT_PTL_OP_BLOCK) {
@@ -98,12 +120,12 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
                               ev->mlength, NULL, UCS_OK);
+        uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
       }
+      iface->tm.num_tags++;
     }
     break;
-  case PTL_EVENT_AUTO_UNLINK:
   case PTL_EVENT_REPLY:
-  case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_AUTO_FREE:
   case PTL_EVENT_ATOMIC:
@@ -252,11 +274,18 @@ err:
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t) {
-
+  void *recv_buffer;
   uct_base_iface_progress_disable(&self->super.super.super,
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
 
+  kh_foreach_key(&self->tm.tag_addrs, recv_buffer, {
+    ucs_debug("destroying iface %p, with recv buffer %p offloaded to the HW",
+              self, recv_buffer);
+  });
+  kh_destroy_inplace(uct_ptl_am_tag_addrs, &self->tm.tag_addrs);
+
   uct_ptl_rq_fini(&self->am_rq);
+  uct_ptl_rq_fini(&self->tag_rq);
 
   return;
 }
@@ -330,6 +359,9 @@ uct_ptl_am_iface_tag_init(uct_ptl_am_iface_t *iface,
   iface->tm.num_outstanding = 0;
   iface->tm.num_tags = tl_config->tm.list_size;
 
+  kh_init_inplace(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs);
+  ucs_queue_head_init(&iface->tm.canceled_ops);
+
   return UCS_OK;
 }
 
@@ -366,6 +398,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
 
   /* Set internal ptl operations */
   self->super.ops.handle_ev = uct_ptl_am_iface_handle_event;
+  self->super.ops.cancel_ops = uct_ptl_am_iface_cancel_ops;
 
   /* Get MS MD for convenience. */
   self->rma_mmd = &ptl_ms->mmd;
@@ -506,6 +539,7 @@ static uct_ptl_iface_ops_t uct_ptl_am_iface_ops = {
         },
     .handle_ev = uct_ptl_am_iface_handle_ev,
     .handle_failure = uct_ptl_am_handle_failure,
+    .cancel_ops = uct_ptl_am_iface_cancel_ops,
 };
 
 UCS_CLASS_DEFINE(uct_ptl_am_iface_t, uct_ptl_iface_t);
