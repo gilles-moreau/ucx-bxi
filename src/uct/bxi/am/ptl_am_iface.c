@@ -71,37 +71,39 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       uct_ptl_am_handle_failure(&iface->super, op, ev->ni_fail_type);
     }
     break;
-  case PTL_EVENT_PUT_OVERFLOW:
-    if (is_rndv) {
-      hdr = ev->start;
-      rc = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
-                                   (const void *)(hdr + 1),
-                                   ev->mlength - sizeof(uct_ptl_am_hdr_rndv_t),
-                                   hdr->remote_addr, hdr->length, NULL);
-    } else {
-      rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
-                                    ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
-                                    ev->match_bits, ev->hdr_data, NULL);
-    }
-    break;
   case PTL_EVENT_PUT:
-    tag_ctx = op->tag.ctx;
-    if (is_rndv) {
-      hdr = ev->start;
-      tag_ctx->tag_consumed_cb(tag_ctx);
-      tag_ctx->rndv_cb(tag_ctx, ev->match_bits, hdr + 1, hdr->length, UCS_OK,
-                       0);
+    if (op->type == UCT_PTL_OP_BLOCK) {
+      if (is_rndv) {
+        hdr = ev->start;
+        rc =
+            iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
+                                    (const void *)(hdr + 1),
+                                    ev->mlength - sizeof(uct_ptl_am_hdr_rndv_t),
+                                    hdr->remote_addr, hdr->length, NULL);
+      } else {
+        rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
+                                      ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
+                                      ev->match_bits, ev->hdr_data, NULL);
+      }
+      block = ucs_container_of(op, uct_ptl_recv_block_t, op);
+      uct_ptl_recv_block_activate(block);
     } else {
-      tag_ctx->tag_consumed_cb(tag_ctx);
-      tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data, ev->mlength,
-                            NULL, UCS_OK);
+      tag_ctx = op->tag.ctx;
+      if (is_rndv) {
+        hdr = ev->start;
+        tag_ctx->tag_consumed_cb(tag_ctx);
+        tag_ctx->rndv_cb(tag_ctx, ev->match_bits, hdr + 1, hdr->length, UCS_OK,
+                         0);
+      } else {
+        tag_ctx->tag_consumed_cb(tag_ctx);
+        tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
+                              ev->mlength, NULL, UCS_OK);
+      }
     }
     break;
   case PTL_EVENT_AUTO_UNLINK:
-    block = ucs_container_of(op, uct_ptl_recv_block_t, op);
-    uct_ptl_recv_block_activate(block);
-    break;
   case PTL_EVENT_REPLY:
+  case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_AUTO_FREE:
   case PTL_EVENT_ATOMIC:
@@ -173,6 +175,21 @@ static ucs_status_t uct_ptl_am_iface_handle_ev(uct_ptl_iface_t *iface,
     break;
   }
 
+  return rc;
+}
+
+static ucs_status_t uct_ptl_am_iface_handle_event(uct_ptl_iface_t *tl_iface,
+                                                  ptl_event_t *ev) {
+  ucs_status_t rc = UCS_OK;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+
+  if (ev->pt_index == iface->am_rq.pti) {
+    rc = uct_ptl_am_iface_handle_ev(tl_iface, ev);
+  } else if (ev->pt_index == iface->tag_rq.pti) {
+    rc = uct_ptl_am_iface_handle_tag_ev(tl_iface, ev);
+  } else {
+    rc = UCS_ERR_IO_ERROR;
+  }
   return rc;
 }
 
@@ -258,8 +275,7 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h tl_iface,
     return rc;
   }
 
-  attr->cap.flags |=
-      UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY;
+  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY;
 
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
@@ -349,11 +365,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   uct_ptl_am_iface_tag_init(self, params, ptl_config);
 
   /* Set internal ptl operations */
-  if (!UCT_PTL_IFACE_TM_IS_ENABLED(self)) {
-    self->super.ops.handle_ev = uct_ptl_am_iface_handle_ev;
-  } else {
-    self->super.ops.handle_ev = uct_ptl_am_iface_handle_tag_ev;
-  }
+  self->super.ops.handle_ev = uct_ptl_am_iface_handle_event;
 
   /* Get MS MD for convenience. */
   self->rma_mmd = &ptl_ms->mmd;

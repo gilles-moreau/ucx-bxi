@@ -20,6 +20,7 @@ static ucs_status_t uct_ptl_recv_block_init(uct_ptl_rq_t *rq,
   block->start = block + 1;
   block->meh = PTL_INVALID_HANDLE;
   block->rq = rq;
+  block->op.type = UCT_PTL_OP_BLOCK;
 
   *block_p = block;
 
