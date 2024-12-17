@@ -15,6 +15,8 @@ enum {
 typedef ucs_status_t (*handle_ev_func_t)(uct_ptl_iface_t *iface,
                                          ptl_event_t *ev);
 
+typedef ucs_status_t (*cancel_ops_func_t)(uct_ptl_iface_t *iface);
+
 typedef void (*handle_failure_func_t)(uct_ptl_iface_t *iface, uct_ptl_op_t *op,
                                       ptl_ni_fail_t fail);
 
@@ -29,6 +31,7 @@ typedef struct uct_ptl_ep_addr {
 typedef struct uct_ptl_iface_ops {
   uct_iface_internal_ops_t super;
   handle_ev_func_t handle_ev;
+  cancel_ops_func_t cancel_ops;
   handle_failure_func_t handle_failure;
 } uct_ptl_iface_ops_t;
 

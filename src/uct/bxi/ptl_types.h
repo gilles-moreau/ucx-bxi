@@ -4,6 +4,7 @@
 #include <uct/base/uct_md.h>
 
 #include <ucs/arch/atomic.h>
+#include <ucs/datastruct/khash.h>
 #include <ucs/datastruct/mpool.h>
 #include <ucs/datastruct/queue.h>
 #include <ucs/debug/log.h>
@@ -28,6 +29,10 @@ typedef struct uct_ptl_ep uct_ptl_ep_t;
 /********** PTL TYPES   **********/
 /*********************************/
 #define UCT_PTL_PT_NULL ((ptl_pt_index_t) - 1)
+
+enum {
+  UCT_PTL_OP_FLAG_OVERFLOW = UCS_BIT(0),
+};
 
 /* Operation types. */
 typedef enum {
@@ -71,6 +76,10 @@ typedef struct uct_ptl_op {
     struct {
       uct_tag_context_t *ctx;
       ptl_handle_me_t meh;
+      unsigned flags;
+      ptl_match_bits_t tag;
+      void *buffer;
+      unsigned cancel;
     } tag;
     struct {
       uct_unpack_callback_t unpack;
@@ -113,6 +122,11 @@ typedef struct uct_ptl_op {
     }                                                                          \
     loc_rc;                                                                    \
   })
+
+#define UCT_PTL_CHECK_TAG(_ptl_iface)                                          \
+  if (ucs_unlikely((_ptl_iface)->tm.num_tags == 0)) {                          \
+    return UCS_ERR_EXCEEDS_LIMIT;                                              \
+  }
 
 #define uct_ptl_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
   uct_iface_trace_am(&(_iface)->super.super, _type, _am_id, _data, _length,    \

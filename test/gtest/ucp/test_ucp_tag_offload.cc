@@ -17,7 +17,8 @@ extern "C" {
 
 #define UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(_test_case) \
     UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, dcx, "dc_x") \
-    UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, rcx, "rc_x")
+    UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, rcx, "rc_x") \
+    UCP_INSTANTIATE_TEST_CASE_TLS(_test_case, ptl_am, "ptl_am")
 
 class test_ucp_tag_offload : public test_ucp_tag {
 public:

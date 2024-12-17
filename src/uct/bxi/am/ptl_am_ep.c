@@ -464,6 +464,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     goto err;
   }
 
+  op->tag.flags = 0;
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   op->size = uct_ptl_am_pack_rndv(op->buffer, (uint64_t)iov[0].buffer,
                                   iov[0].length, header, header_length);
@@ -488,12 +489,7 @@ err:
 }
 
 ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op) {
-  ucs_status_t rc = UCS_OK;
-  uct_ptl_op_t *op = (uct_ptl_op_t *)tl_op;
-
-  ucs_mpool_put(op);
-
-  return rc;
+  return UCS_ERR_NOT_IMPLEMENTED;
 }
 
 ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
@@ -509,11 +505,21 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                                              size_t iovcnt,
                                              uct_tag_context_t *ctx) {
   ucs_status_t rc = UCS_OK;
+  int ret;
   ptl_me_t me;
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
   uct_ptl_op_t *op;
 
-  assert(iov && iovcnt == 1);
+  ucs_assert(iov && iovcnt == 1);
+  UCT_PTL_CHECK_TAG(iface);
+
+  kh_put(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, iov->buffer, &ret);
+  if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
+    /* Do not post the same buffer more than once (even with different tags)
+     * to avoid memory corruption. */
+    return UCS_ERR_ALREADY_EXISTS;
+  }
+  ucs_assert(ret != UCS_KH_PUT_FAILED);
 
   /* complete the ME data, this ME will be appended to the PRIORITY_LIST */
   me = (ptl_me_t){
@@ -526,18 +532,24 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
       .start = iov[0].buffer,
       .uid = PTL_UID_ANY,
       .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
-                 PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE,
+                 PTL_ME_EVENT_UNLINK_DISABLE,
   };
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 1, NULL, ctx, &iface->super, NULL,
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 0, NULL, ctx, &iface->super, NULL,
                              NULL, &op);
   if (rc != UCS_OK) {
     goto err;
   }
+  op->tag.flags = 0;
+  op->tag.tag = tag;
+  op->tag.buffer = iov[0].buffer;
+  op->size = iov[0].length;
 
-  ucs_debug(
-      "PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%08lx, op=%p",
-      iface->tag_rq.pti, tag, tag_mask, op);
+  iface->tm.num_tags--;
+
+  ucs_debug("PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%08lx, "
+            "num tags=%d, op=%p",
+            iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op);
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
@@ -548,14 +560,36 @@ err:
   return rc;
 }
 
-ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h iface,
+ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h tl_iface,
                                               uct_tag_context_t *ctx,
                                               int force) {
+  ucs_status_t rc = UCS_OK;
   uct_ptl_op_t *op = *(uct_ptl_op_t **)ctx->priv;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
 
   assert(op->type == UCT_PTL_OP_RECV);
-  ucs_mpool_put(op);
-  return UCS_OK;
+
+  if (!(op->tag.flags & UCT_PTL_OP_FLAG_OVERFLOW)) {
+    rc = uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
+    if (rc != UCS_OK) {
+      goto err;
+    }
+    iface->tm.num_tags++;
+    if (!force) {
+      op->tag.cancel = 1;
+    }
+  }
+
+  if (force) {
+    uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
+    ucs_mpool_put(op);
+  } else {
+    // Push it to cancel queue to make it complete if necessary during the
+    // progress phase. This is necessary to pass some UCT test...
+    ucs_queue_push(&iface->tm.canceled_ops, &op->elem);
+  }
+err:
+  return rc;
 }
 
 static ucs_status_t

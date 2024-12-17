@@ -30,7 +30,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
     {"", "ALLOC=heap", NULL, ucs_offsetof(uct_ptl_iface_config_t, super),
      UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
-    {"MAX_OUTSTANDING_OPS", "16",
+    {"MAX_OUTSTANDING_OPS", "2048",
      "Maximum number of outstanding operations (default: 2048).",
      ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
      UCS_CONFIG_TYPE_UINT},
@@ -276,6 +276,9 @@ out:
   }
 
   uct_pending_queue_dispatch(priv, &iface->pending_q, 1);
+
+  // TODO: rework.
+  iface->ops.cancel_ops(iface);
 
 err:
   return progressed;

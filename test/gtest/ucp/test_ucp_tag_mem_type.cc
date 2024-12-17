@@ -42,7 +42,7 @@ public:
         }
 
         if (variant_flags & VARIANT_TAG_OFFLOAD) {
-            if (!has_any_transport({"rc_x", "dc_x", "ib"})) {
+            if (!has_any_transport({"rc_x", "dc_x", "ib", "ptl_am"})) {
                 UCS_TEST_SKIP_R("No tag offload");
             }
 
