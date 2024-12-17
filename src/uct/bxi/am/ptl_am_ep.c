@@ -518,7 +518,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   /* complete the ME data, this ME will be appended to the PRIORITY_LIST */
   me = (ptl_me_t){
       .ct_handle = PTL_CT_NONE,
-      .ignore_bits = tag_mask,
+      .ignore_bits = ~tag_mask,
       .match_bits = tag,
       .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
       .min_free = 0,
@@ -526,7 +526,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
       .start = iov[0].buffer,
       .uid = PTL_UID_ANY,
       .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
-                 PTL_ME_EVENT_UNLINK_DISABLE,
+                 PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE,
   };
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 1, NULL, ctx, &iface->super, NULL,
@@ -542,6 +542,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
 
+  *(uct_ptl_op_t **)ctx->priv = op;
+
 err:
   return rc;
 }
@@ -549,7 +551,11 @@ err:
 ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h iface,
                                               uct_tag_context_t *ctx,
                                               int force) {
-  return UCS_ERR_NOT_IMPLEMENTED;
+  uct_ptl_op_t *op = *(uct_ptl_op_t **)ctx->priv;
+
+  assert(op->type == UCT_PTL_OP_RECV);
+  ucs_mpool_put(op);
+  return UCS_OK;
 }
 
 static ucs_status_t
