@@ -434,9 +434,10 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_EAGER_BCOPY UCS_BIT(51) /**< Hardware tag matching bcopy eager support */
 #define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
+#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(54) /**< Hardware tag matching operation offload support */
 
         /* Interface capability */
-#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(54) /**< Interface is inter-node capable */
+#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(55) /**< Interface is inter-node capable */
 /**
  * @}
  */
@@ -1735,6 +1736,9 @@ struct uct_completion {
     ucs_status_t              status;  /**< Completion status, this field must
                                             be initialized with UCS_OK before
                                             first operation is started. */
+    uct_oop_ctx_h             oop_ctx; /**< Operation handle pointing to the 
+                                            operation on which the completion 
+                                            depends. */
 };
 
 
@@ -1750,6 +1754,17 @@ struct uct_pending_req {
     char                      priv[UCT_PENDING_REQ_PRIV_LEN]; /**< Used internally by UCT */
 };
 
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Flags for operation offload.
+ */
+enum uct_tag_op_flags {
+    UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
+                                                 generate an operation handle that can 
+                                                 be used to enfore dependency with 
+                                                 another operation. */
+};
 
 /**
  * @ingroup UCT_TAG
@@ -1803,6 +1818,10 @@ struct uct_tag_context {
      */
      void (*rndv_cb)(uct_tag_context_t *self, uct_tag_t stag, const void *header,
                      unsigned header_length, ucs_status_t status, unsigned flags);
+
+     /** Offload Operation Context to setup operation dependencies. If not null, then
+      *  it will be used by the corresponding operation. */ 
+    uct_oop_ctx_h oop_ctx;
 
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];
@@ -3553,6 +3572,42 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
     return iface->ops.iface_tag_recv_cancel(iface, ctx, force);
 }
 
+/**
+ * @ingroup UCT_TAG
+ * @brief Create an Offload Operation Context to a transport interface.
+ *
+ * This routine creates the necessary resources on a transport interface to be 
+ * able to create dependencies between communication primitives.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ * @param [out]   oop_ctx   Context created.
+ *
+ * @return UCS_OK                - The context is created to the transport.
+ * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
+ *                                 resources.
+ */
+UCT_INLINE_API ucs_status_t uct_iface_tag_created_oop_ctx(uct_iface_h iface,
+                                                          uct_oop_ctx_h *oop_ctx_p)
+{
+    return iface->ops.iface_tag_create_oop(iface, oop_ctx_p);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Delete an Offload Operation Context to a transport interface.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ * @param [out]   oop_ctx   Context.
+ *
+ * @return UCS_OK                - The context is created to the transport.
+ * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
+ *                                 resources.
+ */
+UCT_INLINE_API void uct_iface_tag_delete_oop_ctx(uct_iface_h iface,
+                                                         uct_oop_ctx_h oop_ctx)
+{
+    iface->ops.iface_tag_delete_oop(iface, oop_ctx);
+}
 
 /**
  * @ingroup UCT_RESOURCE

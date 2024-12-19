@@ -21,6 +21,10 @@ ucs_config_field_t uct_ptl_am_iface_config_table[] = {
      ucs_offsetof(uct_ptl_am_iface_config_t, tm.list_size),
      UCS_CONFIG_TYPE_UINT},
 
+    {"MAX_OOP_CONTEXT", "32", "Number of Operation allocatable (default: 32)",
+     ucs_offsetof(uct_ptl_am_iface_config_t, tm.max_oop_ctx),
+     UCS_CONFIG_TYPE_UINT},
+
     {NULL}};
 
 static void uct_ptl_am_handle_failure(uct_ptl_iface_t *ptl_iface,
@@ -304,7 +308,9 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h tl_iface,
     return rc;
   }
 
-  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY;
+  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
+                     UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
+                     UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
@@ -354,7 +360,7 @@ uct_ptl_am_iface_tag_init(uct_ptl_am_iface_t *iface,
   iface->tm.eager_unexp.arg =
       UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
   iface->tm.rndv_unexp.arg =
-      UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_RNDV_ARG, NULL);
+      UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
   iface->tm.unexpected_cnt = 0;
   iface->tm.num_outstanding = 0;
   iface->tm.num_tags = tl_config->tm.list_size;
@@ -393,6 +399,7 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->super.config.ep_addr_size = sizeof(uct_ptl_am_ep_addr_t);
   self->tm.num_tags = ptl_config->tm.list_size;
   self->tm.enabled = ptl_config->tm.enable;
+  self->tm.oop_ctx_cnt = ptl_config->tm.max_oop_ctx;
 
   uct_ptl_am_iface_tag_init(self, params, ptl_config);
 
@@ -520,6 +527,8 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
     .iface_is_reachable = uct_base_iface_is_reachable,
     .iface_tag_recv_zcopy = uct_ptl_am_iface_tag_recv_zcopy,
     .iface_tag_recv_cancel = uct_ptl_am_iface_tag_recv_cancel,
+    .iface_tag_create_oop = uct_ptl_am_iface_tag_create_oop_ctx,
+    .iface_tag_delete_oop = uct_ptl_am_iface_tag_delete_oop_ctx,
 };
 
 static uct_ptl_iface_ops_t uct_ptl_am_iface_ops = {

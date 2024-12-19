@@ -415,11 +415,60 @@ err:
   return size;
 }
 
-ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h ep, uct_tag_t tag,
+ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                            uint64_t imm, const uct_iov_t *iov,
                                            size_t iovcnt, unsigned flags,
                                            uct_completion_t *comp) {
-  return UCS_ERR_NOT_IMPLEMENTED;
+
+  ucs_status_t rc = UCS_OK;
+  uct_ptl_am_ep_t *ep = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
+  uct_ptl_op_t *op;
+  uct_ptl_oop_ctx_t *oop_ctx;
+  ssize_t size = 0;
+
+  if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
+    rc = UCS_ERR_TIMED_OUT;
+    goto err;
+  }
+
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_ZCOPY, 0, comp, NULL, &iface->super,
+                             &ep->super, ep->am_mmd, &op);
+  if (rc != UCS_OK) {
+    size = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+  op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
+
+  ucs_debug(
+      "PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
+      iface->tag_rq.pti, tag, imm, op);
+  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
+    oop_ctx = ucs_derived_of(comp->oop_ctx, uct_ptl_oop_ctx_t);
+    ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
+
+    rc = uct_ptl_wrap(PtlTriggeredPut(
+        ep->am_mmd->mdh, (ptl_size_t)iov->buffer, iov->length, PTL_CT_ACK_REQ,
+        ep->super.dev_addr.pid, ep->iface_addr.tag_pti, tag, 0, op, imm,
+        oop_ctx->cth, oop_ctx->threshold));
+  } else {
+    rc = uct_ptl_wrap(PtlPut(
+        ep->am_mmd->mdh, (ptl_size_t)iov->buffer, iov->length, PTL_CT_ACK_REQ,
+        ep->super.dev_addr.pid, ep->iface_addr.tag_pti, tag, 0, op, imm));
+  }
+
+  if (rc != UCS_OK) {
+    ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
+    ucs_mpool_put(op->buffer);
+    ucs_mpool_put(op);
+    size = UCS_ERR_IO_ERROR;
+    goto err;
+  }
+
+  ucs_queue_push(&ep->am_mmd->opq, &op->elem);
+
+err:
+  return size;
 }
 
 static inline size_t uct_ptl_am_pack_rndv(void *src, uint64_t remote_addr,
@@ -508,6 +557,9 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   int ret;
   ptl_me_t me;
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+  ptl_handle_ct_t cth = PTL_CT_NONE;
+  unsigned ct_flags = 0;
+  uct_ptl_oop_ctx_t *oop_ctx;
   uct_ptl_op_t *op;
 
   ucs_assert(iov && iovcnt == 1);
@@ -521,9 +573,16 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   }
   ucs_assert(ret != UCS_KH_PUT_FAILED);
 
-  /* complete the ME data, this ME will be appended to the PRIORITY_LIST */
+  if (ctx->oop_ctx != NULL) {
+    /* User specified a context to offload operations. */
+    oop_ctx = ucs_derived_of(ctx->oop_ctx, uct_ptl_oop_ctx_t);
+    cth = oop_ctx->cth;
+    oop_ctx->threshold++;
+    ct_flags = PTL_ME_EVENT_CT_COMM;
+  }
+
   me = (ptl_me_t){
-      .ct_handle = PTL_CT_NONE,
+      .ct_handle = cth,
       .ignore_bits = ~tag_mask,
       .match_bits = tag,
       .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
@@ -532,7 +591,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
       .start = iov[0].buffer,
       .uid = PTL_UID_ANY,
       .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
-                 PTL_ME_EVENT_UNLINK_DISABLE,
+                 PTL_ME_EVENT_UNLINK_DISABLE | ct_flags,
   };
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 0, NULL, ctx, &iface->super, NULL,
@@ -590,6 +649,60 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h tl_iface,
   }
 err:
   return rc;
+}
+
+ucs_status_t uct_ptl_am_iface_tag_create_oop_ctx(uct_iface_h tl_iface,
+                                                 uct_oop_ctx_h *oop_ctx_p) {
+  ucs_status_t rc;
+  uct_ptl_oop_ctx_t *oop_ctx;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+
+  oop_ctx = ucs_malloc(sizeof(uct_ptl_oop_ctx_t), "ptl_oop_ctx");
+  if (oop_ctx == NULL) {
+    rc = UCS_ERR_NO_MEMORY;
+    goto err;
+  }
+
+  if (iface->tm.oop_ctx_cnt == 0) {
+    rc = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+  oop_ctx->threshold = 0;
+  oop_ctx->super.ref_cnt = 0;
+
+  rc = uct_ptl_wrap(
+      PtlCTAlloc(uct_ptl_iface_md(&iface->super)->nih, &oop_ctx->cth));
+  if (rc != UCS_OK) {
+    goto err_free_oop_ctx;
+  }
+
+  iface->tm.oop_ctx_cnt--;
+
+  *oop_ctx_p = (uct_oop_ctx_h)oop_ctx;
+
+  return rc;
+
+err_free_oop_ctx:
+  ucs_free(oop_ctx);
+err:
+  return rc;
+}
+
+void uct_ptl_am_iface_tag_delete_oop_ctx(uct_iface_h tl_iface,
+                                         uct_oop_ctx_h tl_oop_ctx) {
+  uct_ptl_oop_ctx_t *oop_ctx = (uct_ptl_oop_ctx_t *)tl_oop_ctx;
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+
+  ucs_assert(oop_ctx->super.ref_cnt >= 0);
+  ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
+
+  if (--oop_ctx->super.ref_cnt <= 0) {
+    uct_ptl_wrap(PtlCTFree(oop_ctx->cth));
+
+    ucs_free(oop_ctx);
+
+    iface->tm.oop_ctx_cnt++;
+  }
 }
 
 static ucs_status_t

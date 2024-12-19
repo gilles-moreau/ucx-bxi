@@ -32,6 +32,7 @@ typedef struct uct_ptl_ep uct_ptl_ep_t;
 
 enum {
   UCT_PTL_OP_FLAG_OVERFLOW = UCS_BIT(0),
+  UCT_PTL_OP_FLAG_OFFLOADED = UCS_BIT(1),
 };
 
 /* Operation types. */

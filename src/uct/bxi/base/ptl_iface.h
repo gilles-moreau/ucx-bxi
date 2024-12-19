@@ -20,6 +20,12 @@ typedef ucs_status_t (*cancel_ops_func_t)(uct_ptl_iface_t *iface);
 typedef void (*handle_failure_func_t)(uct_ptl_iface_t *iface, uct_ptl_op_t *op,
                                       ptl_ni_fail_t fail);
 
+typedef struct uct_ptl_oop_ctx {
+  uct_oop_ctx_t super;
+  ptl_handle_ct_t cth;
+  ptl_size_t threshold;
+} uct_ptl_oop_ctx_t;
+
 typedef struct uct_ptl_device_addr {
   ptl_process_t pid;
 } uct_ptl_device_addr_t;

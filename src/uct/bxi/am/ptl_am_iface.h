@@ -51,6 +51,7 @@ typedef struct uct_ptl_am_iface_config {
   struct {
     int enable;
     unsigned int list_size;
+    unsigned int max_oop_ctx;
   } tm;
 } uct_ptl_am_iface_config_t;
 
@@ -70,6 +71,7 @@ typedef struct uct_ptl_am_iface {
     unsigned int num_tags;
     khash_t(uct_ptl_am_tag_addrs) tag_addrs;
     ucs_queue_head_t canceled_ops;
+    unsigned int oop_ctx_cnt;
     struct {
       void *arg;                   /* User defined arg */
       uct_tag_unexp_eager_cb_t cb; /* Callback for unexpected eager messages */
