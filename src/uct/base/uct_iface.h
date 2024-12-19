@@ -377,6 +377,14 @@ UCS_CLASS_DECLARE(uct_base_ep_t, uct_base_iface_t*);
 
 
 /**
+ * Offload Operation Context structure for storing offload information.
+ */
+typedef struct uct_oop_ctx {
+    int ref_cnt;
+} uct_oop_ctx_t;
+
+
+/**
  * Internal resource descriptor of a transport device
  */
 typedef struct uct_tl_device_resource {

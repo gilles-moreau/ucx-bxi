@@ -81,6 +81,11 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                             unsigned header_length,
                                             unsigned flags);
 
+ucs_status_t uct_ptl_am_iface_tag_create_oop_ctx(uct_iface_h tl_iface,
+                                                 uct_oop_ctx_h *oop_ctx_p);
+void uct_ptl_am_iface_tag_delete_oop_ctx(uct_iface_h tl_iface,
+                                         uct_oop_ctx_h tl_oop_ctx);
+
 ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                                              uct_tag_t tag, uct_tag_t tag_mask,
                                              const uct_iov_t *iov,
