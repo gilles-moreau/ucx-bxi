@@ -36,28 +36,6 @@ struct ucp_tcache_region {
                                            in the page table */
 };
 
-struct ucp_tcache_params {
-  size_t region_struct_size; /**< Size of memory region structure,
-                                  must be at least the size
-                                  of @ref ucs_tcache_region_t */
-  int    ucm_events;         /**< UCM events to register. */
-  void  *context;            /**< User-defined context that will
-                                  be passed to mem_reg/mem_dereg */
-  int    ucm_event_priority; /**< Priority of memory events */
-  size_t max_regions;
-  size_t max_size;
-  const ucp_tcache_ops_t *ops; /**< Memory operations functions */
-};
-
-/*
- * Registration cache configuration parameters.
- */
-struct ucp_tcache_config {
-  unsigned      event_prio;  /**< Memory events priority */
-  unsigned long max_regions; /**< Maximal number of tcache regions */
-  size_t        max_size;    /**< Maximal size of mapped memory */
-};
-
 struct ucp_tcache_ops {
   /**
      * Create an offloading context for this region.
@@ -89,6 +67,28 @@ struct ucp_tcache_ops {
      */
   void (*mem_unoff)(void *context, ucp_tcache_t *tcache,
                     ucp_tcache_region_t *region);
+};
+
+struct ucp_tcache_params {
+  size_t           region_struct_size; /**< Size of memory region structure,
+                                  must be at least the size
+                                  of @ref ucs_tcache_region_t */
+  int              ucm_events;         /**< UCM events to register. */
+  void            *context;            /**< User-defined context that will
+                                  be passed to mem_reg/mem_dereg */
+  int              ucm_event_priority; /**< Priority of memory events */
+  size_t           max_regions;
+  size_t           max_size;
+  ucp_tcache_ops_t ops; /**< Memory operations functions */
+};
+
+/*
+ * Registration cache configuration parameters.
+ */
+struct ucp_tcache_config {
+  unsigned      event_prio;  /**< Memory events priority */
+  unsigned long max_regions; /**< Maximal number of tcache regions */
+  size_t        max_size;    /**< Maximal size of mapped memory */
 };
 
 struct ucp_tcache {
