@@ -331,6 +331,50 @@ public:
         flush();
     }
 
+    void test_tag_offload_operation_unexpected(send_func sfunc, size_t length = 75,
+                                               bool take_uct_desc = false)
+    {
+        uct_tag_t ftag = 11, btag = 22;
+        uct_oop_ctx_h oop_ctx;
+
+        if (RUNNING_ON_VALGRIND) {
+            length = ucs_min(length, 128U);
+        }
+
+        mapped_buffer recvbuf(length, RECV_SEED, receiver());
+        mapped_buffer sendbuf(length, SEND_SEED, sender());
+        mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
+
+        ASSERT_UCS_OK(uct_iface_tag_created_oop_ctx(receiver().iface(), &oop_ctx));
+
+        receiver().connect(0, sender(), 0);
+
+        recv_ctx r_ctx;
+        init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
+        r_ctx.uct_ctx.oop_ctx = oop_ctx;
+        ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
+
+        send_ctx rt_ctx; // Triggered context.
+        init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
+        rt_ctx.uct_comp.oop_ctx = oop_ctx;
+        ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
+
+        recv_ctx st_ctx;
+        init_recv_ctx(st_ctx, &sendrecvbuf, btag, MASK, take_uct_desc);
+        ASSERT_UCS_OK(tag_post(sender(), st_ctx));
+
+        send_ctx s_ctx;
+        init_send_ctx(s_ctx, &sendbuf, ftag, reinterpret_cast<uint64_t>(&r_ctx));
+        ASSERT_UCS_OK((this->*sfunc)(sender(), s_ctx));
+
+        wait_for_flag(&st_ctx.comp);
+
+        check_rx_completion(st_ctx, true, SEND_SEED);
+
+        uct_iface_tag_delete_oop_ctx(receiver().iface(), oop_ctx);
+        flush();
+    }
+
     void test_tag_wrong_tag(send_func sfunc)
     {
         const size_t length = 65;
