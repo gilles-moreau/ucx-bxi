@@ -22,7 +22,7 @@ static inline void ucp_tcache_region_put_internal(ucp_tcache_t        *tcache,
   region_size         = region->super.end - region->super.start;
   tcache->total_size -= region_size;
 
-  UCS_PROFILE_NAMED_CALL_VOID_ALWAYS("mem_unoff", tcache->params.ops->mem_unoff,
+  UCS_PROFILE_NAMED_CALL_VOID_ALWAYS("mem_unoff", tcache->params.ops.mem_unoff,
                                      tcache->params.context, tcache, region);
 
   ucs_free(region);
@@ -134,8 +134,8 @@ ucs_status_t ucp_tcache_create_region(ucp_tcache_t *tcache, void *address,
   tcache->total_size += region_size;
 
   region->status = status = UCS_PROFILE_NAMED_CALL_ALWAYS(
-          "mem_off", tcache->params.ops->mem_off, tcache->params.context,
-          tcache, arg, region, 0);
+          "mem_off", tcache->params.ops.mem_off, tcache->params.context, tcache,
+          arg, region, 0);
   if (status != UCS_OK) {
     ucs_debug("failed to offload region " UCS_PGT_REGION_FMT ": %s",
               UCS_PGT_REGION_ARG(&region->super), ucs_status_string(status));
