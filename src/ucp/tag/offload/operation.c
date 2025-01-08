@@ -20,13 +20,15 @@ static void ucp_mem_unoffload_context(void *context, ucp_tcache_t *tcache,
   uct_iface_tag_delete_oop_ctx(ctx->wiface->iface, region->oop);
 }
 
-ucs_status_t ucp_offload_context_create(ucp_worker_iface_t           *wiface,
-                                        ucp_offload_context_params_t *params,
-                                        ucp_offload_context_h        *ctx_p)
+ucs_status_t ucp_offload_context_create(ucp_worker_h           worker,
+                                        ucp_offload_context_h *ctx_p)
 {
   ucs_status_t          status;
   ucp_tcache_params_t   tcache_params;
   ucp_offload_context_h ctx;
+
+  ucs_assert(worker->num_active_ifaces == 1 &&
+             worker->tm.offload.iface != NULL);
 
   ctx = ucs_malloc(sizeof(struct ucp_offload_context), "alloc oop ctx");
   if (ctx == NULL) {
@@ -46,8 +48,18 @@ ucs_status_t ucp_offload_context_create(ucp_worker_iface_t           *wiface,
     goto err;
   }
 
-  ctx->wiface = wiface;
+  //TODO: add worker resources availability checks.
 
+  ctx->wiface = worker->tm.offload.iface;
+
+  *ctx_p = ctx;
 err:
   return status;
+}
+
+void ucp_offload_context_fini(ucp_offload_context_h ctx)
+{
+  ucp_tcache_destroy(ctx->tcache);
+
+  ucs_free(ctx);
 }

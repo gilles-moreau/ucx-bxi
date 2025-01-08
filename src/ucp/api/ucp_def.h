@@ -277,6 +277,14 @@ typedef struct ucp_recv_desc             *ucp_tag_message_h;
  */
 typedef uint64_t                         ucp_datatype_t;
 
+/**
+ * @ingroup UCP_COMM
+ * @brief UCP Offload Context 
+ *
+ * UCP offload context is a communication context for offloading operations.
+ */
+typedef struct ucp_offload_context       *ucp_offload_context_h;
+
 
 /**
  * @ingroup UCP_CONTEXT
