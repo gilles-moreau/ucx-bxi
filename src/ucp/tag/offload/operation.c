@@ -1,6 +1,13 @@
 #include "operation.h"
+#include "tcache.h"
 
+#include <ucp/core/ucp_worker.h>
 #include <uct/api/uct.h>
+
+struct ucp_offload_context {
+  ucp_tcache_t       *tcache;
+  ucp_worker_iface_t *wiface;
+};
 
 static ucs_status_t ucp_mem_offload_context(void *context, ucp_tcache_t *tcache,
                                             void                *arg,
@@ -62,4 +69,22 @@ void ucp_offload_context_fini(ucp_offload_context_h ctx)
   ucp_tcache_destroy(ctx->tcache);
 
   ucs_free(ctx);
+}
+
+ucs_status_t ucp_offload_get_context(ucp_offload_context_h ctx, void *address,
+                                     size_t length, uct_oop_ctx_h *oop_ctx_p)
+{
+  ucs_status_t         status;
+  ucp_tcache_region_t *region;
+
+  status = ucp_tcache_get(ctx->tcache, address, length, ctx, &region);
+  if (status != UCS_OK) {
+    ucs_error("OFF: could not get tag offload context from cache.");
+    goto err;
+  }
+
+  *oop_ctx_p = region->oop;
+
+err:
+  return status;
 }

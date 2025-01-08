@@ -289,6 +289,11 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
         goto out;
     });
 
+    if (param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH) {
+        req->flags |= UCP_REQUEST_FLAG_TRIGGERED;
+        req->send.tag_offload.ctx = param->offh;
+    }
+
     if (worker->context->config.ext.proto_enable) {
         req->send.msg_proto.tag = tag;
 

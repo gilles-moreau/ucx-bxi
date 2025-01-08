@@ -17,6 +17,7 @@
 #include <ucp/core/ucp_request.h>
 #include <ucp/core/ucp_mm.h>
 #include <ucp/tag/tag_match.inl>
+#include <ucp/tag/offload/operation.h>
 #include <ucs/sys/sys.h>
 
 
@@ -338,6 +339,13 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
+    if (req->recv.op_attr & UCP_OP_ATTR_FIELD_OFFH) {
+        status = ucp_offload_get_context(NULL, iov.buffer, iov.length, 
+                                         &req->recv.uct_ctx.oop_ctx);
+        if (status != UCS_OK) {
+            return status;
+        }
+    }
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,
                                       req->recv.tag.tag_mask, &iov, 1,
