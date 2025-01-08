@@ -458,6 +458,64 @@ UCS_TEST_P(test_ucp_tag_offload, eager_multi_recv,
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload)
 
+class test_ucp_tag_offload_triggered : public test_ucp_tag_offload {
+public:
+    ucs_status_t make_offload_context(entity &se, ucp_offload_context_h *ctx_p) {
+        ucs_status_t status;
+        ucp_offload_context_h ctx;
+
+        status = ucp_offload_context_create(se.worker(), &ctx);
+        if (status != UCS_OK) {
+            goto err;
+        }
+
+        *ctx_p = ctx;
+err:
+        return status;
+    }
+
+};
+
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_trig)
+{
+    ucp_offload_context_h off_ctx;
+    activate_offload(sender());
+
+    // Must create offload context before memory is allocated so calls can be 
+    // intercepted.
+    ASSERT_UCS_OK(make_offload_context(receiver(), &off_ctx));
+
+    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 1;
+    const ucp_tag_t ftag = 0x11, btag = 0x22;
+    std::vector<uint8_t> sendbuf(length);
+    std::vector<uint8_t> recvbuf(length);
+    std::vector<uint8_t> sendrecvbuf(length);
+
+    // Prepare receive from which receiver's send depends
+    ucp_request_param_t param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .offh = off_ctx};
+    ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                                             length, ftag, 0xffff, &param);
+
+    // Prepare the triggered send operation of the receiver 
+    ucs_status_ptr_t treq = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
+                                             recvbuf.size(), btag, &param);
+
+    // Prepare the receive operation of the sender. No offload context is provided
+    // since sender's operations are not offloaded.
+    param = {};
+    ucs_status_ptr_t rt_req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
+                                             length, btag, 0xffff, &param);
+
+    // Finally, send the first operation from the sender
+    ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+                                             recvbuf.size(), ftag, &param);
+    request_wait(sreq);
+    request_wait(rreq);
+    request_wait(treq);
+    request_wait(rt_req);
+}
+
+UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload_triggered)
 
 class test_ucp_tag_offload_multi : public test_ucp_tag_offload {
 public:

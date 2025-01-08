@@ -47,6 +47,11 @@ static void ucp_tcache_find_regions(ucp_tcache_t *tcache, ucs_pgt_addr_t from,
                            ucp_tcache_region_collect_callback, list);
 }
 
+void ucp_tcache_region_hold(ucp_tcache_t *tcache, ucp_tcache_region_t *region)
+{
+  ucs_atomic_add32(&region->refcount, +1);
+}
+
 static ucs_status_t ucp_tcache_check_overlap(ucp_tcache_t *tcache, void *arg,
                                              ucs_pgt_addr_t       *start,
                                              ucs_pgt_addr_t       *end,

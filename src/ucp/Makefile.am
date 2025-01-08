@@ -76,6 +76,8 @@ noinst_HEADERS = \
 	tag/tag_match.h \
 	tag/tag_match.inl \
 	tag/offload.h \
+	tag/offload/operation.h \
+	tag/offload/tcache.h \
 	wireup/address.h \
 	wireup/ep_match.h \
 	wireup/wireup_ep.h \
@@ -165,6 +167,8 @@ libucp_la_SOURCES = \
 	tag/offload.c \
 	tag/offload/eager.c \
 	tag/offload/rndv.c \
+	tag/offload/operation.c \
+	tag/offload/tcache.c \
 	wireup/address.c \
 	wireup/ep_match.c \
 	wireup/select.c \
