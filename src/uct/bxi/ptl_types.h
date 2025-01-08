@@ -19,11 +19,11 @@
 /********** Forward Decl *********/
 /*********************************/
 typedef struct uct_ptl_iface uct_ptl_iface_t;
-typedef struct uct_ptl_wp uct_ptl_wp_t;
-typedef struct uct_ptl_rq uct_ptl_rq_t;
-typedef struct uct_ptl_md uct_ptl_md_t;
-typedef struct uct_ptl_mmd uct_ptl_mmd_t;
-typedef struct uct_ptl_ep uct_ptl_ep_t;
+typedef struct uct_ptl_wp    uct_ptl_wp_t;
+typedef struct uct_ptl_rq    uct_ptl_rq_t;
+typedef struct uct_ptl_md    uct_ptl_md_t;
+typedef struct uct_ptl_mmd   uct_ptl_mmd_t;
+typedef struct uct_ptl_ep    uct_ptl_ep_t;
 
 /*********************************/
 /********** PTL TYPES   **********/
@@ -31,7 +31,7 @@ typedef struct uct_ptl_ep uct_ptl_ep_t;
 #define UCT_PTL_PT_NULL ((ptl_pt_index_t) - 1)
 
 enum {
-  UCT_PTL_OP_FLAG_OVERFLOW = UCS_BIT(0),
+  UCT_PTL_OP_FLAG_OVERFLOW  = UCS_BIT(0),
   UCT_PTL_OP_FLAG_OFFLOADED = UCS_BIT(1),
 };
 
@@ -67,31 +67,30 @@ typedef enum {
 typedef struct uct_ptl_op {
   uct_ptl_op_type_t type; /* Type of operation */
   uct_completion_t *comp; /* Completion callback */
-  uct_ptl_ep_t *ep;
-  uct_ptl_mmd_t *mmd;
-  void *buffer;
-  ptl_size_t seqn;
-  ucs_queue_elem_t elem;
-  size_t size;
+  uct_ptl_ep_t     *ep;
+  uct_ptl_mmd_t    *mmd;
+  void             *buffer;
+  ptl_size_t        seqn;
+  ucs_queue_elem_t  elem;
+  size_t            size;
   union {
     struct {
       uct_tag_context_t *ctx;
-      ptl_handle_me_t meh;
-      unsigned flags;
-      ptl_match_bits_t tag;
-      void *buffer;
-      unsigned cancel;
+      ptl_handle_me_t    meh;
+      unsigned           flags;
+      ptl_match_bits_t   tag;
+      void              *buffer;
+      unsigned           cancel;
     } tag;
     struct {
       uct_unpack_callback_t unpack;
-      void *arg;
+      void                 *arg;
     } get_bcopy;
     struct {
       uint64_t value;
       uint64_t compare;
     } ato;
   };
-
 } uct_ptl_op_t;
 
 #define uct_ptl_rc_log(rc)                                                     \
@@ -116,7 +115,7 @@ typedef struct uct_ptl_op {
 #define uct_ptl_wrap(_ptl_call)                                                \
   ({                                                                           \
     ucs_status_t loc_rc = UCS_OK;                                              \
-    int ptl_rc;                                                                \
+    int          ptl_rc;                                                       \
     if ((ptl_rc = _ptl_call) != PTL_OK) {                                      \
       uct_ptl_rc_log(ptl_rc);                                                  \
       loc_rc = UCS_ERR_IO_ERROR;                                               \
@@ -132,9 +131,9 @@ typedef struct uct_ptl_op {
 #define uct_ptl_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
   uct_iface_trace_am(&(_iface)->super.super, _type, _am_id, _data, _length,    \
                      "%cX",                                                    \
-                     ((_type) == UCT_AM_TRACE_TYPE_RECV)   ? 'R'               \
-                     : ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T'               \
-                                                           : '?')
+                     ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
+                     ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
+                                                           '?')
 
 extern uct_component_t ptl_am_component;
 extern uct_component_t ptl_rma_component;
