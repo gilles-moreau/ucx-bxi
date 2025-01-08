@@ -719,6 +719,7 @@ typedef enum {
     UCP_OP_ATTR_FIELD_MEMORY_TYPE   = UCS_BIT(6),  /**< memory type field */
     UCP_OP_ATTR_FIELD_RECV_INFO     = UCS_BIT(7),  /**< recv_info field */
     UCP_OP_ATTR_FIELD_MEMH          = UCS_BIT(8),  /**< memory handle field */
+    UCP_OP_ATTR_FIELD_OFFH          = UCS_BIT(9),  /**< offload handle field */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -1824,6 +1825,15 @@ typedef struct {
      * The memory handle should be obtained by calling @ref ucp_mem_map.
      */
     ucp_mem_h memh;
+
+    /**
+     * Offload handle.
+     * If the handle is provided, dependencies with other previous offloaded 
+     * operations will be checked to get the operation offload context necessary 
+     * to trigger the operation upon subsequent events. Has to be used in conjonction
+     * with 
+     */
+    ucp_offload_context_h offh;
 
 } ucp_request_param_t;
 
@@ -3516,6 +3526,25 @@ ucs_status_ptr_t ucp_stream_recv_nbx(ucp_ep_h ep, void *buffer, size_t count,
  */
 ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
 
+/**
+ * @ingroup UCP_COMM
+ * @brief Operation Offloading context.
+ *
+ * An offloading context is a communication context for offloading operations.
+ * When an offloading context is passed to a communication primitive, see 
+ * @ref ??, a lookup will be performed to determined dependency through 
+ * implicit data dependency checking (memory overlap of already offloaded 
+ * memory ranges, see tcache.c).
+ *
+ * @param [in]  worker  UCP worker that is used for the offload operation.
+ * @param [out] ctx     Offload Context handle   
+ *
+ * @return error code if resources might not be available for example 
+ */
+ucs_status_t ucp_offload_context_create(ucp_worker_h           worker,
+                                        ucp_offload_context_h  *ctx);
+
+void ucp_offload_context_fini(ucp_offload_context_h ctx);
 
 /**
  * @ingroup UCP_COMM
