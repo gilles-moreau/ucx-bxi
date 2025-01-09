@@ -50,7 +50,9 @@ typedef enum {
   UCT_PTL_OP_RMA_PUT_SHORT,
   UCT_PTL_OP_RMA_PUT_BCOPY,
   UCT_PTL_OP_RMA_PUT_ZCOPY,
+  UCT_PTL_OP_RMA_PUT_ZCOPY_TAG,
   UCT_PTL_OP_RMA_GET_ZCOPY,
+  UCT_PTL_OP_RMA_GET_ZCOPY_TAG,
   UCT_PTL_OP_RMA_GET_BCOPY,
   UCT_PTL_OP_RMA_FLUSH,
   /* Atomic operations. */
@@ -81,6 +83,7 @@ typedef struct uct_ptl_op {
       ptl_match_bits_t   tag;
       void              *buffer;
       unsigned           cancel;
+      size_t             hdr_len;
     } tag;
     struct {
       uct_unpack_callback_t unpack;

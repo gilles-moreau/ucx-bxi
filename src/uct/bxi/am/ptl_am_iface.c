@@ -109,9 +109,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         hdr = ev->start;
         rc  = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
                                       ev->match_bits, (const void *)(hdr + 1),
-                                      ev->mlength -
-                                              sizeof(uct_ptl_am_hdr_rndv_t),
-                                      hdr->remote_addr, hdr->length, NULL);
+                                      hdr->header_length, hdr->remote_addr,
+                                      hdr->length, NULL);
       } else {
         rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                       ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
@@ -124,9 +123,27 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       if (is_rndv) {
         hdr = ev->start;
 
-        //tag_ctx->tag_consumed_cb(tag_ctx);
-        //tag_ctx->rndv_cb(tag_ctx, ev->match_bits, hdr + 1, hdr->length, UCS_OK,
-        //                 0);
+        op->seqn   = ucs_atomic_fadd64(&iface->rma_mmd->seqn, 1);
+        op->type   = UCT_PTL_OP_RMA_GET_ZCOPY_TAG;
+        op->size   = hdr->length;
+        op->buffer = ucs_mpool_get(&iface->super.copyin_mp);
+        memcpy(op->buffer, hdr + 1, hdr->header_length);
+        op->tag.hdr_len = hdr->header_length;
+        op->tag.tag     = ev->match_bits;
+
+        rc = uct_ptl_wrap(PtlGet(
+                iface->rma_mmd->mdh, (ptl_size_t)op->tag.buffer, hdr->length,
+                ev->initiator, UCT_PTL_HDR_GET_AM_ID(ev->hdr_data),
+                UCT_PTL_HDR_GET_RNDV_MATCH(ev->hdr_data), 0, NULL));
+
+        uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
+        if (rc != UCS_OK) {
+          ucs_mpool_put(op);
+          ucs_atomic_fadd64(&iface->rma_mmd->seqn, -1);
+          rc = UCS_ERR_IO_ERROR;
+          goto err;
+        }
+        ucs_queue_push(&iface->rma_mmd->opq, &op->elem);
       } else {
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
@@ -135,6 +152,13 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       }
       iface->tm.num_tags++;
     }
+    break;
+  case PTL_EVENT_GET:
+    if (op->comp != NULL) {
+      uct_invoke_completion(op->comp, UCS_OK);
+    }
+    ucs_mpool_put(op->buffer);
+    ucs_mpool_put(op);
     break;
   case PTL_EVENT_REPLY:
   case PTL_EVENT_GET_OVERFLOW:
@@ -155,6 +179,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     break;
   }
 
+err:
   return rc;
 }
 
@@ -322,9 +347,9 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h       tl_iface,
     return rc;
   }
 
-  attr->cap.flags |= UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
-                     UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-                     UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+  attr->cap.flags |=
+          UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
+          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
@@ -380,6 +405,7 @@ uct_ptl_am_iface_tag_init(uct_ptl_am_iface_t              *iface,
   iface->tm.unexpected_cnt  = 0;
   iface->tm.num_outstanding = 0;
   iface->tm.num_tags        = tl_config->tm.list_size;
+  iface->tm.rndv_tag        = 0;
 
   kh_init_inplace(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs);
   ucs_queue_head_init(&iface->tm.canceled_ops);
