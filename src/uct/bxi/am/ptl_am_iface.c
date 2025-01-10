@@ -92,8 +92,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
 
   assert(op);
 
-  ucs_debug("PTL: event. type=%s, size=%lu", uct_ptl_event_str[ev->type],
-            ev->mlength);
+  ucs_debug("PTL: event. type=%s, size=%lu, start=%p",
+            uct_ptl_event_str[ev->type], ev->mlength, ev->start);
 
   // TODO: check for truncated messages
   switch (ev->type) {
@@ -110,12 +110,16 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     break;
   case PTL_EVENT_PUT:
     if (op->type == UCT_PTL_OP_BLOCK) {
-      if (is_hw_rndv || is_sw_rndv) {
+      if (is_hw_rndv) {
         hdr = ev->start;
         rc  = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
                                       ev->match_bits, (const void *)(hdr + 1),
                                       hdr->header_length, hdr->remote_addr,
                                       hdr->length, NULL);
+      } else if (is_sw_rndv) {
+        rc = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
+                                     ev->match_bits, (const void *)ev->start,
+                                     ev->mlength, 0, 0, NULL);
       } else {
         rc = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                       ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
@@ -365,8 +369,9 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h       tl_iface,
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
   /* TMH can carry 2 additional bytes of private data */
-  attr->cap.tag.rndv.max_hdr         = sizeof(ptl_hdr_data_t);
+  attr->cap.tag.rndv.max_hdr         = 128;
   attr->cap.tag.rndv.max_iov         = 1;
+  attr->cap.tag.rndv.max_zcopy       = iface->super.config.max_msg_size;
   attr->cap.tag.recv.max_zcopy       = iface->super.config.max_msg_size;
   attr->cap.tag.recv.max_iov         = 1;
   attr->cap.tag.recv.min_recv        = 0;
@@ -374,7 +379,8 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h       tl_iface,
   attr->cap.tag.eager.max_iov        = 1;
   attr->cap.tag.eager.max_bcopy =
           iface->super.config.eager_block_size - sizeof(uint64_t);
-  attr->cap.tag.eager.max_zcopy = iface->super.config.max_msg_size;
+  attr->cap.tag.eager.max_zcopy =
+          iface->super.config.eager_block_size - sizeof(uint64_t);
 
 err:
   return rc;
@@ -515,11 +521,10 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
           .items_per_chunk = self->super.config.copyout_buf_per_block,
           .min_items       = 2,
           .max_items       = self->super.config.max_copyout_buf,
-          .item_size       = self->super.config.eager_block_size *
-                       self->super.config.num_eager_blocks,
-          .options  = ECR_PTL_BLOCK_TAG,
-          .min_free = self->super.config.eager_block_size,
-          .name     = "tag-rq-blocks",
+          .item_size       = self->super.config.eager_block_size,
+          .options         = ECR_PTL_BLOCK_TAG,
+          .min_free        = 0,
+          .name            = "tag-rq-blocks",
   };
 
   rc = uct_ptl_rq_init(&self->super, &rq_param, &self->tag_rq);
