@@ -8,7 +8,8 @@
 #include <uct/bxi/base/ptl_iface.h>
 #include <uct/bxi/base/ptl_rq.h>
 
-#define UCT_PTL_RNDV_MAGIC 0xDEAD
+#define UCT_PTL_RNDV_HW_MAGIC 0xDEAD
+#define UCT_PTL_RNDV_SW_MAGIC 0xBEEF
 
 #define UCT_PTL_HDR_RNDV_MATCH_MASK 0x0000000000ffffffULL
 #define UCT_PTL_HDR_AM_ID_MASK      0x0000ffffff000000ULL

@@ -525,9 +525,11 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_BCOPY, 1, comp, NULL, &iface->super,
                              &ep->super, ep->am_mmd, &op);
   if (rc != UCS_OK) {
+    op = (uct_ptl_op_t *)UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
+  op->tag.meh   = PTL_INVALID_HANDLE;
   op->type      = UCT_PTL_OP_RMA_PUT_ZCOPY_TAG;
   op->tag.flags = 0;
   op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
@@ -551,8 +553,11 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
+  if (rc != UCS_OK) {
+    return (ucs_status_ptr_t)UCS_ERR_NO_RESOURCE;
+  }
 
-  UCT_PTL_HDR_SET(hdr, op->tag.tag, iface->tag_rq.pti, UCT_PTL_RNDV_MAGIC);
+  UCT_PTL_HDR_SET(hdr, op->tag.tag, iface->tag_rq.pti, UCT_PTL_RNDV_HW_MAGIC);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, op->size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, hdr));
@@ -573,18 +578,59 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_ptl_op_t *op = (uct_ptl_op_t *)tl_op;
 
-  uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
+  if (!PtlHandleIsEqual(op->tag.meh, PTL_INVALID_HANDLE)) {
+    uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
+  }
 
   ucs_mpool_put(op);
   return UCS_OK;
 }
 
-ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
+ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
                                             const void *header,
                                             unsigned    header_length,
                                             unsigned    flags)
 {
-  return UCS_ERR_NOT_IMPLEMENTED;
+  ucs_status_t        rc    = UCS_OK;
+  uct_ptl_am_ep_t    *ep    = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
+  ptl_hdr_data_t      hdr   = 0;
+  uct_ptl_op_t       *op    = NULL;
+
+  if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
+    rc = UCS_ERR_TIMED_OUT;
+    goto err;
+  }
+
+  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_BCOPY, 1, NULL, NULL, &iface->super,
+                             &ep->super, ep->am_mmd, &op);
+  if (rc != UCS_OK) {
+    goto err;
+  }
+
+  op->type      = UCT_PTL_OP_RMA_PUT_ZCOPY_TAG;
+  op->tag.flags = 0;
+  op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
+  op->size      = header_length;
+  memcpy(op->buffer, header, header_length);
+
+  UCT_PTL_HDR_SET(hdr, op->tag.tag, iface->tag_rq.pti, UCT_PTL_RNDV_SW_MAGIC);
+  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, op->size,
+                           PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
+                           ep->iface_addr.tag_pti, tag, 0, op, hdr));
+
+  if (rc != UCS_OK) {
+    ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
+    ucs_mpool_put(op->buffer);
+    ucs_mpool_put(op);
+    uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
+    return UCS_ERR_IO_ERROR;
+  }
+
+  ucs_queue_push(&ep->am_mmd->opq, &op->elem);
+
+err:
+  return rc;
 }
 
 ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
@@ -1011,6 +1057,9 @@ UCS_CLASS_INIT_FUNC(uct_ptl_am_ep_t, const uct_ep_params_t *params)
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_ep_t)
 {
+  uct_ep_pending_purge(&self->super.super.super,
+                       ucs_empty_function_do_assert_void, NULL);
+  //TODO: finish all pending operations that are not on the pending list.
   ucs_debug("destroy ptl ep %p", self);
   return;
 }

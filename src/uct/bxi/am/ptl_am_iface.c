@@ -80,15 +80,20 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   ucs_status_t        rc    = UCS_OK;
   uct_ptl_am_iface_t *iface = ucs_derived_of(super, uct_ptl_am_iface_t);
   uct_ptl_op_t       *op    = (uct_ptl_op_t *)ev->user_ptr;
-  int                 is_rndv =
-          UCT_PTL_HDR_GET_PROT_ID(ev->hdr_data) == UCT_PTL_RNDV_MAGIC ? 1 : 0;
+  int                 is_hw_rndv =
+          UCT_PTL_HDR_GET_PROT_ID(ev->hdr_data) == UCT_PTL_RNDV_HW_MAGIC ? 1 :
+                                                                                           0;
+  int is_sw_rndv =
+          UCT_PTL_HDR_GET_PROT_ID(ev->hdr_data) == UCT_PTL_RNDV_SW_MAGIC ? 1 :
+                                                                           0;
   uct_ptl_recv_block_t  *block;
   uct_tag_context_t     *tag_ctx;
   uct_ptl_am_hdr_rndv_t *hdr;
 
   assert(op);
 
-  ucs_debug("PTL: event. type=%s", uct_ptl_event_str[ev->type]);
+  ucs_debug("PTL: event. type=%s, size=%lu", uct_ptl_event_str[ev->type],
+            ev->mlength);
 
   // TODO: check for truncated messages
   switch (ev->type) {
@@ -105,7 +110,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     break;
   case PTL_EVENT_PUT:
     if (op->type == UCT_PTL_OP_BLOCK) {
-      if (is_rndv) {
+      if (is_hw_rndv || is_sw_rndv) {
         hdr = ev->start;
         rc  = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
                                       ev->match_bits, (const void *)(hdr + 1),
@@ -120,7 +125,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       uct_ptl_recv_block_activate(block);
     } else {
       tag_ctx = op->tag.ctx;
-      if (is_rndv) {
+      if (is_hw_rndv) {
         hdr = ev->start;
 
         op->seqn   = ucs_atomic_fadd64(&iface->rma_mmd->seqn, 1);
@@ -136,6 +141,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
                 ev->initiator, UCT_PTL_HDR_GET_AM_ID(ev->hdr_data),
                 UCT_PTL_HDR_GET_RNDV_MATCH(ev->hdr_data), 0, NULL));
 
+        //FIXME: address should be removed on operation completion, which is
+        //when the Get has completed.
         uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
         if (rc != UCS_OK) {
           ucs_mpool_put(op);
@@ -144,6 +151,10 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
           goto err;
         }
         ucs_queue_push(&iface->rma_mmd->opq, &op->elem);
+      } else if (is_sw_rndv) {
+        tag_ctx->tag_consumed_cb(tag_ctx);
+        tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength,
+                         UCS_OK, 0);
       } else {
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
