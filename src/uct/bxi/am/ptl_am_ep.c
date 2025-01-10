@@ -437,7 +437,6 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t       *op;
   uct_ptl_oop_ctx_t  *oop_ctx;
-  ssize_t             size = 0;
 
   if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
     rc = UCS_ERR_TIMED_OUT;
@@ -447,13 +446,13 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_ZCOPY, 0, comp, NULL, &iface->super,
                              &ep->super, ep->am_mmd, &op);
   if (rc != UCS_OK) {
-    size = UCS_ERR_NO_RESOURCE;
+    rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
 
   ucs_debug(
-          "PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
+          "PTL: ep tag zcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
           iface->tag_rq.pti, tag, imm, op);
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
     oop_ctx = ucs_derived_of(comp->oop_ctx, uct_ptl_oop_ctx_t);
@@ -474,14 +473,16 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
     ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
-    size = UCS_ERR_IO_ERROR;
+    rc = UCS_ERR_IO_ERROR;
     goto err;
   }
 
   ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
+  rc = UCS_INPROGRESS;
+
 err:
-  return size;
+  return rc;
 }
 
 static inline size_t uct_ptl_am_pack_rndv(void *src, uint64_t remote_addr,
@@ -570,6 +571,9 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     return (ucs_status_ptr_t)UCS_ERR_IO_ERROR;
   }
 
+  ucs_debug("PTL: ep tag rndv zcopy. iface pti=%d, tag=0x%016lx, op=%p",
+            iface->tag_rq.pti, tag, op);
+
 err:
   return (ucs_status_ptr_t)op;
 }
@@ -627,6 +631,9 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
     return UCS_ERR_IO_ERROR;
   }
 
+  ucs_debug("PTL: ep tag rndv request. iface pti=%d, tag=0x%016lx, op=%p",
+            iface->tag_rq.pti, tag, op);
+
   ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
 err:
@@ -659,7 +666,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   }
   ucs_assert(ret != UCS_KH_PUT_FAILED);
 
-  if (ctx->oop_ctx != NULL) {
+  if (ctx->oop_ctx != NULL && ctx->flags == UCT_TAG_OFFLOAD_OPERATION) {
     /* User specified a context to offload operations. */
     oop_ctx = ucs_derived_of(ctx->oop_ctx, uct_ptl_oop_ctx_t);
     cth     = oop_ctx->cth;

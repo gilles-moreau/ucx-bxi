@@ -308,6 +308,7 @@ public:
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
         r_ctx.uct_ctx.oop_ctx = oop_ctx;
+        r_ctx.uct_ctx.flags = UCT_TAG_OFFLOAD_OPERATION;
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.

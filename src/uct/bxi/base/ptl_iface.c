@@ -118,6 +118,9 @@ ucs_status_t uct_ptl_iface_query(uct_iface_h iface, uct_iface_attr_t *attr)
   attr->cap.tag.eager.max_bcopy = ptl_if->config.eager_block_size;
   attr->cap.tag.eager.max_zcopy = ptl_if->config.max_msg_size;
   attr->cap.tag.eager.max_iov   = ptl_if->config.max_iovecs;
+  attr->cap.tag.rndv.max_hdr    = 128;
+  attr->cap.tag.rndv.max_iov    = 1;
+  attr->cap.tag.rndv.max_zcopy  = ptl_if->config.max_msg_size;
 
   attr->cap.put.max_short       = ptl_if->config.max_short;
   attr->cap.put.max_bcopy       = ptl_if->config.eager_block_size;
