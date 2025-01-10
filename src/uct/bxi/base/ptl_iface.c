@@ -30,7 +30,7 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
         {"", "ALLOC=heap", NULL, ucs_offsetof(uct_ptl_iface_config_t, super),
          UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
-        {"MAX_OUTSTANDING_OPS", "2048",
+        {"MAX_OUTSTANDING_OPS", "512",
          "Maximum number of outstanding operations (default: 2048).",
          ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
          UCS_CONFIG_TYPE_UINT},
@@ -50,12 +50,12 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
          ucs_offsetof(uct_ptl_iface_config_t, min_copyin_buf),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_COPYIN_BUF", "16",
+        {"MAX_COPYIN_BUF", "512",
          "Maximum number of copyin buffers per working queues (default: 8)",
          ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_COPYOUT_BUF", "256",
+        {"MAX_COPYOUT_BUF", "512",
          "Maximum number of copyout buffers per working queues (default: 8)",
          ucs_offsetof(uct_ptl_iface_config_t, max_copyout_buf),
          UCS_CONFIG_TYPE_UINT},
