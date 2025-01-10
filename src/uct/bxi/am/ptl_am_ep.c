@@ -684,8 +684,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
           .start       = iov[0].buffer,
           .uid         = PTL_UID_ANY,
           .options     = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
-                     PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE |
-                     ct_flags,
+                     PTL_ME_EVENT_OVER_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
+                     PTL_ME_EVENT_UNLINK_DISABLE | ct_flags,
   };
 
   rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 0, NULL, ctx, &iface->super, NULL,
@@ -719,17 +719,15 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_ptl_op_t       *op    = *(uct_ptl_op_t **)ctx->priv;
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
 
-  assert(op->type == UCT_PTL_OP_RECV);
+  ucs_assert(op->type == UCT_PTL_OP_RECV);
 
-  if (!(op->tag.flags & UCT_PTL_OP_FLAG_OVERFLOW)) {
-    rc = uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
-    if (rc != UCS_OK) {
-      goto err;
-    }
-    iface->tm.num_tags++;
-    if (!force) {
-      op->tag.cancel = 1;
-    }
+  //NOTE: there is no error checking here because the ME might have been
+  //unlinked already during the receive call.
+  PtlMEUnlink(op->tag.meh);
+
+  iface->tm.num_tags++;
+  if (!force) {
+    op->tag.cancel = 1;
   }
 
   if (force) {

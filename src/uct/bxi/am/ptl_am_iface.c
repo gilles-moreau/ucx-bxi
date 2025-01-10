@@ -90,10 +90,15 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   uct_tag_context_t     *tag_ctx;
   uct_ptl_am_hdr_rndv_t *hdr;
 
-  assert(op);
+  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d",
+            uct_ptl_event_str[ev->type], ev->mlength, ev->start, ev->pt_index);
 
-  ucs_debug("PTL: event. type=%s, size=%lu, start=%p",
-            uct_ptl_event_str[ev->type], ev->mlength, ev->start);
+  if (ev->type == PTL_EVENT_PT_DISABLED) {
+    ucs_error("PTL: event %s. Control flow not implemented.",
+              uct_ptl_event_str[ev->type]);
+    rc = UCS_ERR_IO_ERROR;
+    goto err;
+  }
 
   // TODO: check for truncated messages
   switch (ev->type) {
@@ -102,11 +107,6 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       ucs_debug("PTL: handle failure. op=%p, seqn=%lu", op, op->seqn);
       uct_ptl_am_handle_failure(&iface->super, op, ev->ni_fail_type);
     }
-    break;
-  case PTL_EVENT_AUTO_UNLINK:
-  case PTL_EVENT_PUT_OVERFLOW:
-    op->tag.flags |= UCT_PTL_OP_FLAG_OVERFLOW;
-    iface->tm.num_tags++;
     break;
   case PTL_EVENT_PUT:
     if (op->type == UCT_PTL_OP_BLOCK) {
@@ -176,6 +176,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     ucs_mpool_put(op);
     break;
   case PTL_EVENT_REPLY:
+  case PTL_EVENT_AUTO_UNLINK:
+  case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_AUTO_FREE:
   case PTL_EVENT_ATOMIC:
