@@ -571,8 +571,9 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     return (ucs_status_ptr_t)UCS_ERR_IO_ERROR;
   }
 
-  ucs_debug("PTL: ep tag rndv zcopy. iface pti=%d, tag=0x%016lx, op=%p",
-            iface->tag_rq.pti, tag, op);
+  ucs_debug("PTL: ep tag rndv zcopy. iface src pti=%d, dest pti=%d, "
+            "tag=0x%016lx, op=%p",
+            iface->tag_rq.pti, ep->iface_addr.tag_pti, tag, op);
 
 err:
   return (ucs_status_ptr_t)op;
