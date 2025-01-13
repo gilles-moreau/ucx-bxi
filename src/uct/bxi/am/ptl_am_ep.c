@@ -2,6 +2,7 @@
 #include "ptl_am_iface.h"
 #include "ptl_types.h"
 
+#include <sys/types.h>
 #include <time.h>
 #include <uct/base/uct_log.h>
 
@@ -518,6 +519,11 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   assert(iovcnt <= 1);
 
+  if (iface->tm.num_tags == 0) {
+    op = (uct_ptl_op_t *)UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+
   if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
     rc = UCS_ERR_TIMED_OUT;
     goto err;
@@ -551,6 +557,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE,
   };
 
+  iface->tm.num_tags--;
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
@@ -581,12 +588,17 @@ err:
 
 ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
-  uct_ptl_op_t *op = (uct_ptl_op_t *)tl_op;
+  uct_ptl_op_t       *op    = (uct_ptl_op_t *)tl_op;
+  uct_ptl_am_ep_t    *ep    = ucs_derived_of(tl_ep, uct_ptl_am_ep_t);
+  uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
 
   if (!PtlHandleIsEqual(op->tag.meh, PTL_INVALID_HANDLE)) {
     uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
+    iface->tm.num_tags++;
   }
 
+  ucs_debug("PTL: (C) op complete. id=%lu, type=%d", op->seqn, op->type);
+  ucs_mpool_put(op->buffer);
   ucs_mpool_put(op);
   return UCS_OK;
 }
@@ -619,7 +631,7 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   op->size      = header_length;
   memcpy(op->buffer, header, header_length);
 
-  UCT_PTL_HDR_SET(hdr, op->tag.tag, iface->tag_rq.pti, UCT_PTL_RNDV_SW_MAGIC);
+  UCT_PTL_HDR_SET(hdr, 0, iface->tag_rq.pti, UCT_PTL_RNDV_SW_MAGIC);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, op->size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, hdr));
@@ -628,12 +640,12 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
     ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
     ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
-    uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
     return UCS_ERR_IO_ERROR;
   }
 
-  ucs_debug("PTL: ep tag rndv request. iface pti=%d, tag=0x%016lx, op=%p",
-            iface->tag_rq.pti, tag, op);
+  ucs_debug("PTL: ep tag rndv request. iface pti=%d, tag=0x%016lx, op=%p, "
+            "buffer=%p, size=%lu, id=%lu",
+            iface->tag_rq.pti, tag, op, op->buffer, op->size, op->seqn);
 
   ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
@@ -700,9 +712,10 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   op->size       = iov[0].length;
 
   iface->tm.num_tags--;
-  ucs_debug("PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%08lx, "
-            "num tags=%d, op=%p",
-            iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op);
+  ucs_debug(
+          "PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%016lx, "
+          "num tags=%d, op=%p",
+          iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op);
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
@@ -1023,6 +1036,21 @@ int uct_ptl_am_ep_is_connected(const uct_ep_h                      tl_ep,
   }
 
   return is_connected;
+}
+
+ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
+                                       unsigned flags)
+{
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t);
+
+  if (!ucs_mpool_is_empty(&iface->super.ops_mp) &&
+      !ucs_mpool_is_empty(&iface->super.copyin_mp) && iface->tm.num_tags > 0) {
+    return UCS_ERR_BUSY;
+  }
+
+  uct_pending_req_queue_push(&iface->super.pending_q, req);
+  UCT_TL_EP_STAT_PEND(&ep->super);
+  return UCS_OK;
 }
 
 ucs_status_t uct_ptl_am_ep_check(uct_ep_h tl_ep, unsigned flags,

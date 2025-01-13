@@ -234,6 +234,7 @@ int uct_ptl_md_progress(uct_ptl_mmd_t *mmd)
       if (op->buffer != NULL) {
         ucs_mpool_put(op->buffer);
       }
+      ucs_debug("PTL: op complete. id=%lu, type=%d", op->seqn, op->type);
       ucs_mpool_put(op);
     }
   }
@@ -379,8 +380,8 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_iface_t)
 {
-  ucs_mpool_cleanup(&self->ops_mp, 0);
-  ucs_mpool_cleanup(&self->copyin_mp, 0);
+  ucs_mpool_cleanup(&self->ops_mp, 1);
+  ucs_mpool_cleanup(&self->copyin_mp, 1);
   return;
 }
 

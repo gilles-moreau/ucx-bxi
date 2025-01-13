@@ -31,6 +31,8 @@
 
 #define UCT_PTL_IFACE_TM_IS_ENABLED(iface) (iface)->tm.enabled
 
+#define UCT_PTL_IFACE_ACTIVATE(iface) (iface)->activated = 1
+
 enum {
   UCT_PTL_AM_SHORT = 0,
   UCT_PTL_AM_BCOPY,
@@ -94,6 +96,7 @@ typedef struct uct_ptl_am_iface {
   uct_ptl_mmd_t *rma_mmd;
   uct_ptl_rq_t   am_rq;
   uct_ptl_rq_t   tag_rq;
+  int            activated;
 } uct_ptl_am_iface_t;
 
 static inline int
