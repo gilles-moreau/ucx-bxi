@@ -21,6 +21,7 @@ typedef struct uct_ptl_recv_block {
   ptl_handle_me_t meh;
   ucs_list_link_t elem;
   uct_ptl_op_t    op;
+  int             id;
 } uct_ptl_recv_block_t;
 
 typedef struct uct_ptl_rq_param {
@@ -45,6 +46,7 @@ typedef struct uct_ptl_rq {
   ucs_mpool_t     mp;    // Memory pool of block buffer
   ucs_list_link_t bhead; // List of allocated blocks
   ptl_handle_eq_t eqh;
+  int             bid;
 } uct_ptl_rq_t;
 
 ucs_status_t uct_ptl_rq_init(uct_ptl_iface_t *iface, uct_ptl_rq_param_t *params,

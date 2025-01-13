@@ -15,8 +15,8 @@ typedef struct uct_ptl_am_ep {
     int id;
   } config;
   uct_ptl_am_iface_addr_t iface_addr;
-  uct_ptl_mmd_t *am_mmd;
-  uct_ptl_mmd_t *rma_mmd;
+  uct_ptl_mmd_t          *am_mmd;
+  uct_ptl_mmd_t          *rma_mmd;
 } uct_ptl_am_ep_t;
 
 ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
@@ -31,7 +31,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                      size_t iovcnt, uint64_t remote_addr,
                                      uct_rkey_t rkey, uct_completion_t *comp);
 
-ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h tl_ep,
+ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h              tl_ep,
                                      uct_unpack_callback_t unpack_cb, void *arg,
                                      size_t length, uint64_t remote_addr,
                                      uct_rkey_t rkey, uct_completion_t *comp);
@@ -68,8 +68,8 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h ep, uct_tag_t tag,
                                            uct_completion_t *comp);
 
 ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
-                                              const void *header,
-                                              unsigned header_length,
+                                              const void      *header,
+                                              unsigned         header_length,
                                               const uct_iov_t *iov,
                                               size_t iovcnt, unsigned flags,
                                               uct_completion_t *comp);
@@ -78,23 +78,23 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
 
 ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                             const void *header,
-                                            unsigned header_length,
-                                            unsigned flags);
+                                            unsigned    header_length,
+                                            unsigned    flags);
 
-ucs_status_t uct_ptl_am_iface_tag_create_oop_ctx(uct_iface_h tl_iface,
+ucs_status_t uct_ptl_am_iface_tag_create_oop_ctx(uct_iface_h    tl_iface,
                                                  uct_oop_ctx_h *oop_ctx_p);
-void uct_ptl_am_iface_tag_delete_oop_ctx(uct_iface_h tl_iface,
-                                         uct_oop_ctx_h tl_oop_ctx);
+void         uct_ptl_am_iface_tag_delete_oop_ctx(uct_iface_h   tl_iface,
+                                                 uct_oop_ctx_h tl_oop_ctx);
 
 ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                                              uct_tag_t tag, uct_tag_t tag_mask,
-                                             const uct_iov_t *iov,
-                                             size_t iovcnt,
+                                             const uct_iov_t   *iov,
+                                             size_t             iovcnt,
                                              uct_tag_context_t *ctx);
 
-ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h iface,
+ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        iface,
                                               uct_tag_context_t *ctx,
-                                              int force);
+                                              int                force);
 
 ucs_status_t uct_ptl_am_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                           uint32_t swap, uint64_t remote_addr,
@@ -119,7 +119,7 @@ ucs_status_t uct_ptl_am_ep_atomic32_fetch(uct_ep_h tl_ep, unsigned opcode,
                                           uint64_t remote_addr, uct_rkey_t rkey,
                                           uct_completion_t *comp);
 
-ucs_status_t uct_ptl_am_ep_atomic64_fetch(uct_ep_h tl_ep,
+ucs_status_t uct_ptl_am_ep_atomic64_fetch(uct_ep_h        tl_ep,
                                           uct_atomic_op_t opcode,
                                           uint64_t value, uint64_t *result,
                                           uint64_t remote_addr, uct_rkey_t rkey,
@@ -134,11 +134,14 @@ void uct_ptl_am_ep_post_check(uct_ep_h tl_ep);
 
 ucs_status_t uct_ptl_am_ep_get_address(uct_ep_h tl_ep, uct_ep_addr_t *addr);
 
-int uct_ptl_am_ep_is_connected(const uct_ep_h tl_ep,
+int uct_ptl_am_ep_is_connected(const uct_ep_h                      tl_ep,
                                const uct_ep_is_connected_params_t *params);
 
 ucs_status_t uct_ptl_am_ep_check(uct_ep_h tl_ep, unsigned flags,
                                  uct_completion_t *comp);
+
+ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
+                                       unsigned flags);
 
 UCS_CLASS_DECLARE(uct_ptl_am_ep_t, const uct_ep_params_t *);
 UCS_CLASS_DECLARE_NEW_FUNC(uct_ptl_am_ep_t, uct_ep_t, const uct_ep_params_t *);

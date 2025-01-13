@@ -100,6 +100,32 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     goto err;
   }
 
+  if (ucs_unlikely(!iface->activated)) {
+    ptl_handle_me_t meh;
+    ptl_me_t        me = {
+                   .ignore_bits = ~0,
+                   .match_id =
+                    {
+                                   .phys.nid = PTL_NID_ANY,
+                                   .phys.pid = PTL_PID_ANY,
+                    },
+                   .min_free = 0,
+                   .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
+                       PTL_ME_EVENT_OVER_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
+                       PTL_ME_EVENT_UNLINK_DISABLE,
+                   .uid = PTL_UID_ANY,
+    };
+
+    rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
+                                  iface->tag_rq.pti, &me, PTL_PRIORITY_LIST,
+                                  NULL, &meh));
+    if (rc != UCS_OK) {
+      goto err;
+    }
+
+    UCT_PTL_IFACE_ACTIVATE(iface);
+  }
+
   // TODO: check for truncated messages
   switch (ev->type) {
   case PTL_EVENT_ACK:
@@ -159,6 +185,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength,
                          UCS_OK, 0);
+        uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
       } else {
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
@@ -172,6 +199,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     if (op->comp != NULL) {
       uct_invoke_completion(op->comp, UCS_OK);
     }
+    iface->tm.num_tags++;
     ucs_mpool_put(op->buffer);
     ucs_mpool_put(op);
     break;
@@ -333,6 +361,15 @@ err:
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t)
 {
   void *recv_buffer;
+
+  while (!ucs_queue_is_empty(&self->am_mmd.opq)) {
+    uct_ptl_md_progress(&self->am_mmd);
+  }
+
+  while (!ucs_queue_is_empty(&self->rma_mmd->opq)) {
+    uct_ptl_md_progress(self->rma_mmd);
+  }
+
   uct_base_iface_progress_disable(&self->super.super.super,
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
 
@@ -341,6 +378,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t)
               self, recv_buffer);
   })
     ;
+
   kh_destroy_inplace(uct_ptl_am_tag_addrs, &self->tm.tag_addrs);
 
   uct_ptl_rq_fini(&self->am_rq);
@@ -533,6 +571,8 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   if (rc != UCS_OK)
     goto err;
 
+  self->activated = 0;
+
   ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d, "
             "tag pti=%d",
             self, ptl_ms->super.pid.phys.nid, ptl_ms->super.pid.phys.pid,
@@ -565,7 +605,7 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
         .ep_atomic_cswap32      = uct_ptl_am_ep_atomic_cswap32,
         .ep_atomic32_post       = uct_ptl_am_ep_atomic32_post,
         .ep_atomic32_fetch      = uct_ptl_am_ep_atomic32_fetch,
-        .ep_pending_add         = uct_ptl_ep_pending_add,
+        .ep_pending_add         = uct_ptl_am_ep_pending_add,
         .ep_pending_purge       = uct_ptl_ep_pending_purge,
         .ep_flush               = uct_ptl_am_ep_flush,
         .ep_fence               = uct_ptl_am_ep_fence,

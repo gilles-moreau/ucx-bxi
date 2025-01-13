@@ -339,12 +339,15 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
+    req->recv.uct_ctx.oop_ctx         = NULL;
+    req->recv.uct_ctx.flags           = 0;
     if (req->recv.op_attr & UCP_OP_ATTR_FIELD_OFFH) {
         status = ucp_offload_get_context(NULL, iov.buffer, iov.length, 
                                          &req->recv.uct_ctx.oop_ctx);
         if (status != UCS_OK) {
             return status;
         }
+        req->recv.uct_ctx.flags = UCT_TAG_OFFLOAD_OPERATION;
     }
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,
