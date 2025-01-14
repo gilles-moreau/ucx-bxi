@@ -90,40 +90,15 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   uct_tag_context_t     *tag_ctx;
   uct_ptl_am_hdr_rndv_t *hdr;
 
-  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d",
-            uct_ptl_event_str[ev->type], ev->mlength, ev->start, ev->pt_index);
+  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d, op id=%lu",
+            uct_ptl_event_str[ev->type], ev->mlength, ev->start, ev->pt_index,
+            op->seqn);
 
   if (ev->type == PTL_EVENT_PT_DISABLED) {
     ucs_error("PTL: event %s. Control flow not implemented.",
               uct_ptl_event_str[ev->type]);
     rc = UCS_ERR_IO_ERROR;
     goto err;
-  }
-
-  if (ucs_unlikely(!iface->activated && ev->type == PTL_EVENT_PUT)) {
-    ptl_handle_me_t meh;
-    ptl_me_t        me = {
-                   .ignore_bits = ~0,
-                   .match_id =
-                    {
-                                   .phys.nid = PTL_NID_ANY,
-                                   .phys.pid = PTL_PID_ANY,
-                    },
-                   .min_free = 0,
-                   .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
-                       PTL_ME_EVENT_OVER_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
-                       PTL_ME_EVENT_UNLINK_DISABLE,
-                   .uid = PTL_UID_ANY,
-    };
-
-    rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
-                                  iface->tag_rq.pti, &me, PTL_PRIORITY_LIST,
-                                  NULL, &meh));
-    if (rc != UCS_OK) {
-      goto err;
-    }
-
-    UCT_PTL_IFACE_ACTIVATE(iface);
   }
 
   // TODO: check for truncated messages
@@ -165,6 +140,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         memcpy(op->buffer, hdr + 1, hdr->header_length);
         op->tag.hdr_len = hdr->header_length;
         op->tag.tag     = ev->match_bits;
+        op->pti         = UCT_PTL_HDR_GET_AM_ID(ev->hdr_data);
 
         rc = uct_ptl_wrap(PtlGet(
                 iface->rma_mmd->mdh, (ptl_size_t)op->tag.buffer, hdr->length,
@@ -186,11 +162,13 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength,
                          UCS_OK, 0);
         uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
+        ucs_mpool_put(op);
       } else {
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->completed_cb(tag_ctx, ev->match_bits, ev->hdr_data,
                               ev->mlength, NULL, UCS_OK);
         uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
+        ucs_mpool_put(op);
       }
       iface->tm.num_tags++;
     }
