@@ -100,7 +100,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     goto err;
   }
 
-  if (ucs_unlikely(!iface->activated)) {
+  if (ucs_unlikely(!iface->activated && ev->type == PTL_EVENT_PUT)) {
     ptl_handle_me_t meh;
     ptl_me_t        me = {
                    .ignore_bits = ~0,
