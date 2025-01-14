@@ -712,13 +712,14 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   op->size       = iov[0].length;
 
   iface->tm.num_tags--;
+  rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
+                                iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
+                                &op->tag.meh));
+
   ucs_debug(
           "PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%016lx, "
           "num tags=%d, op=%p",
           iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op);
-  rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
-                                iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
-                                &op->tag.meh));
 
   *(uct_ptl_op_t **)ctx->priv = op;
 
