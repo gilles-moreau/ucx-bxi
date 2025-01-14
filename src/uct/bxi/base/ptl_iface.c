@@ -234,7 +234,8 @@ int uct_ptl_md_progress(uct_ptl_mmd_t *mmd)
       if (op->buffer != NULL) {
         ucs_mpool_put(op->buffer);
       }
-      ucs_debug("PTL: op complete. id=%lu, type=%d", op->seqn, op->type);
+      ucs_debug("PTL: op complete. op=%p, id=%lu, pti=%d, type=%d", op,
+                op->seqn, op->pti, op->type);
       ucs_mpool_put(op);
     }
   }

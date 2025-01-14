@@ -69,6 +69,7 @@ typedef enum {
 typedef struct uct_ptl_op {
   uct_ptl_op_type_t type; /* Type of operation */
   uct_completion_t *comp; /* Completion callback */
+  ptl_pt_index_t    pti;
   uct_ptl_ep_t     *ep;
   uct_ptl_mmd_t    *mmd;
   void             *buffer;

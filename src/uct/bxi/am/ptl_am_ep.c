@@ -76,6 +76,7 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.am_pti;
   size     = pack(op->buffer, arg);
   if (size < 0) {
     goto err;
@@ -93,6 +94,9 @@ ssize_t uct_ptl_am_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     size = UCS_ERR_IO_ERROR;
     goto err;
   }
+
+  ucs_debug("PTL: send am bcopy. op=%p, seqn=%lu, length=%lu", op, op->seqn,
+            size);
 
   ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 
@@ -176,6 +180,7 @@ ucs_status_t uct_ptl_am_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.rma_pti;
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
@@ -216,6 +221,7 @@ ssize_t uct_ptl_am_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.rma_pti;
   size     = pack_cb(op->buffer, arg);
   if (size < 0) {
     goto err;
@@ -263,6 +269,7 @@ ucs_status_t uct_ptl_am_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.rma_pti;
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
@@ -308,6 +315,7 @@ ucs_status_t uct_ptl_am_ep_get_bcopy(uct_ep_h              tl_ep,
   op->seqn             = ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1);
   op->get_bcopy.unpack = unpack_cb;
   op->get_bcopy.arg    = arg;
+  op->pti              = ep->iface_addr.rma_pti;
 
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
@@ -349,11 +357,15 @@ ucs_status_t uct_ptl_am_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->rma_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.rma_pti;
   if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_DATA)) {
     char buf[256] = {0};
     uct_log_data(__FILE__, __LINE__, __func__, buf);
   }
 
+  ucs_debug("PTL: get zcopy. op=%p, seqn=%lu, size=%lu, local addr=%p, remote "
+            "addr=%p",
+            op, op->seqn, iov[0].length, iov[0].buffer, (void *)remote_addr);
   rc = uct_ptl_wrap(PtlGet(ep->rma_mmd->mdh, (ptl_size_t)iov[0].buffer,
                            iov[0].length, ep->super.dev_addr.pid,
                            ep->iface_addr.rma_pti, 0, remote_addr, NULL));
@@ -401,14 +413,15 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
   }
 
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.tag_pti;
   size     = pack_cb(op->buffer, arg);
   if (size < 0) {
     goto err;
   }
 
-  ucs_debug(
-          "PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
-          iface->tag_rq.pti, tag, imm, op);
+  ucs_debug("PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
+            "op=%p, op id=%lu",
+            iface->tag_rq.pti, tag, imm, op, op->seqn);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, imm));
@@ -451,6 +464,7 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     goto err;
   }
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
+  op->pti  = ep->iface_addr.tag_pti;
 
   ucs_debug(
           "PTL: ep tag zcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
@@ -538,6 +552,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   op->tag.meh   = PTL_INVALID_HANDLE;
   op->type      = UCT_PTL_OP_RMA_PUT_ZCOPY_TAG;
+  op->pti       = ep->iface_addr.tag_pti;
   op->tag.flags = 0;
   op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   op->size      = uct_ptl_am_pack_rndv(op->buffer, (uint64_t)iov[0].buffer,
@@ -579,8 +594,8 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   }
 
   ucs_debug("PTL: ep tag rndv zcopy. iface src pti=%d, dest pti=%d, "
-            "tag=0x%016lx, op=%p",
-            iface->tag_rq.pti, ep->iface_addr.tag_pti, tag, op);
+            "tag=0x%016lx, op=%p, size=%lu",
+            iface->tag_rq.pti, ep->iface_addr.tag_pti, tag, op, iov[0].length);
 
 err:
   return (ucs_status_ptr_t)op;
@@ -629,6 +644,7 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   op->tag.flags = 0;
   op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   op->size      = header_length;
+  op->pti       = ep->iface_addr.tag_pti;
   memcpy(op->buffer, header, header_length);
 
   UCT_PTL_HDR_SET(hdr, 0, iface->tag_rq.pti, UCT_PTL_RNDV_SW_MAGIC);
@@ -667,6 +683,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   unsigned            ct_flags = 0;
   uct_ptl_oop_ctx_t  *oop_ctx;
   uct_ptl_op_t       *op;
+  static uint32_t     seqn = 0;
 
   ucs_assert(iov && iovcnt == 1);
   UCT_PTL_CHECK_TAG(iface);
@@ -710,6 +727,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   op->tag.tag    = tag;
   op->tag.buffer = iov[0].buffer;
   op->size       = iov[0].length;
+  op->seqn       = seqn++;
 
   iface->tm.num_tags--;
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
@@ -718,8 +736,9 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
 
   ucs_debug(
           "PTL: recv tag zcopy. iface pti=%d, tag=0x%016lx, ign tag=0x%016lx, "
-          "num tags=%d, op=%p",
-          iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op);
+          "num tags=%d, op=%p, buffer=%p, size=%lu, op id=%lu",
+          iface->tag_rq.pti, tag, tag_mask, iface->tm.num_tags, op,
+          iov[0].buffer, iov[0].length, op->seqn);
 
   *(uct_ptl_op_t **)ctx->priv = op;
 
