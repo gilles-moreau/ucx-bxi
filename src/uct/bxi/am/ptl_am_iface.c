@@ -1,4 +1,5 @@
 #include "ptl_am_iface.h"
+#include "portals4.h"
 #include "ptl_am_ep.h"
 #include "ptl_am_md.h"
 
@@ -13,7 +14,7 @@ ucs_config_field_t uct_ptl_am_iface_config_table[] = {
          ucs_offsetof(uct_ptl_am_iface_config_t, tm.enable),
          UCS_CONFIG_TYPE_BOOL},
 
-        {"TM_LIST_SIZE", "32",
+        {"TM_LIST_SIZE", "4",
          "Limits the number of tags posted to the HW for matching. The actual "
          "limit \n"
          "is a minimum between this value and the maximum value supported by "
@@ -74,6 +75,31 @@ static ucs_status_t uct_ptl_am_iface_cancel_ops(uct_ptl_iface_t *tl_iface)
   return UCS_OK;
 }
 
+static inline void
+uct_ptl_am_iface_remove_unexp_headers(uct_ptl_am_iface_t *iface,
+                                      ptl_match_bits_t    tag)
+{
+  ptl_handle_me_t dummy;
+  ptl_me_t        me = {
+                 .ct_handle   = PTL_CT_NONE,
+                 .ignore_bits = 0,
+                 .match_bits  = tag,
+                 .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
+                 .min_free = 0,
+                 .length   = 0,
+                 .start    = NULL,
+                 .uid      = PTL_UID_ANY,
+                 .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
+                     PTL_ME_EVENT_COMM_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
+                     PTL_ME_EVENT_FLOWCTRL_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
+                     PTL_ME_EVENT_UNLINK_DISABLE,
+  };
+
+  uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
+                           iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, NULL,
+                           &dummy));
+}
+
 static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
                                                    ptl_event_t     *ev)
 {
@@ -90,9 +116,8 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
   uct_tag_context_t     *tag_ctx;
   uct_ptl_am_hdr_rndv_t *hdr;
 
-  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d, op id=%lu",
-            uct_ptl_event_str[ev->type], ev->mlength, ev->start, ev->pt_index,
-            op->seqn);
+  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d",
+            uct_ptl_event_str[ev->type], ev->mlength, ev->start, ev->pt_index);
 
   if (ev->type == PTL_EVENT_PT_DISABLED) {
     ucs_error("PTL: event %s. Control flow not implemented.",
@@ -111,6 +136,12 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     break;
   case PTL_EVENT_PUT:
     if (op->type == UCT_PTL_OP_BLOCK) {
+      if (iface->tm.recv_tried_offload > 0) {
+        uct_ptl_am_iface_remove_unexp_headers(iface, ev->match_bits);
+        ucs_debug("PTL: remove hdr. op=%p, id=%lu, num tried=%d", op, op->seqn,
+                  iface->tm.recv_tried_offload);
+        iface->tm.recv_tried_offload--;
+      }
       if (is_hw_rndv) {
         hdr = ev->start;
         rc  = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
@@ -133,14 +164,11 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
       if (is_hw_rndv) {
         hdr = ev->start;
 
-        op->seqn   = ucs_atomic_fadd64(&iface->rma_mmd->seqn, 1);
-        op->type   = UCT_PTL_OP_RMA_GET_ZCOPY_TAG;
-        op->size   = hdr->length;
-        op->buffer = ucs_mpool_get(&iface->super.copyin_mp);
-        memcpy(op->buffer, hdr + 1, hdr->header_length);
-        op->tag.hdr_len = hdr->header_length;
-        op->tag.tag     = ev->match_bits;
-        op->pti         = UCT_PTL_HDR_GET_AM_ID(ev->hdr_data);
+        op->seqn    = ucs_atomic_fadd64(&iface->rma_mmd->seqn, 1);
+        op->type    = UCT_PTL_OP_RECV;
+        op->size    = hdr->length;
+        op->tag.tag = ev->match_bits;
+        op->pti     = UCT_PTL_HDR_GET_AM_ID(ev->hdr_data);
 
         rc = uct_ptl_wrap(PtlGet(
                 iface->rma_mmd->mdh, (ptl_size_t)op->tag.buffer, hdr->length,
@@ -158,6 +186,7 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
         }
         ucs_queue_push(&iface->rma_mmd->opq, &op->elem);
       } else if (is_sw_rndv) {
+        ucs_debug("PTL: matched. op=%p, id=%lu, pti=%d", op, op->seqn, op->pti);
         tag_ctx->tag_consumed_cb(tag_ctx);
         tag_ctx->rndv_cb(tag_ctx, ev->match_bits, ev->start, ev->mlength,
                          UCS_OK, 0);
@@ -174,12 +203,11 @@ static ucs_status_t uct_ptl_am_iface_handle_tag_ev(uct_ptl_iface_t *super,
     }
     break;
   case PTL_EVENT_GET:
+    ucs_mpool_put(op);
     if (op->comp != NULL) {
       uct_invoke_completion(op->comp, UCS_OK);
     }
-    iface->tm.num_tags++;
-    ucs_mpool_put(op->buffer);
-    ucs_mpool_put(op);
+    iface->tm.num_get_tags++;
     break;
   case PTL_EVENT_REPLY:
   case PTL_EVENT_AUTO_UNLINK:
@@ -359,6 +387,8 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t)
 
   kh_destroy_inplace(uct_ptl_am_tag_addrs, &self->tm.tag_addrs);
 
+  ucs_mpool_cleanup(&self->super.copyin_mp, 1);
+
   uct_ptl_rq_fini(&self->am_rq);
   uct_ptl_rq_fini(&self->tag_rq);
 
@@ -387,7 +417,6 @@ static ucs_status_t uct_ptl_am_iface_query(uct_iface_h       tl_iface,
   attr->cap.tag.rndv.max_zcopy = iface->super.config.max_msg_size;
 
   /* TMH can carry 2 additional bytes of private data */
-  attr->cap.tag.rndv.max_hdr         = 128;
   attr->cap.tag.rndv.max_iov         = 1;
   attr->cap.tag.rndv.max_zcopy       = iface->super.config.max_msg_size;
   attr->cap.tag.recv.max_zcopy       = iface->super.config.max_msg_size;
@@ -431,21 +460,40 @@ uct_ptl_am_iface_tag_init(uct_ptl_am_iface_t              *iface,
                           const uct_iface_params_t        *params,
                           const uct_ptl_am_iface_config_t *tl_config)
 {
+  ucs_status_t       rc;
+  ucs_mpool_params_t mp_param;
+
   iface->tm.eager_unexp.cb = params->eager_cb;
   iface->tm.rndv_unexp.cb  = params->rndv_cb;
   iface->tm.eager_unexp.arg =
           UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
   iface->tm.rndv_unexp.arg =
           UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
-  iface->tm.unexpected_cnt  = 0;
-  iface->tm.num_outstanding = 0;
-  iface->tm.num_tags        = tl_config->tm.list_size;
-  iface->tm.rndv_tag        = 0;
+  iface->tm.unexpected_cnt     = 0;
+  iface->tm.num_outstanding    = 0;
+  iface->tm.num_tags           = tl_config->tm.list_size;
+  iface->tm.num_get_tags       = tl_config->tm.list_size;
+  iface->tm.rndv_tag           = 0;
+  iface->tm.recv_tried_offload = 0;
 
   kh_init_inplace(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs);
   ucs_queue_head_init(&iface->tm.canceled_ops);
 
-  return UCS_OK;
+  /* Work pool of operation. */
+  mp_param = (ucs_mpool_params_t){
+          .max_chunk_size  = iface->tm.num_tags * sizeof(uct_ptl_op_t),
+          .elems_per_chunk = iface->tm.num_tags,
+          .max_elems       = iface->tm.num_tags,
+          .elem_size       = sizeof(uct_ptl_op_t),
+          .alignment       = 64,
+          .align_offset    = 0,
+          .ops             = &uct_ptl_am_mpool_ops,
+          .name            = "ptl-ops",
+          .grow_factor     = 1,
+  };
+  rc = ucs_mpool_init(&mp_param, &iface->tm.recv_ops_mp);
+
+  return rc;
 }
 
 static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
@@ -479,7 +527,10 @@ static UCS_CLASS_INIT_FUNC(uct_ptl_am_iface_t, uct_md_h tl_md,
   self->tm.enabled                    = ptl_config->tm.enable;
   self->tm.oop_ctx_cnt                = ptl_config->tm.max_oop_ctx;
 
-  uct_ptl_am_iface_tag_init(self, params, ptl_config);
+  rc = uct_ptl_am_iface_tag_init(self, params, ptl_config);
+  if (rc != UCS_OK) {
+    goto err;
+  }
 
   /* Set internal ptl operations */
   self->super.ops.handle_ev  = uct_ptl_am_iface_handle_event;
@@ -606,6 +657,7 @@ static uct_iface_ops_t uct_ptl_am_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_ptl_am_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_ptl_am_iface_tag_recv_cancel,
+        .iface_tag_recv_overflow  = uct_ptl_am_iface_tag_recv_overflow,
         .iface_tag_create_oop     = uct_ptl_am_iface_tag_create_oop_ctx,
         .iface_tag_delete_oop     = uct_ptl_am_iface_tag_delete_oop_ctx,
 };
@@ -627,7 +679,7 @@ static uct_ptl_iface_ops_t uct_ptl_am_iface_ops = {
                                         ucs_empty_function_return_unsupported,
                         .ep_is_connected = uct_ptl_am_ep_is_connected,
                 },
-        .handle_ev      = uct_ptl_am_iface_handle_ev,
+        .handle_ev      = uct_ptl_am_iface_handle_ev, //FIXME: this is overriden
         .handle_failure = uct_ptl_am_handle_failure,
         .cancel_ops     = uct_ptl_am_iface_cancel_ops,
 };

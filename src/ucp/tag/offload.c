@@ -440,6 +440,15 @@ ucp_tag_offload_post_sw_reqs(ucp_request_t *req, ucp_request_queue_t *req_queue)
     return 1;
 }
 
+static UCS_F_ALWAYS_INLINE void
+ucp_tag_offload_recv_overflow(ucp_worker_h worker, ucp_request_t *req) {
+    ucp_worker_iface_t *wiface;
+    wiface = ucp_tag_offload_iface(worker, req->recv.tag.tag);
+    if (wiface->iface->ops.iface_tag_recv_overflow != NULL) {
+       uct_iface_tag_recv_overflow(wiface->iface);
+    }
+}
+
 UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
                  ucp_request_t *req, ucp_request_queue_t *req_queue)
 {
@@ -449,6 +458,7 @@ UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
     if (req->recv.dt_iter.dt_class != UCP_DATATYPE_CONTIG) {
         /* Non-contig buffers not supported yet. */
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_NON_CONTIG);
+        ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 
@@ -456,21 +466,25 @@ UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
         if (!ucp_tag_is_specific_source(context, req->recv.tag.tag_mask)) {
             /* Sender rank wildcard */
             UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_WILDCARD);
+            ucp_tag_offload_recv_overflow(worker, req);
             return 0;
         } else if (worker->tm.expected.sw_all_count) {
             /* There are some requests which must be completed in SW.
              * Do not post tags to HW until they are completed. */
             UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_SW_PEND);
+            ucp_tag_offload_recv_overflow(worker, req);
             return 0;
         }
     } else if (worker->tm.expected.wildcard.sw_count ||
                (req_queue->sw_count && !ucp_tag_offload_post_sw_reqs(req, req_queue))) {
         /* There are some requests which must be completed in SW */
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_SW_PEND);
+        ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 
     if (ucp_tag_offload_do_post(req) != UCS_OK) {
+        ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 

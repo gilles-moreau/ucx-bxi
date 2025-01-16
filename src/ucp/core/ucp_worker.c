@@ -1381,6 +1381,10 @@ ucs_status_t ucp_worker_iface_open(ucp_worker_h worker, ucp_rsc_index_t tl_id,
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_ARG  |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_CB   |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_EAGER_CB;
+
+        if (worker->context->config.ext.tm_init_activate) {
+            ucp_tag_offload_iface_activate(wiface);
+        }
     }
 
     iface_params.async_event_arg   = wiface;
@@ -2597,6 +2601,14 @@ ucs_status_t ucp_worker_create(ucp_context_h context,
     ucs_conn_match_init(&worker->conn_match_ctx, sizeof(uint64_t),
                         UCP_EP_MATCH_CONN_SN_MAX, &ucp_ep_match_ops);
 
+    /* Initialize tag matching */
+    //FIXME: reset to normal order once all ok. Here needed to init tm field 
+    //before activating.
+    status = ucp_tag_match_init(&worker->tm);
+    if (status != UCS_OK) {
+        goto err_destroy_mpools;
+    }
+
     /* Open all resources as interfaces on this worker */
     status = ucp_worker_add_resource_ifaces(worker);
     if (status != UCS_OK) {
@@ -2619,12 +2631,6 @@ ucs_status_t ucp_worker_create(ucp_context_h context,
     status = ucp_worker_init_mpools(worker);
     if (status != UCS_OK) {
         goto err_destroy_memtype_eps;
-    }
-
-    /* Initialize tag matching */
-    status = ucp_tag_match_init(&worker->tm);
-    if (status != UCS_OK) {
-        goto err_destroy_mpools;
     }
 
     /* Initialize UCP AMs */

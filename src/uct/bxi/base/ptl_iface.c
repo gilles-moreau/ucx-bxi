@@ -35,12 +35,12 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
          ucs_offsetof(uct_ptl_iface_config_t, max_outstanding_ops),
          UCS_CONFIG_TYPE_UINT},
 
-        {"COPYIN_BUF_PER_BLOCK", "16",
+        {"COPYIN_BUF_PER_BLOCK", "8",
          "Number of copyin buffers allocated per block (default: 2)",
          ucs_offsetof(uct_ptl_iface_config_t, copyin_buf_per_block),
          UCS_CONFIG_TYPE_UINT},
 
-        {"COPYOUT_BUF_PER_BLOCK", "16",
+        {"COPYOUT_BUF_PER_BLOCK", "8",
          "Number of copyout buffers allocated per block (default: 2)",
          ucs_offsetof(uct_ptl_iface_config_t, copyout_buf_per_block),
          UCS_CONFIG_TYPE_UINT},
@@ -50,12 +50,12 @@ ucs_config_field_t uct_ptl_iface_config_table[] = {
          ucs_offsetof(uct_ptl_iface_config_t, min_copyin_buf),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_COPYIN_BUF", "512",
+        {"MAX_COPYIN_BUF", "8",
          "Maximum number of copyin buffers per working queues (default: 8)",
          ucs_offsetof(uct_ptl_iface_config_t, max_copyin_buf),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_COPYOUT_BUF", "512",
+        {"MAX_COPYOUT_BUF", "64",
          "Maximum number of copyout buffers per working queues (default: 8)",
          ucs_offsetof(uct_ptl_iface_config_t, max_copyout_buf),
          UCS_CONFIG_TYPE_UINT},
@@ -189,10 +189,11 @@ ucs_status_t uct_ptl_iface_get_device_address(uct_iface_h        tl_iface,
 
 int uct_ptl_md_progress(uct_ptl_mmd_t *mmd)
 {
-  ucs_status_t     rc = UCS_OK;
-  ucs_queue_iter_t iter;
-  uct_ptl_op_t    *op;
-  int              progressed = 0;
+  ucs_status_t      rc = UCS_OK;
+  ucs_queue_iter_t  iter;
+  uct_ptl_op_t     *op;
+  int               progressed = 0;
+  uct_completion_t *comp;
 
   if (ucs_queue_is_empty(&mmd->opq)) {
     return progressed;
@@ -215,28 +216,35 @@ int uct_ptl_md_progress(uct_ptl_mmd_t *mmd)
       progressed++;
 
       switch (op->type) {
+      case UCT_PTL_OP_RMA_PUT_ZCOPY_TAG:
+        ucs_debug("PTL: op put buffer. op=%p, id=%lu", op, op->seqn);
+        ucs_mpool_put(op->buffer);
+        continue;
+        break;
       case UCT_PTL_OP_RMA_GET_BCOPY:
         op->get_bcopy.unpack(op->get_bcopy.arg, op->buffer, op->size);
         break;
-      case UCT_PTL_OP_RMA_GET_ZCOPY_TAG:
+      case UCT_PTL_OP_RECV:
         op->tag.ctx->tag_consumed_cb(op->tag.ctx);
         op->tag.ctx->completed_cb(op->tag.ctx, op->tag.tag, 0, op->size, NULL,
                                   UCS_OK);
-        goto err;
         break;
       default:
         break;
       }
 
-      if (op->comp != NULL) {
-        uct_invoke_completion(op->comp, UCS_OK);
-      }
+      comp = op->comp;
+
       if (op->buffer != NULL) {
         ucs_mpool_put(op->buffer);
       }
       ucs_debug("PTL: op complete. op=%p, id=%lu, pti=%d, type=%d", op,
                 op->seqn, op->pti, op->type);
       ucs_mpool_put(op);
+
+      if (comp != NULL) {
+        uct_invoke_completion(comp, UCS_OK);
+      }
     }
   }
 
@@ -382,7 +390,6 @@ err:
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_iface_t)
 {
   ucs_mpool_cleanup(&self->ops_mp, 1);
-  ucs_mpool_cleanup(&self->copyin_mp, 1);
   return;
 }
 

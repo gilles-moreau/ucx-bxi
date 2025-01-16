@@ -3575,6 +3575,21 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
 
 /**
  * @ingroup UCT_TAG
+ * @brief Handle overflow tag.
+ *
+ * This routine informs the transport that a overflow event will be delivered 
+ * because of an unsuccessful offload.
+ *
+ * @param [in]  iface     Interface to cancel the tag on.
+ *
+ */
+UCT_INLINE_API void uct_iface_tag_recv_overflow(uct_iface_h tl_iface) 
+{
+    return tl_iface->ops.iface_tag_recv_overflow(tl_iface);
+}
+
+/**
+ * @ingroup UCT_TAG
  * @brief Create an Offload Operation Context to a transport interface.
  *
  * This routine creates the necessary resources on a transport interface to be 

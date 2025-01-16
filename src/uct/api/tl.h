@@ -192,6 +192,8 @@ typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
                                                          uct_tag_context_t *ctx,
                                                          int force);
 
+typedef void (*uct_iface_tag_recv_overflow_func_t)(uct_iface_h iface);
+
 typedef ucs_status_t (*uct_iface_tag_create_oop_ctx_func_t)(uct_iface_h iface,
                                                             uct_oop_ctx_h *oop_ctx_p);
 typedef void (*uct_iface_tag_delete_oop_ctx_func_t)(uct_iface_h iface,
@@ -334,6 +336,7 @@ typedef struct uct_iface_ops {
     /* interface - tagged operations */
     uct_iface_tag_recv_zcopy_func_t     iface_tag_recv_zcopy;
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
+    uct_iface_tag_recv_overflow_func_t  iface_tag_recv_overflow;
     uct_iface_tag_create_oop_ctx_func_t iface_tag_create_oop;
     uct_iface_tag_delete_oop_ctx_func_t iface_tag_delete_oop;
 

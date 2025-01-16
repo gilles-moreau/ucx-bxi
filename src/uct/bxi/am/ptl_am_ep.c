@@ -422,6 +422,7 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ucs_debug("PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
             "op=%p, op id=%lu",
             iface->tag_rq.pti, tag, imm, op, op->seqn);
+
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
                            PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
                            ep->iface_addr.tag_pti, tag, 0, op, imm));
@@ -533,7 +534,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   assert(iovcnt <= 1);
 
-  if (iface->tm.num_tags == 0) {
+  if (iface->tm.num_get_tags == 0) {
     op = (uct_ptl_op_t *)UCS_ERR_NO_RESOURCE;
     goto err;
   }
@@ -572,7 +573,7 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE,
   };
 
-  iface->tm.num_tags--;
+  iface->tm.num_get_tags--;
   rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
                                 iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
                                 &op->tag.meh));
@@ -594,9 +595,11 @@ ucs_status_ptr_t uct_ptl_am_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   }
 
   ucs_debug("PTL: ep tag rndv zcopy. iface src pti=%d, dest pti=%d, "
-            "tag=0x%016lx, op=%p, size=%lu",
-            iface->tag_rq.pti, ep->iface_addr.tag_pti, tag, op, iov[0].length);
+            "tag=0x%016lx, op=%p, size=%lu, op id=%lu, num get tags=%d",
+            iface->tag_rq.pti, ep->iface_addr.tag_pti, tag, op, iov[0].length,
+            op->seqn, iface->tm.num_get_tags);
 
+  ucs_queue_push(&ep->am_mmd->opq, &op->elem);
 err:
   return (ucs_status_ptr_t)op;
 }
@@ -609,11 +612,10 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 
   if (!PtlHandleIsEqual(op->tag.meh, PTL_INVALID_HANDLE)) {
     uct_ptl_wrap(PtlMEUnlink(op->tag.meh));
-    iface->tm.num_tags++;
+    iface->tm.num_get_tags++;
   }
 
   ucs_debug("PTL: (C) op complete. id=%lu, type=%d", op->seqn, op->type);
-  ucs_mpool_put(op->buffer);
   ucs_mpool_put(op);
   return UCS_OK;
 }
@@ -640,7 +642,7 @@ ucs_status_t uct_ptl_am_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
     goto err;
   }
 
-  op->type      = UCT_PTL_OP_RMA_PUT_ZCOPY_TAG;
+  op->type      = UCT_PTL_OP_RMA_PUT_RNDV_REQ;
   op->tag.flags = 0;
   op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   op->size      = header_length;
@@ -688,13 +690,10 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
   ucs_assert(iov && iovcnt == 1);
   UCT_PTL_CHECK_TAG(iface);
 
-  kh_put(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, iov->buffer, &ret);
-  if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
-    /* Do not post the same buffer more than once (even with different tags)
-     * to avoid memory corruption. */
-    return UCS_ERR_ALREADY_EXISTS;
+  ret = uct_ptl_am_iface_tag_add_to_hash(iface, iov[0].buffer);
+  if (ret != UCS_OK) {
+    return ret;
   }
-  ucs_assert(ret != UCS_KH_PUT_FAILED);
 
   if (ctx->oop_ctx != NULL && ctx->flags == UCT_TAG_OFFLOAD_OPERATION) {
     /* User specified a context to offload operations. */
@@ -718,11 +717,16 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
                      PTL_ME_EVENT_UNLINK_DISABLE | ct_flags,
   };
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_RECV, 0, NULL, ctx, &iface->super, NULL,
-                             NULL, &op);
-  if (rc != UCS_OK) {
+  op = ucs_mpool_get(&iface->tm.recv_ops_mp);
+  if (op == NULL) {
+    rc = UCS_ERR_NO_RESOURCE;
     goto err;
   }
+  op->comp       = NULL;
+  op->ep         = NULL;
+  op->type       = UCT_PTL_OP_RECV;
+  op->buffer     = NULL;
+  op->tag.ctx    = ctx;
   op->tag.flags  = 0;
   op->tag.tag    = tag;
   op->tag.buffer = iov[0].buffer;
@@ -742,7 +746,10 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
 
   *(uct_ptl_op_t **)ctx->priv = op;
 
+  return rc;
+
 err:
+  uct_ptl_am_iface_tag_del_from_hash(iface, iov[0].buffer);
   return rc;
 }
 
@@ -757,6 +764,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 
   //NOTE: there is no error checking here because the ME might have been
   //unlinked already during the receive call.
+  //FIXME: actually no. Recheck
   PtlMEUnlink(op->tag.meh);
 
   iface->tm.num_tags++;
@@ -764,8 +772,13 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     op->tag.cancel = 1;
   }
 
+  ucs_debug("PTL: recv tag cancel. iface pti=%d, tag=0x%016lx, "
+            "num tags=%d, op=%p, buffer=%p, size=%lu, op id=%lu",
+            iface->tag_rq.pti, op->tag.tag, iface->tm.num_tags, op,
+            op->tag.buffer, op->size, op->seqn);
+
+  uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
   if (force) {
-    uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
     ucs_mpool_put(op);
   } else {
     // Push it to cancel queue to make it complete if necessary during the
@@ -774,6 +787,13 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   }
 err:
   return rc;
+}
+
+void uct_ptl_am_iface_tag_recv_overflow(uct_iface_h tl_iface)
+{
+  uct_ptl_am_iface_t *iface = ucs_derived_of(tl_iface, uct_ptl_am_iface_t);
+
+  iface->tm.recv_tried_offload++;
 }
 
 ucs_status_t uct_ptl_am_iface_tag_create_oop_ctx(uct_iface_h    tl_iface,
@@ -1064,7 +1084,8 @@ ucs_status_t uct_ptl_am_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
   uct_ptl_am_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_ptl_am_iface_t);
 
   if (!ucs_mpool_is_empty(&iface->super.ops_mp) &&
-      !ucs_mpool_is_empty(&iface->super.copyin_mp) && iface->tm.num_tags > 0) {
+      !ucs_mpool_is_empty(&iface->super.copyin_mp) &&
+      iface->tm.num_get_tags > 0) {
     return UCS_ERR_BUSY;
   }
 
