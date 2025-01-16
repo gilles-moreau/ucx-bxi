@@ -65,6 +65,11 @@ typedef struct uct_ptl_am_iface_config {
   } tm;
 } uct_ptl_am_iface_config_t;
 
+typedef struct uct_ptl_sw_tag_desc {
+  uint64_t tag;
+  uint64_t tag_mask;
+} uct_ptl_sw_tag_desc;
+
 #define uct_ptl_am_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
 KHASH_INIT(uct_ptl_am_tag_addrs, void *, char, 0, uct_ptl_am_tag_addr_hash,
            kh_int64_hash_equal)
@@ -79,6 +84,7 @@ typedef struct uct_ptl_am_iface {
     unsigned int                  num_outstanding;
     unsigned int                  unexpected_cnt;
     unsigned int                  num_tags;
+    unsigned int                  num_get_tags;
     khash_t(uct_ptl_am_tag_addrs) tag_addrs;
     ucs_queue_head_t              canceled_ops;
     unsigned int                  oop_ctx_cnt;
@@ -91,6 +97,8 @@ typedef struct uct_ptl_am_iface {
       void                   *arg; /* User defined arg */
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
+    ucs_mpool_t  recv_ops_mp;
+    unsigned int recv_tried_offload;
   } tm;
   uct_ptl_mmd_t  am_mmd;
   uct_ptl_mmd_t *rma_mmd;
@@ -109,6 +117,20 @@ uct_ptl_am_iface_cmp_iface_addr(uct_ptl_am_iface_addr_t *addr1,
 ucs_status_t uct_ptl_am_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                     uct_completion_t *comp);
 ucs_status_t uct_ptl_am_iface_fence(uct_iface_h tl_iface, unsigned flags);
+
+static UCS_F_ALWAYS_INLINE ucs_status_t
+uct_ptl_am_iface_tag_add_to_hash(uct_ptl_am_iface_t *iface, void *buffer)
+{
+  int ret;
+  kh_put(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, buffer, &ret);
+  if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
+    /* Do not post the same buffer more than once (even with different tags)
+     * to avoid memory corruption. */
+    return UCS_ERR_ALREADY_EXISTS;
+  }
+  ucs_assert(ret != UCS_KH_PUT_FAILED);
+  return UCS_OK;
+}
 
 static UCS_F_ALWAYS_INLINE void
 uct_ptl_am_iface_tag_del_from_hash(uct_ptl_am_iface_t *iface, void *buffer)

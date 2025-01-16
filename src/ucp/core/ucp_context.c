@@ -333,6 +333,11 @@ static ucs_config_field_t ucp_context_config_table[] = {
    "selected automatically according to the performance characteristics.",
    ucs_offsetof(ucp_context_config_t, tm_sw_rndv), UCS_CONFIG_TYPE_TERNARY},
 
+  {"TM_ACTIVATE_INIT", "n",
+   "Activate tag-matching on worker initialization instead of on the first unexpected "
+    "message.",
+   ucs_offsetof(ucp_context_config_t, tm_init_activate), UCS_CONFIG_TYPE_BOOL},
+
   {"NUM_EPS", "auto",
    "An optimization hint of how many endpoints would be created on this context.\n"
    "Does not affect semantics, but only transport selection criteria and the\n"

@@ -8,7 +8,6 @@ enum {
                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
                      PTL_ME_IS_ACCESSIBLE,
   ECR_PTL_BLOCK_TAG = PTL_ME_OP_PUT | PTL_ME_EVENT_LINK_DISABLE |
-                      PTL_ME_UNEXPECTED_HDR_DISABLE |
                       PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
                       PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE,
 };

@@ -24,9 +24,6 @@ static ucs_status_t uct_ptl_recv_block_init(uct_ptl_rq_t          *rq,
   block->op.type = UCT_PTL_OP_BLOCK;
   block->id      = rq->bid++;
 
-  ucs_debug("PTL: init block. bid=%d, pti=%d, start=%p", block->id, rq->pti,
-            block->start);
-
   *block_p = block;
 
 err:

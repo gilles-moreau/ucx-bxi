@@ -96,6 +96,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        iface,
                                               uct_tag_context_t *ctx,
                                               int                force);
 
+void uct_ptl_am_iface_tag_recv_overflow(uct_iface_h tl_iface);
+
 ucs_status_t uct_ptl_am_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                           uint32_t swap, uint64_t remote_addr,
                                           uct_rkey_t rkey, uint32_t *result,
