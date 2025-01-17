@@ -60,9 +60,10 @@ static ucs_status_t ucp_tcache_check_overlap(ucp_tcache_t *tcache, void *arg,
   ucp_tcache_region_t *region;
   ucs_list_link_t      region_list;
 
-  ucs_trace_func("tcache=%s, *start=0x%lx, *end=0x%lx", tcache->name, *start,
-                 *end);
+  ucs_trace_func("ucp_tcache: overlap. tcache=%s, *start=0x%lx, *end=0x%lx",
+                 tcache->name, *start, *end);
 
+  ucs_list_head_init(&region_list);
   ucp_tcache_find_regions(tcache, *start, *end - 1, &region_list);
 
   if (!ucs_list_is_empty(&region_list)) {
@@ -89,10 +90,10 @@ ucs_status_t ucp_tcache_create_region(ucp_tcache_t *tcache, void *address,
   int                  error;
   size_t               region_size;
 
-  ucs_trace_func("tcache=%s, address=%p, length=%zu", tcache->name, address,
-                 length);
-
   pthread_rwlock_wrlock(&tcache->pgt_lock);
+  /* Align to page size */
+  start  = ucs_align_down_pow2((uintptr_t)address, UCS_PGT_ADDR_ALIGN);
+  end    = ucs_align_up_pow2((uintptr_t)address + length, UCS_PGT_ADDR_ALIGN);
   region = NULL;
 
   /* Check overlap with existing regions */
@@ -150,6 +151,9 @@ ucs_status_t ucp_tcache_create_region(ucp_tcache_t *tcache, void *address,
   region->flags    |= UCP_TCACHE_REGION_FLAG_OFFLOADED;
   region->refcount  = 2; /* Page-table + user */
 
+  ucs_trace("ucp_tcache: created region tcache=%s, [%zu..%zu]", tcache->name,
+            region->super.start, region->super.end);
+
 out_set_region:
   *region_p = region;
 out_unlock:
@@ -169,12 +173,13 @@ ucs_status_t ucp_tcache_get(ucp_tcache_t *tcache, void *address, size_t length,
   ucs_pgt_region_t    *pgt_region;
   ucp_tcache_region_t *region;
 
-  ucs_trace_func("tcache=%s, address=%p, length=%zu", tcache->name, address,
-                 length);
+  ucs_trace("tcache get. tcache=%s, address=%p, length=%zu", tcache->name,
+            address, length);
 
   pthread_rwlock_rdlock(&tcache->pgt_lock);
   pgt_region = UCS_PROFILE_CALL(ucs_pgtable_lookup, &tcache->pgtable, start);
   if (ucs_likely(pgt_region != NULL)) {
+    ucs_trace("tcache: found region.");
     region = ucs_derived_of(pgt_region, ucp_tcache_region_t);
     if ((start + length) <= region->super.end) {
       *region_p = region;
@@ -410,6 +415,8 @@ ucs_status_t ucp_tcache_create(const ucp_tcache_params_t *params,
              ucs_status_string(status));
     goto err_destroy_mp;
   }
+
+  *tcache_p = tcache;
 
   return status;
 err_destroy_mp:

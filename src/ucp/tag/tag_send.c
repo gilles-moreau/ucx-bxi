@@ -290,8 +290,15 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
     });
 
     if (param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH) {
-        req->flags |= UCP_REQUEST_FLAG_TRIGGERED;
+        ucs_assert(param->offh != NULL);
+        status = ucp_offload_get_context(param->offh, (void *)buffer, contig_length, 
+                                         &req->send.state.uct_comp.oop_ctx);
+        if (status != UCS_OK) { 
+            ret = UCS_STATUS_PTR(status);
+            goto out;
+        }
         req->send.tag_offload.ctx = param->offh;
+        req->send.tag_offload.flags = UCT_TAG_OFFLOAD_OPERATION;
     }
 
     if (worker->context->config.ext.proto_enable) {

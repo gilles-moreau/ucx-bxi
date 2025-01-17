@@ -361,6 +361,7 @@ struct ucp_request {
                     void              *rndv_op;  /* Handler of issued rndv send. Need to cancel
                                                     the operation if it is completed by SW. */
                     ucp_offload_context_h ctx;   /* Offload context for triggered operation. */
+                    unsigned flags;
                 } tag_offload;
 
                 struct {
@@ -394,6 +395,7 @@ struct ucp_request {
             uint32_t              op_attr;  /* Operation attributes */
             ucp_datatype_iter_t   dt_iter;
             ucp_worker_t          *worker;
+            ucp_offload_context_h offh;
             uct_tag_context_t     uct_ctx;  /* Transport offload context */
 
             union {

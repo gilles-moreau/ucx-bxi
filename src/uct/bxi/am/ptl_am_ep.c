@@ -467,11 +467,11 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
   op->pti  = ep->iface_addr.tag_pti;
 
-  ucs_debug(
-          "PTL: ep tag zcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, op=%p",
-          iface->tag_rq.pti, tag, imm, op);
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
     oop_ctx = ucs_derived_of(comp->oop_ctx, uct_ptl_oop_ctx_t);
+    ucs_debug("PTL: ep tag zcopy trig. iface pti=%d, tag=0x%016lx, "
+              "imm=0x%016lx, op=%p, oop thresh=%lu",
+              iface->tag_rq.pti, tag, imm, op, oop_ctx->threshold);
     ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
 
     rc = uct_ptl_wrap(PtlTriggeredPut(
@@ -479,6 +479,9 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
             PTL_CT_ACK_REQ, ep->super.dev_addr.pid, ep->iface_addr.tag_pti, tag,
             0, op, imm, oop_ctx->cth, oop_ctx->threshold));
   } else {
+    ucs_debug("PTL: ep tag zcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
+              "op=%p",
+              iface->tag_rq.pti, tag, imm, op);
     rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)iov->buffer,
                              iov->length, PTL_CT_ACK_REQ,
                              ep->super.dev_addr.pid, ep->iface_addr.tag_pti,
@@ -777,8 +780,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_cancel(uct_iface_h        tl_iface,
             iface->tag_rq.pti, op->tag.tag, iface->tm.num_tags, op,
             op->tag.buffer, op->size, op->seqn);
 
-  uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
   if (force) {
+    uct_ptl_am_iface_tag_del_from_hash(iface, op->tag.buffer);
     ucs_mpool_put(op);
   } else {
     // Push it to cancel queue to make it complete if necessary during the

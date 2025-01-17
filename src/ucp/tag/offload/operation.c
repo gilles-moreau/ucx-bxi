@@ -71,6 +71,7 @@ void ucp_offload_context_fini(ucp_offload_context_h ctx)
   ucs_free(ctx);
 }
 
+//FIXME: move buffer to const
 ucs_status_t ucp_offload_get_context(ucp_offload_context_h ctx, void *address,
                                      size_t length, uct_oop_ctx_h *oop_ctx_p)
 {
