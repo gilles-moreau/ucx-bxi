@@ -111,7 +111,8 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
-                                        ucp_eager_tag_offload_pack, req, 0);
+                                        ucp_eager_tag_offload_pack, req, 
+                                        req->send.tag_offload.flags);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }
@@ -280,7 +281,8 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
 {
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                        spriv->super.lane),
-                                  req->send.msg_proto.tag, 0ul, iov, 1, 0,
+                                  req->send.msg_proto.tag, 0ul, iov, 1, 
+                                  req->send.tag_offload.flags,
                                   &req->send.state.uct_comp);
 }
 

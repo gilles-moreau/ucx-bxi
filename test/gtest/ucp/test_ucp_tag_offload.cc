@@ -485,7 +485,7 @@ UCS_TEST_P(test_ucp_tag_offload_triggered, send_trig)
     // intercepted.
     ASSERT_UCS_OK(make_offload_context(receiver(), &off_ctx));
 
-    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 1;
+    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 10;
     const ucp_tag_t ftag = 0x11, btag = 0x22;
     std::vector<uint8_t> sendbuf(length);
     std::vector<uint8_t> recvbuf(length);

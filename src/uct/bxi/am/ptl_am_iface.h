@@ -123,6 +123,7 @@ uct_ptl_am_iface_tag_add_to_hash(uct_ptl_am_iface_t *iface, void *buffer)
 {
   int ret;
   kh_put(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, buffer, &ret);
+  ucs_debug("PTL: put tag addr. addr=%p", buffer);
   if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
     /* Do not post the same buffer more than once (even with different tags)
      * to avoid memory corruption. */
@@ -138,6 +139,7 @@ uct_ptl_am_iface_tag_del_from_hash(uct_ptl_am_iface_t *iface, void *buffer)
   khiter_t iter;
 
   iter = kh_get(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, buffer);
+  ucs_debug("PTL: remove tag addr. addr=%p", buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
   kh_del(uct_ptl_am_tag_addrs, &iface->tm.tag_addrs, iter);
 }

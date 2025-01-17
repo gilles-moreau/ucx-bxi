@@ -12,6 +12,8 @@
 #include <ucp/core/ucp_request.h>
 #include <ucs/datastruct/queue.h>
 
+#include "offload/operation.h"
+
 
 enum {
     UCP_TAG_OFFLOAD_CANCEL_FORCE = UCS_BIT(0)
