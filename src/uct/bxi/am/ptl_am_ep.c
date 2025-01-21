@@ -703,7 +703,7 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
     oop_ctx = ucs_derived_of(ctx->oop_ctx, uct_ptl_oop_ctx_t);
     cth     = oop_ctx->cth;
     oop_ctx->threshold++;
-    ct_flags = PTL_ME_EVENT_CT_COMM;
+    ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
   }
 
   me = (ptl_me_t){

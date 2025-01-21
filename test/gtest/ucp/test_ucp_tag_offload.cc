@@ -474,17 +474,24 @@ err:
         return status;
     }
 
+    void delete_offload_context(ucp_offload_context_h ctx) {
+        ucp_offload_context_fini(ctx);
+    }
+
 };
 
-UCS_TEST_P(test_ucp_tag_offload_triggered, send_trig)
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp_trig)
 {
     ucp_offload_context_h off_ctx;
     activate_offload(sender());
+
+    receiver().connect(&sender(), get_ep_params());
 
     // Must create offload context before memory is allocated so calls can be 
     // intercepted.
     ASSERT_UCS_OK(make_offload_context(receiver(), &off_ctx));
 
+    // Get eager length
     size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 10;
     const ucp_tag_t ftag = 0x11, btag = 0x22;
     std::vector<uint8_t> sendbuf(length);
@@ -499,20 +506,73 @@ UCS_TEST_P(test_ucp_tag_offload_triggered, send_trig)
     // Prepare the triggered send operation of the receiver 
     ucs_status_ptr_t treq = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                              recvbuf.size(), btag, &param);
+    ASSERT_EQ(ucp_request_check_status(treq), UCS_INPROGRESS);
 
     // Prepare the receive operation of the sender. No offload context is provided
     // since sender's operations are not offloaded.
     param = {};
     ucs_status_ptr_t rt_req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
-                                             length, btag, 0xffff, &param);
+                                               length, btag, 0xffff, &param);
 
     // Finally, send the first operation from the sender
     ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
                                              recvbuf.size(), ftag, &param);
+
     request_wait(sreq);
     request_wait(rreq);
     request_wait(treq);
     request_wait(rt_req);
+
+    delete_offload_context(off_ctx);
+}
+
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_unexp_trig)
+{
+    ucp_offload_context_h off_ctx;
+    activate_offload(sender());
+
+    receiver().connect(&sender(), get_ep_params());
+
+    // Must create offload context before memory is allocated so calls can be 
+    // intercepted.
+    ASSERT_UCS_OK(make_offload_context(receiver(), &off_ctx));
+
+    // Get eager length
+    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 10;
+    const ucp_tag_t ftag = 0x11, btag = 0x22;
+    std::vector<uint8_t> sendbuf(length);
+    std::vector<uint8_t> recvbuf(length);
+    std::vector<uint8_t> sendrecvbuf(length);
+
+    // First, send the first operation from the sender
+    ucp_request_param_t param = {};
+    ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+                                             recvbuf.size(), ftag, &param);
+
+    // Progress only the sender so that message is not inserted into the 
+    // matching lists of the receiver, but received by transport.
+    request_wait(sreq, {&sender()});
+
+    // Prepare receive from which receiver's send depends
+    param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .offh = off_ctx};
+    ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                                             length, ftag, 0xffff, &param);
+
+    // Prepare the triggered send operation of the receiver 
+    ucs_status_ptr_t treq = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
+                                             recvbuf.size(), btag, &param);
+
+    // Prepare the receive operation of the sender. No offload context is provided
+    // since sender's operations are not offloaded.
+    param = {};
+    ucs_status_ptr_t rt_req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
+                                               length, btag, 0xffff, &param);
+
+    request_wait(rreq);
+    request_wait(treq);
+    request_wait(rt_req);
+
+    delete_offload_context(off_ctx);
 }
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload_triggered)
