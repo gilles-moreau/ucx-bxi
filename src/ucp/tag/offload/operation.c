@@ -34,6 +34,12 @@ ucs_status_t ucp_offload_context_create(ucp_worker_h           worker,
   ucp_tcache_params_t   tcache_params;
   ucp_offload_context_h ctx;
 
+  if (worker->tm.offload.iface == NULL) {
+    //FIXME: check tag offloading capabilities with get_attr
+    ucs_warn("OFF: operation offloading requested but no interface available.");
+    return UCS_ERR_NO_RESOURCE;
+  }
+
   ucs_assert(worker->num_active_ifaces == 1 &&
              worker->tm.offload.iface != NULL);
 
