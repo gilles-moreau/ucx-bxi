@@ -388,6 +388,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ptl_am_iface_t)
   kh_destroy_inplace(uct_ptl_am_tag_addrs, &self->tm.tag_addrs);
 
   ucs_mpool_cleanup(&self->super.copyin_mp, 1);
+  ucs_mpool_cleanup(&self->tm.recv_ops_mp, 1);
 
   uct_ptl_rq_fini(&self->am_rq);
   uct_ptl_rq_fini(&self->tag_rq);

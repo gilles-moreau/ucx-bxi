@@ -11,7 +11,8 @@ static inline void ucp_tcache_region_put_internal(ucp_tcache_t        *tcache,
                                                   ucp_tcache_region_t *region,
                                                   unsigned             flags)
 {
-  size_t region_size;
+  size_t       region_size;
+  ucs_status_t status;
 
   ucs_assert(region->refcount > 0);
   if (ucs_likely(ucs_atomic_fsub32(&region->refcount, 1) != 1)) {
@@ -24,6 +25,13 @@ static inline void ucp_tcache_region_put_internal(ucp_tcache_t        *tcache,
 
   UCS_PROFILE_NAMED_CALL_VOID_ALWAYS("mem_unoff", tcache->params.ops.mem_unoff,
                                      tcache->params.context, tcache, region);
+
+  status = ucs_pgtable_remove(&tcache->pgtable, &region->super);
+  if (status != UCS_OK) {
+    ucs_error("tcache: error while removing region. region=%p, start=0x%lx, "
+              "*end=0x%lx",
+              region, region->super.start, region->super.end);
+  }
 
   ucs_free(region);
 }
@@ -441,8 +449,35 @@ err:
   return status;
 }
 
+static void ucp_tcache_purge(ucp_tcache_t *tcache)
+{
+  ucp_tcache_region_t *region, *tmp;
+  ucs_list_link_t      region_list;
+
+  ucs_trace_func("tcache=%s", tcache->name);
+
+  ucs_list_head_init(&region_list);
+  ucs_pgtable_purge(&tcache->pgtable, ucp_tcache_region_collect_callback,
+                    &region_list);
+  ucs_list_for_each_safe (region, tmp, &region_list, tmp_list) {
+    if (region->flags & UCP_TCACHE_REGION_FLAG_PGTABLE) {
+      region->flags &= ~UCP_TCACHE_REGION_FLAG_PGTABLE;
+      ucs_atomic_add32(&region->refcount, (uint32_t)-1);
+    }
+    if (region->refcount > 0) {
+      ucs_warn("tcache: destroying inuse");
+    }
+
+    UCS_PROFILE_NAMED_CALL_VOID_ALWAYS("mem_unoff",
+                                       tcache->params.ops.mem_unoff,
+                                       tcache->params.context, tcache, region);
+  }
+}
+
 void ucp_tcache_destroy(ucp_tcache_t *tcache)
 {
+
+  ucp_tcache_purge(tcache);
   ucs_mpool_cleanup(&tcache->mp, 1);
   ucs_pgtable_cleanup(&tcache->pgtable);
   ucs_spinlock_destroy(&tcache->lock);
