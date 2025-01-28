@@ -24,6 +24,7 @@ typedef struct ucp_tcache_config ucp_tcache_config_t;
 enum {
   UCP_TCACHE_REGION_FLAG_PGTABLE   = UCS_BIT(0), /**< In the page table */
   UCP_TCACHE_REGION_FLAG_OFFLOADED = UCS_BIT(1), /**< Offloaded */
+  UCP_TCACHE_REGION_FLAG_CREATE_IF_NOT_FOUND = UCS_BIT(2),
 };
 
 struct ucp_tcache_region {
@@ -150,6 +151,7 @@ void ucp_tcache_destroy(ucp_tcache_t *tcache);
  * @param [in]  arg         Custom argument passed down to memory offloading
  *                          callback, if a memory offloading happens during
  *                          this call.
+ * @param [in]  flags       Flags to modify behavior of get operation.
  * @param [out] region_p    On success, filled with a pointer to the memory
  *                          region. The user could put more data in the region
  *                          structure in mem_reg() function.
@@ -159,7 +161,8 @@ void ucp_tcache_destroy(ucp_tcache_t *tcache);
  * @return Error code.
  */
 ucs_status_t ucp_tcache_get(ucp_tcache_t *tcache, void *address, size_t length,
-                            void *arg, ucp_tcache_region_t **region_p);
+                            void *arg, unsigned flags,
+                            ucp_tcache_region_t **region_p);
 
 /**
  * Increment memory region reference count.

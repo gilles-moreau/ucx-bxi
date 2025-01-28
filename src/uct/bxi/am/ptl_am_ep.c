@@ -399,6 +399,7 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_ptl_am_iface_t *iface = uct_ptl_ep_iface(ep, uct_ptl_am_iface_t);
   uct_ptl_op_t       *op;
   ssize_t             size = 0;
+  uct_ptl_oop_ctx_t  *oop_ctx;
 
   if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
     rc = UCS_ERR_TIMED_OUT;
@@ -419,13 +420,28 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
     goto err;
   }
 
-  ucs_debug("PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
-            "op=%p, op id=%lu",
-            iface->tag_rq.pti, tag, imm, op, op->seqn);
+  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
+    oop_ctx = (uct_ptl_oop_ctx_t *)op->buffer;
+    ucs_error("PTL: ep tag bcopy trig. iface pti=%d, tag=0x%016lx, "
+              "imm=0x%016lx, op=%p, oop thresh=%lu",
+              iface->tag_rq.pti, tag, imm, op, oop_ctx->threshold);
+    ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
 
-  rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
-                           PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
-                           ep->iface_addr.tag_pti, tag, 0, op, imm));
+    rc = uct_ptl_wrap(PtlTriggeredPut(
+            ep->am_mmd->mdh,
+            (ptl_size_t)UCS_PTR_BYTE_OFFSET(op->buffer, sizeof(uct_oop_ctx_h)),
+            size, PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
+            ep->iface_addr.tag_pti, tag, 0, op, imm, oop_ctx->cth,
+            oop_ctx->threshold));
+  } else {
+    ucs_debug("PTL: ep tag bcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
+              "op=%p, op id=%lu",
+              iface->tag_rq.pti, tag, imm, op, op->seqn);
+
+    rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, size,
+                             PTL_CT_ACK_REQ, ep->super.dev_addr.pid,
+                             ep->iface_addr.tag_pti, tag, 0, op, imm));
+  }
 
   if (rc != UCS_OK) {
     ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
@@ -469,7 +485,7 @@ ucs_status_t uct_ptl_am_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
     oop_ctx = ucs_derived_of(comp->oop_ctx, uct_ptl_oop_ctx_t);
-    ucs_debug("PTL: ep tag zcopy trig. iface pti=%d, tag=0x%016lx, "
+    ucs_error("PTL: ep tag zcopy trig. iface pti=%d, tag=0x%016lx, "
               "imm=0x%016lx, op=%p, oop thresh=%lu",
               iface->tag_rq.pti, tag, imm, op, oop_ctx->threshold);
     ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
@@ -704,6 +720,8 @@ ucs_status_t uct_ptl_am_iface_tag_recv_zcopy(uct_iface_h tl_iface,
     cth     = oop_ctx->cth;
     oop_ctx->threshold++;
     ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
+    ucs_debug("PTL: recv oop. oop_ctx=%p, thresh=%ld", oop_ctx,
+              oop_ctx->threshold);
   }
 
   me = (ptl_me_t){

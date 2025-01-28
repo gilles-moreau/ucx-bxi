@@ -343,6 +343,7 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.flags           = 0;
     if (req->recv.op_attr & UCP_OP_ATTR_FIELD_OFFH) {
         status = ucp_offload_get_context(req->recv.offh, iov.buffer, iov.length, 
+                                         UCP_OFFLOAD_CTX_FLAG_CREATE_IF_NOT_FOUND,
                                          &req->recv.uct_ctx.oop_ctx);
         if (status != UCS_OK) {
             return status;
@@ -494,10 +495,16 @@ UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
 static size_t ucp_tag_offload_pack_eager(void *dest, void *arg)
 {
     ucp_request_t *req = arg;
+    void *p            = dest;
     size_t length;
 
+    if (req->send.tag_offload.flags &= UCT_TAG_OFFLOAD_OPERATION) {
+       *(uct_oop_ctx_h *)p = req->send.state.uct_comp.oop_ctx;
+        p = UCS_PTR_BYTE_OFFSET(p, sizeof(uct_oop_ctx_h));
+    }
+
     length = ucp_dt_pack(req->send.ep->worker, req->send.datatype,
-                         req->send.mem_type, dest, req->send.buffer,
+                         req->send.mem_type, p, req->send.buffer,
                          &req->send.state.dt, req->send.length);
     ucs_assert(length == req->send.length);
     return length;
