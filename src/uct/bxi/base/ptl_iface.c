@@ -390,6 +390,7 @@ err:
 static UCS_CLASS_CLEANUP_FUNC(uct_ptl_iface_t)
 {
   ucs_mpool_cleanup(&self->ops_mp, 1);
+  ucs_mpool_cleanup(&self->flush_ops_mp, 1);
   return;
 }
 
