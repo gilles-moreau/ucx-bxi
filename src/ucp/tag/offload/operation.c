@@ -79,14 +79,22 @@ void ucp_offload_context_fini(ucp_offload_context_h ctx)
 
 //FIXME: move buffer to const
 ucs_status_t ucp_offload_get_context(ucp_offload_context_h ctx, void *address,
-                                     size_t length, uct_oop_ctx_h *oop_ctx_p)
+                                     size_t length, unsigned flags,
+                                     uct_oop_ctx_h *oop_ctx_p)
 {
   ucs_status_t         status;
   ucp_tcache_region_t *region;
+  unsigned tcache_flags = flags & UCP_OFFLOAD_CTX_FLAG_CREATE_IF_NOT_FOUND ?
+                                  UCP_TCACHE_REGION_FLAG_CREATE_IF_NOT_FOUND :
+                                  0;
 
-  status = ucp_tcache_get(ctx->tcache, address, length, ctx, &region);
+  status = ucp_tcache_get(ctx->tcache, address, length, ctx, tcache_flags,
+                          &region);
   if (status != UCS_OK) {
     ucs_error("OFF: could not get tag offload context from cache.");
+    goto err;
+  } else if (region == NULL) {
+    *oop_ctx_p = NULL;
     goto err;
   }
 

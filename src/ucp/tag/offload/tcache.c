@@ -151,7 +151,7 @@ ucs_status_t ucp_tcache_create_region(ucp_tcache_t *tcache, void *address,
   region->flags    |= UCP_TCACHE_REGION_FLAG_OFFLOADED;
   region->refcount  = 2; /* Page-table + user */
 
-  ucs_trace("ucp_tcache: created region tcache=%s, [%zu..%zu]", tcache->name,
+  ucs_debug("ucp_tcache: created region tcache=%s, [%zu..%zu]", tcache->name,
             region->super.start, region->super.end);
 
 out_set_region:
@@ -167,19 +167,20 @@ void ucs_tcache_region_hold(ucp_tcache_t *tcache, ucp_tcache_region_t *region)
 }
 
 ucs_status_t ucp_tcache_get(ucp_tcache_t *tcache, void *address, size_t length,
-                            void *arg, ucp_tcache_region_t **region_p)
+                            void *arg, unsigned flags,
+                            ucp_tcache_region_t **region_p)
 {
   ucs_pgt_addr_t       start = (uintptr_t)address;
   ucs_pgt_region_t    *pgt_region;
   ucp_tcache_region_t *region;
 
-  ucs_trace("tcache get. tcache=%s, address=%p, length=%zu", tcache->name,
+  ucs_debug("tcache get. tcache=%s, address=%p, length=%zu", tcache->name,
             address, length);
 
   pthread_rwlock_rdlock(&tcache->pgt_lock);
   pgt_region = UCS_PROFILE_CALL(ucs_pgtable_lookup, &tcache->pgtable, start);
   if (ucs_likely(pgt_region != NULL)) {
-    ucs_trace("tcache: found region.");
+    ucs_debug("tcache: found region.");
     region = ucs_derived_of(pgt_region, ucp_tcache_region_t);
     if ((start + length) <= region->super.end) {
       *region_p = region;
@@ -190,8 +191,13 @@ ucs_status_t ucp_tcache_get(ucp_tcache_t *tcache, void *address, size_t length,
 
   pthread_rwlock_unlock(&tcache->pgt_lock);
 
-  return UCS_PROFILE_CALL(ucp_tcache_create_region, tcache, address, length,
-                          arg, region_p);
+  if (flags & UCP_TCACHE_REGION_FLAG_CREATE_IF_NOT_FOUND) {
+    return UCS_PROFILE_CALL(ucp_tcache_create_region, tcache, address, length,
+                            arg, region_p);
+  } else {
+    *region_p = NULL;
+    return UCS_OK;
+  }
 }
 
 static void ucp_tcache_alloc_callback(ucm_event_type_t event_type,
