@@ -93,12 +93,21 @@ static size_t ucp_eager_tag_offload_pack(void *dest, void *arg)
 {
     ucp_request_t *req = arg;
     ucp_datatype_iter_t next_iter;
+    void *p = dest;
 
     ucs_assert(req->send.state.dt_iter.offset == 0);
 
+    if (req->send.tag_offload.flags & UCT_TAG_OFFLOAD_OPERATION) {
+        //FIXME: right now the only way to pass the offloading operation
+        //       context without modifying the API is to pack it in the 
+        //       buffer...
+       *(uct_oop_ctx_h *)p = req->send.state.uct_comp.oop_ctx;
+        p = UCS_PTR_BYTE_OFFSET(p, sizeof(uct_oop_ctx_h));
+    }
+
     return ucp_datatype_iter_next_pack(&req->send.state.dt_iter,
                                        req->send.ep->worker, SIZE_MAX,
-                                       &next_iter, dest);
+                                       &next_iter, p);
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
