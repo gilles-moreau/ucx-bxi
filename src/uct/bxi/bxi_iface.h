@@ -2,7 +2,7 @@
 #define BXI_IFACE_H
 
 #include "bxi_md.h"
-#include "bxi_rq.h"
+#include "bxi_rxq.h"
 
 #include <ucs/type/status.h>
 #include <uct/base/uct_iface.h>
@@ -25,9 +25,9 @@ typedef void (*uct_bxi_send_handler_t)(uct_bxi_iface_send_op_t *op,
                                        const void              *resp);
 
 typedef struct uct_bxi_iface_addr {
-  ptl_pt_index_t am_pti;
-  ptl_pt_index_t rma_pti;
-  ptl_pt_index_t tag_pti;
+  ptl_pt_index_t am;
+  ptl_pt_index_t rma;
+  ptl_pt_index_t tag;
 } uct_bxi_iface_addr_t;
 
 typedef struct uct_bxi_ep_addr {
@@ -116,7 +116,15 @@ typedef struct uct_bxi_iface {
   struct {
     ptl_handle_eq_t eqh;
     struct {
+      uct_bxi_rxq_t *rxq;
     } am;
+    struct {
+      uct_bxi_rxq_t *rxq;
+    } tag;
+    struct {
+      ptl_pt_index_t      pti;
+      uct_bxi_mem_entry_t entry;
+    } rma;
   } rx;
 
   uct_bxi_md_t *md;

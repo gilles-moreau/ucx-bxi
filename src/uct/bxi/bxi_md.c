@@ -2,6 +2,8 @@
 #include <config.h>
 #endif
 
+#include "bxi.h"
+
 #include "bxi_md.h"
 
 #include <assert.h>

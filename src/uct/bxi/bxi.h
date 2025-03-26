@@ -34,53 +34,23 @@ enum {
 
 /* Operation types. */
 typedef enum {
-  UCT_BXI_OP_AM_BCOPY,
+  UCT_BXI_OP_AM_BCOPY = 0,
+  UCT_BXI_OP_BLOCK,
 } uct_bxi_op_type_t;
-
-typedef struct uct_bxi_op {
-  uct_bxi_op_type_t type; /* Type of operation */
-  uct_completion_t *comp; /* Completion callback */
-  ptl_pt_index_t    pti;
-  uct_bxi_ep_t     *ep;
-  uct_bxi_mmd_t    *mmd;
-  void             *buffer;
-  ptl_size_t        seqn;
-  ucs_queue_elem_t  elem;
-  size_t            size;
-  union {
-    struct {
-      uct_tag_context_t *ctx;
-      ptl_handle_me_t    meh;
-      unsigned           flags;
-      ptl_match_bits_t   tag;
-      void              *buffer;
-      unsigned           cancel;
-      size_t             hdr_len;
-    } tag;
-    struct {
-      uct_unpack_callback_t unpack;
-      void                 *arg;
-    } get_bcopy;
-    struct {
-      uint64_t value;
-      uint64_t compare;
-    } ato;
-  };
-} uct_bxi_op_t;
 
 #define uct_bxi_rc_log(rc)                                                     \
   switch (rc) {                                                                \
-  case BXI_FAIL:                                                               \
-    ucs_error("BXI: error BXI_FAIL");                                          \
+  case PTL_FAIL:                                                               \
+    ucs_error("BXI: error PTL_FAIL");                                          \
     break;                                                                     \
-  case BXI_ARG_INVALID:                                                        \
-    ucs_error("BXI: error BXI_ARG_INVALID");                                   \
+  case PTL_ARG_INVALID:                                                        \
+    ucs_error("BXI: error PTL_ARG_INVALID");                                   \
     break;                                                                     \
-  case BXI_NO_SPACE:                                                           \
-    ucs_error("BXI: error BXI_NO_SPACE");                                      \
+  case PTL_NO_SPACE:                                                           \
+    ucs_error("BXI: error PTL_NO_SPACE");                                      \
     break;                                                                     \
-  case BXI_NO_INIT:                                                            \
-    ucs_error("BXI: error BXI_NO_INIT");                                       \
+  case PTL_NO_INIT:                                                            \
+    ucs_error("BXI: error PTL_NO_INIT");                                       \
     break;                                                                     \
   default:                                                                     \
     ucs_error("BXI: unknown BXI error.");                                      \
@@ -91,19 +61,8 @@ typedef struct uct_bxi_op {
   ({                                                                           \
     ucs_status_t loc_rc = UCS_OK;                                              \
     int          bxi_rc;                                                       \
-    if ((bxi_rc = _bxi_call) != BXI_OK) {                                      \
+    if ((bxi_rc = _bxi_call) != PTL_OK) {                                      \
       uct_bxi_rc_log(bxi_rc);                                                  \
-      loc_rc = UCS_ERR_IO_ERROR;                                               \
-    }                                                                          \
-    loc_rc;                                                                    \
-  })
-
-#define uct_bxi_wrap(_ptl_call)                                                \
-  ({                                                                           \
-    ucs_status_t loc_rc = UCS_OK;                                              \
-    int          ptl_rc;                                                       \
-    if ((ptl_rc = _ptl_call) != BXI_OK) {                                      \
-      uct_bxi_rc_log(ptl_rc);                                                  \
       loc_rc = UCS_ERR_IO_ERROR;                                               \
     }                                                                          \
     loc_rc;                                                                    \
@@ -121,6 +80,6 @@ typedef struct uct_bxi_op {
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
 
-extern uct_component_t bxi_component;
+extern uct_component_t uct_bxi_component;
 
 #endif

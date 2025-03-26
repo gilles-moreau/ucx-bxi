@@ -2,6 +2,7 @@
 #include <config.h>
 #endif
 
+#include "bxi.h"
 #include "bxi_ep.h"
 #include "bxi_iface.h"
 
@@ -161,11 +162,10 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
 {
   uct_bxi_iface_addr_t *addr  = (void *)tl_addr;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_md_t *md = ucs_derived_of(iface->super.super.md, uct_bxi_am_md_t);
 
-  addr->rma_pti = md->super.pti;
-  addr->am_pti  = iface->am_rq.pti;
-  addr->tag_pti = iface->tag_rq.pti;
+  addr->rma = iface->rx.rma.pti;
+  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.rxq);
+  addr->tag = uct_bxi_rxq_get_addr(iface->rx.tag.rxq);
 
   return UCS_OK;
 }
@@ -253,11 +253,9 @@ static uct_bxi_iface_ops_t uct_bxi_am_iface_ops = {
                         .iface_is_reachable_v2 =
                                 *(uct_iface_is_reachable_v2_func_t)
                                         ucs_empty_function_return_unsupported,
-                        .ep_is_connected = uct_bxi_am_ep_is_connected,
+                        .ep_is_connected = uct_bxi_ep_is_connected,
                 },
-        .handle_ev      = uct_bxi_am_iface_handle_ev, //FIXME: this is overriden
-        .handle_failure = uct_bxi_am_handle_failure,
-        .cancel_ops     = uct_bxi_am_iface_cancel_ops,
+        .handle_failure = uct_bxi_handle_failure,
 };
 
 UCS_CLASS_DEFINE(uct_bxi_iface_t, uct_base_iface_t);
@@ -270,4 +268,4 @@ UCT_TL_DEFINE_ENTRY(&uct_bxi_component, bxi, uct_bxi_iface_query_tl_devices,
                     uct_bxi_iface_t, UCT_BXI_CONFIG_PREFIX,
                     uct_bxi_iface_config_table, uct_bxi_iface_config_t);
 
-UCT_SINGLE_TL_INIT(&uct_bxi_component, ptl_am, ctor, PtlInit(), PtlFini())
+UCT_SINGLE_TL_INIT(&uct_bxi_component, bxi, ctor, PtlInit(), PtlFini())
