@@ -1,0 +1,183 @@
+#include "bxi_rxq.h"
+
+#include "ptl_types.h"
+
+#include <stdlib.h>
+
+static ucs_status_t uct_bxi_recv_block_init(uct_bxi_rxq_t         *rxq,
+                                            uct_bxi_recv_block_t **block_p)
+{
+  ucs_status_t          rc = UCS_OK;
+  uct_bxi_recv_block_t *block;
+
+  block = ucs_mpool_get(&rxq->mp);
+  if (block == NULL) {
+    ucs_error("PTL: could not allocate eager block structure");
+    rc = UCS_ERR_NO_MEMORY;
+    goto err;
+  }
+
+  block->size    = rxq->config.blk_size;
+  block->start   = block + 1;
+  block->meh     = PTL_INVALID_HANDLE;
+  block->rxq     = rxq;
+  block->op.type = UCT_PTL_OP_BLOCK;
+  block->id      = rxq->bid++;
+
+  *block_p = block;
+
+err:
+  return rc;
+}
+
+// FIXME: change return type to ucs_status_t
+int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
+{
+  ptl_me_t         me;
+  ptl_match_bits_t match = 0;
+  ptl_match_bits_t ign   = ~0;
+  uct_bxi_rxq_t   *rxq   = block->rxq;
+  ptl_list_t       list;
+
+  if (block->start == NULL) {
+    return UCS_ERR_IO_ERROR;
+  }
+
+  me = (ptl_me_t){
+          .ct_handle   = PTL_CT_NONE,
+          .match_bits  = match,
+          .ignore_bits = ign,
+          .match_id =
+                  {
+                          .phys.nid = PTL_NID_ANY,
+                          .phys.pid = PTL_PID_ANY,
+                  },
+          .min_free = rxq->config.blk_min_free,
+          .options  = rxq->config.blk_opts,
+          .uid      = PTL_UID_ANY,
+          .start    = block->start,
+          .length   = block->size,
+  };
+
+  list = rxq->config.blk_opts == ECR_PTL_BLOCK_TAG ? PTL_OVERFLOW_LIST :
+                                                     PTL_PRIORITY_LIST;
+
+  return uct_bxi_wrap(PtlMEAppend(uct_bxi_iface_md(rxq->iface)->nih, rxq->pti,
+                                  &me, list, &block->op, &block->meh));
+}
+
+static ucs_status_t uct_bxi_recv_blocks_enable(uct_bxi_rxq_t *rxq)
+{
+  ucs_status_t rc = UCS_OK;
+  int          i;
+
+  rxq->bid = 0;
+  ucs_list_head_init(&rxq->bhead);
+
+  for (i = 0; i < rxq->config.num_blk; i++) {
+    uct_bxi_recv_block_t *block = NULL;
+
+    rc = uct_bxi_recv_block_init(rxq, &block);
+    if (rc != UCS_OK) {
+      ucs_error("PTL: could not allocate block");
+      return rc;
+    }
+
+    /* Append block to list. */
+    ucs_list_add_head(&rxq->bhead, &block->elem);
+
+    /* Create the ME on the card. */
+    rc = uct_bxi_recv_block_activate(block);
+    if (rc != UCS_OK) {
+      goto err;
+    }
+  }
+
+err:
+  return rc;
+}
+
+static ucs_status_t uct_bxi_recv_block_disable(uct_bxi_rxq_t   *rxq,
+                                               ucs_list_link_t *head)
+{
+  int                   ret;
+  ucs_status_t          rc    = UCS_OK;
+  uct_bxi_recv_block_t *block = NULL, *tmp = NULL;
+
+  ucs_list_for_each_safe (block, tmp, head, elem) {
+    ret = PtlMEUnlink(block->meh);
+    if (ret != PTL_OK) {
+      ucs_warn("PTL: block not unlinked. bid=%d, pti=%d, start=%p", block->id,
+               rxq->pti, block->start);
+    }
+
+    ucs_mpool_put(block);
+    ucs_list_del(&tmp->elem);
+  }
+err:
+  return rc;
+}
+
+static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
+ucs_status_t uct_bxi_rxq_init(uct_bxi_iface_t     *iface,
+                              uct_bxi_rxq_param_t *params, uct_bxi_rxq_t *rxq)
+{
+  ucs_status_t       rc;
+  ucs_mpool_params_t mp_block_params;
+
+  rc = uct_bxi_wrap(PtlPTAlloc(uct_bxi_iface_md(iface)->nih, PTL_PT_FLOWCTRL,
+                               uct_bxi_iface_md(iface)->eqh, PTL_PT_ANY,
+                               &rxq->pti));
+  if (rc != UCS_OK) {
+    goto err;
+  }
+
+  /* First, initialize memory pool of receive buffers. */
+  ucs_mpool_params_reset(&mp_block_params);
+  mp_block_params = (ucs_mpool_params_t){
+          .max_chunk_size = params->items_per_chunk *
+                            (sizeof(uct_bxi_recv_block_t) + params->item_size),
+          .elems_per_chunk = params->items_per_chunk,
+          .elem_size       = sizeof(uct_bxi_recv_block_t) + params->item_size,
+          .max_elems       = params->max_items,
+          .alignment       = 64,
+          .align_offset    = 0,
+          .ops             = &uct_bxi_rxq_mpool_ops,
+          .name            = params->name,
+          .grow_factor     = 1,
+  };
+
+  rc = ucs_mpool_init(&mp_block_params, &rxq->mp);
+  if (rc != UCS_OK) {
+    goto err_clean_pt;
+  }
+
+  rxq->config.blk_opts     = params->options;
+  rxq->config.blk_size     = params->item_size;
+  rxq->config.blk_min_free = params->min_free;
+  rxq->config.num_blk      = params->max_items;
+  rxq->iface               = iface;
+
+  rc = uct_bxi_recv_blocks_enable(rxq);
+
+  return rc;
+err_clean_pt:
+  uct_bxi_wrap(PtlPTFree(iface->md->nih, rxq->pti));
+err:
+  return rc;
+}
+
+void uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq)
+{
+  uct_bxi_recv_block_disable(rxq, &rxq->bhead);
+
+  ucs_mpool_cleanup(&rxq->mp, 1);
+
+  uct_bxi_wrap(PtlPTFree(uct_bxi_iface_md(rxq->iface)->nih, rxq->pti));
+}
