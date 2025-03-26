@@ -1,7 +1,7 @@
-#ifndef PTL_RQ_H
-#define PTL_RQ_H
+#ifndef BXI_RQ_H
+#define BXI_RQ_H
 
-#include <uct/bxi/ptl_types.h>
+#include <uct/bxi/bxi.h>
 
 typedef struct uct_bxi_rxq uct_bxi_rxq_t;
 
@@ -12,9 +12,10 @@ enum {
   ECR_PTL_BLOCK_TAG = PTL_ME_OP_PUT | PTL_ME_EVENT_LINK_DISABLE |
                       PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
                       PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE,
+  ECR_PTL_BLOCK_RMA = PTL_ME_OP_PUT | PTL_ME_OP_GET |
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE |
+                      PTL_ME_MAY_ALIGN | PTL_ME_EVENT_COMM_DISABLE,
 };
-
-#define UCT_PTL_RQ_NAME_LENGTH_MAX 24
 
 typedef struct uct_bxi_recv_block {
   void           *start;
@@ -22,7 +23,6 @@ typedef struct uct_bxi_recv_block {
   uct_bxi_rxq_t  *rxq;
   ptl_handle_me_t meh;
   ucs_list_link_t elem;
-  uct_bxi_op_t    op;
   int             id;
 } uct_bxi_recv_block_t;
 
@@ -33,7 +33,7 @@ typedef struct uct_bxi_rxq_param {
   ptl_size_t      min_free;
   int             items_per_chunk;
   unsigned int    options;
-  char            name[UCT_PTL_RQ_NAME_LENGTH_MAX];
+  char           *name;
   ptl_handle_ni_t nih;
   ptl_handle_eq_t eqh;
 } uct_bxi_rxq_param_t;
@@ -57,7 +57,11 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p);
 void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 
-// Block operation
 int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block);
+
+static inline ptl_pt_index_t uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
+{
+  return rxq->pti;
+}
 
 #endif

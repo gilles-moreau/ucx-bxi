@@ -421,8 +421,8 @@ ssize_t uct_ptl_am_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag,
   }
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    oop_ctx = *(uct_ptl_oop_ctx_t **)op->buffer;
-    ucs_debug("PTL: ep tag bcopy trig. iface pti=%d, tag=0x%016lx, "
+    oop_ctx = (uct_ptl_oop_ctx_t *)op->buffer;
+    ucs_error("PTL: ep tag bcopy trig. iface pti=%d, tag=0x%016lx, "
               "imm=0x%016lx, op=%p, oop thresh=%lu",
               iface->tag_rq.pti, tag, imm, op, oop_ctx->threshold);
     ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
