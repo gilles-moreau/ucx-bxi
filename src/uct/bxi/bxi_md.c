@@ -189,7 +189,7 @@ void uct_bxi_md_close(uct_md_h uct_md)
 static inline void uct_bxi_md_config_init(uct_bxi_md_t              *md,
                                           const uct_bxi_md_config_t *md_config)
 {
-  md->config.max_events = md_config->max_events;
+  return;
 }
 
 static uct_md_ops_t uct_bxi_md_ops = {

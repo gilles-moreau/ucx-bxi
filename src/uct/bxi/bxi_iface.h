@@ -59,10 +59,6 @@ typedef struct uct_bxi_device_addr {
   ptl_process_t pid;
 } uct_bxi_device_addr_t;
 
-typedef struct uct_bxi_ep_addr {
-  uct_bxi_device_addr_t dev_addr;
-} uct_bxi_ep_addr_t;
-
 typedef struct uct_bxi_iface_ops {
   uct_iface_internal_ops_t super;
   handle_failure_func_t    handle_failure;
@@ -71,43 +67,92 @@ typedef struct uct_bxi_iface_ops {
 typedef struct uct_bxi_iface_config {
   uct_iface_config_t super;
   size_t             max_events;
-  int                max_ep_retries;
-  int                max_outstanding_ops;
-  int                copyin_buf_per_block;
-  int                copyout_buf_per_block;
-  int                min_copyin_buf;
-  int                max_copyin_buf;
-  int                max_copyout_buf;
-  int                num_eager_blocks;
-  int                eager_block_size;
-  unsigned           features;
+  int                seg_size; /* Max copy-out size of send buffers */
+
+  struct {
+    int max_queue_len; /* Maximum number of outstanding OP */
+    uct_iface_mpool_config_t mp;
+  } tx;
+
+  struct {
+    int max_queue_len;    /* Maximum number of receive descriptor in the RXQ. */
+    int eager_block_size; /* Receive block size within the memory pool. */
+    uct_iface_mpool_config_t am_mp;  /* Receive descriptor for AM RX. */
+    uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX. */
+  } rx;
+
+  int      max_ep_retries;
+  int      copyin_buf_per_block;
+  int      copyout_buf_per_block;
+  int      min_copyin_buf;
+  int      max_copyin_buf;
+  int      max_copyout_buf;
+  unsigned features;
+  struct {
+    int          enable;
+    unsigned int list_size;
+    unsigned int max_op_ctx;
+  } tm;
 } uct_bxi_iface_config_t;
+
+#define uct_bxi_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
+KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
+           kh_int64_hash_equal)
 
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
   struct {
+    struct {
+      int seg_size;
+      int max_copyin_buf;
+    } tx;
+
+    struct {
+      int num_eager_blocks;
+      int eager_block_size;
+    } rx;
+
     size_t   max_events;
     int      max_ep_retries;
     int      max_outstanding_ops;
-    int      copyin_buf_per_block;
-    int      min_copyin_buf;
-    int      max_copyin_buf;
     int      copyout_buf_per_block;
     int      max_copyout_buf;
-    int      num_eager_blocks;
     int      max_iovecs;
     int      max_short;
-    size_t   eager_block_size;
     size_t   max_msg_size;
     size_t   max_atomic_size;
     unsigned features;
     size_t   iface_addr_size;
     size_t   device_addr_size;
     size_t   ep_addr_size;
+    struct {
+      unsigned int max_op_ctx;
+      unsigned int max_tags;
+    } tm;
   } config;
 
   struct {
+    unsigned int               enabled;
+    unsigned int               num_outstanding;
+    unsigned int               unexpected_cnt;
+    unsigned int               num_tags;
+    unsigned int               num_op_ctx;
+    khash_t(uct_bxi_tag_addrs) tag_addrs;
+    struct {
+      void                    *arg; /* User defined arg */
+      uct_tag_unexp_eager_cb_t cb;  /* Callback for unexpected eager messages */
+    } eager_unexp;
+    struct {
+      void                   *arg; /* User defined arg */
+      uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
+    } rndv_unexp;
+    ucs_mpool_t  recv_ops_mp;
+    unsigned int recv_tried_offload;
+  } tm;
+
+  struct {
     ucs_mpool_t      send_desc_mp; /* Memory pool of send descriptor */
+    ucs_mpool_t      send_op_mp;   /* Memory pool of send operations */
     ucs_mpool_t      flush_ops_mp; /* Memory pool for flush OP */
     ucs_list_link_t  tx_queues;    /* List of TX Queues */
     ucs_queue_head_t pending_q;    /* List of pending OP */
