@@ -1,5 +1,6 @@
 #include "bxi_rxq.h"
 #include "bxi.h"
+#include "bxi_iface.h"
 
 #include <stdlib.h>
 
@@ -50,17 +51,16 @@ int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
                           .phys.pid = PTL_PID_ANY,
                   },
           .min_free = rxq->config.blk_min_free,
-          .options  = rxq->config.blk_opts,
-          .uid      = PTL_UID_ANY,
-          .start    = block->start,
-          .length   = block->size,
+          .options  = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
+                     PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
+                     PTL_ME_IS_ACCESSIBLE,
+          .uid    = PTL_UID_ANY,
+          .start  = block->start,
+          .length = block->size,
   };
 
-  list = rxq->config.blk_opts == ECR_PTL_BLOCK_TAG ? PTL_OVERFLOW_LIST :
-                                                     PTL_PRIORITY_LIST;
-
-  return uct_bxi_wrap(
-          PtlMEAppend(rxq->nih, rxq->pti, &me, list, block, &block->meh));
+  return uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, rxq->config.list,
+                                  block, &block->meh));
 }
 
 static ucs_status_t uct_bxi_recv_blocks_enable(uct_bxi_rxq_t *rxq)
@@ -121,60 +121,57 @@ static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
-ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
+ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
+                                uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p)
 {
-  ucs_status_t       rc;
+  ucs_status_t       status;
   uct_bxi_rxq_t     *rxq;
   ucs_mpool_params_t mp_block_params;
 
   rxq = ucs_malloc(sizeof(uct_bxi_rxq_t), "bxi-rxq");
   if (rxq == NULL) {
-    rc = UCS_ERR_NO_MEMORY;
+    status = UCS_ERR_NO_MEMORY;
     goto err;
   }
 
   rxq->nih                 = params->nih;
   rxq->eqh                 = params->eqh;
   rxq->config.blk_opts     = params->options;
-  rxq->config.blk_size     = params->item_size;
   rxq->config.blk_min_free = params->min_free;
-  rxq->config.num_blk      = params->max_items;
 
-  rc = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
-                               PTL_PT_ANY, &rxq->pti));
-  if (rc != UCS_OK) {
+  status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
+                                   PTL_PT_ANY, &rxq->pti));
+  if (status != UCS_OK) {
     goto err;
   }
 
   /* First, initialize memory pool of receive buffers. */
   ucs_mpool_params_reset(&mp_block_params);
   mp_block_params = (ucs_mpool_params_t){
-          .max_chunk_size = params->items_per_chunk *
-                            (sizeof(uct_bxi_recv_block_t) + params->item_size),
-          .elems_per_chunk = params->items_per_chunk,
-          .elem_size       = sizeof(uct_bxi_recv_block_t) + params->item_size,
-          .max_elems       = params->max_items,
-          .alignment       = 64,
-          .align_offset    = 0,
-          .ops             = &uct_bxi_rxq_mpool_ops,
-          .name            = params->name,
-          .grow_factor     = 1,
+          .max_chunk_size  = params->mp.max_chunk_size,
+          .elems_per_chunk = params->mp.bufs_grow,
+          .elem_size    = sizeof(uct_bxi_recv_block_t) + iface->config.seg_size,
+          .max_elems    = params->mp.max_bufs,
+          .alignment    = 64,
+          .align_offset = 0,
+          .ops          = &uct_bxi_rxq_mpool_ops,
+          .name         = params->name,
+          .grow_factor  = params->mp.grow_factor,
   };
-
-  rc = ucs_mpool_init(&mp_block_params, &rxq->mp);
-  if (rc != UCS_OK) {
+  status = ucs_mpool_init(&mp_block_params, &rxq->mp);
+  if (status != UCS_OK) {
     goto err_clean_pt;
   }
 
-  rc = uct_bxi_recv_blocks_enable(rxq);
-  if (rc != UCS_OK) {
+  status = uct_bxi_recv_blocks_enable(rxq);
+  if (status != UCS_OK) {
     goto err_clean_mp;
   }
 
   *rxq_p = rxq;
 
-  return rc;
+  return status;
 err_clean_mp:
   ucs_mpool_cleanup(&rxq->mp, 1);
 err_clean_pt:
@@ -182,7 +179,7 @@ err_clean_pt:
 err_free_rxq:
   ucs_free(rxq);
 err:
-  return rc;
+  return status;
 }
 
 void uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq)

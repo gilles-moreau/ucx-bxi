@@ -52,13 +52,14 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "RX_AM_", -1, 32, 128m, 1.0, "recv_am",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.am_mp), "\n"),
 
-        {"EAGER_BLOCK_SIZE", "8192",
-         "Size of a single eager block (default: 8192).",
-         ucs_offsetof(uct_bxi_iface_config_t, rx.eager_block_size),
-         UCS_CONFIG_TYPE_UINT},
+        {"SEG_SIZE", "8192",
+         "Size of bounce buffers used for post_send "
+         "and post_recv. (default: 8192).",
+         ucs_offsetof(uct_bxi_iface_config_t, seg_size),
+         UCS_CONFIG_TYPE_MEMUNITS},
 
         {"MAX_EP_RETRIES", "16",
-         "Maximum nunber of send retry on a given endpoint (default: 16).",
+         "Maximum number of send retry on a given endpoint (default: 16).",
          ucs_offsetof(uct_bxi_iface_config_t, max_ep_retries),
          UCS_CONFIG_TYPE_UINT},
 
@@ -91,13 +92,13 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   uct_base_iface_query(&iface->super, attr);
 
   attr->cap.am.max_short = iface->config.max_short - sizeof(uint64_t);
-  attr->cap.am.max_bcopy = iface->config.rx.eager_block_size;
+  attr->cap.am.max_bcopy = iface->config.seg_size;
   attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
 
   attr->cap.tag.recv.min_recv   = 0;
   attr->cap.tag.eager.max_short = iface->config.max_short;
-  attr->cap.tag.eager.max_bcopy = iface->config.rx.eager_block_size;
+  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_zcopy = iface->config.max_msg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = 128;
@@ -105,7 +106,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
   attr->cap.put.max_short       = iface->config.max_short;
-  attr->cap.put.max_bcopy       = iface->config.rx.eager_block_size;
+  attr->cap.put.max_bcopy       = iface->config.seg_size;
   attr->cap.put.min_zcopy       = 0;
   attr->cap.put.max_zcopy       = iface->config.max_msg_size;
   attr->cap.put.max_iov         = iface->config.max_iovecs;
@@ -113,7 +114,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.put.align_mtu       = attr->cap.put.opt_zcopy_align;
 
   attr->cap.get.max_short       = iface->config.max_short;
-  attr->cap.get.max_bcopy       = iface->config.rx.eager_block_size;
+  attr->cap.get.max_bcopy       = iface->config.seg_size;
   attr->cap.get.min_zcopy       = 0;
   attr->cap.get.max_zcopy       = iface->config.max_msg_size;
   attr->cap.get.max_iov         = iface->config.max_iovecs;
@@ -209,54 +210,119 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
                                     num_tl_devices_p);
 }
 
+static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
+                                           const uct_iface_params_t     *params,
+                                           const uct_bxi_iface_config_t *config)
+{
+  ucs_status_t        status = UCS_OK;
+  ucs_mpool_params_t  mp_param;
+  uct_bxi_rxq_param_t rxq_param;
+
+  if (!config->tm.enable) {
+    goto out;
+  }
+
+  iface->tm.num_tags = iface->config.tm.max_tags = config->tm.list_size;
+  iface->tm.num_op_ctx = iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
+
+  iface->tm.eager_unexp.cb = params->eager_cb;
+  iface->tm.rndv_unexp.cb  = params->rndv_cb;
+  iface->tm.eager_unexp.arg =
+          UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
+  iface->tm.rndv_unexp.arg =
+          UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
+  iface->tm.unexpected_cnt     = 0;
+  iface->tm.num_outstanding    = 0;
+  iface->tm.recv_tried_offload = 0;
+
+  kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
+
+  rxq_param = (uct_bxi_rxq_param_t){
+          .eqh     = iface->md->eqh,
+          .nih     = iface->md->nih,
+          .mp      = config->rx.tag_mp,
+          .options = UCT_BXI_RXQ_BLOCK_TAG,
+          .name    = "rxq-tag",
+  };
+  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.queue);
+
+  /* Work pool of operation. */
+  mp_param = (ucs_mpool_params_t){
+          .max_chunk_size  = iface->tm.num_tags * sizeof(uct_bxi_recv_block_t),
+          .elems_per_chunk = iface->tm.num_tags,
+          .max_elems       = iface->tm.num_tags,
+          .elem_size       = sizeof(uct_bxi_recv_block_t),
+          .alignment       = 64,
+          .align_offset    = 0,
+          .ops             = &uct_bxi_recv_block_mpool_ops,
+          .name            = "recv-block",
+          .grow_factor     = 1,
+  };
+  rc = ucs_mpool_init(&mp_param, &iface->tm.recv_ops_mp);
+
+out:
+  return rc;
+}
+
 static inline void
 uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
                           const uct_bxi_iface_config_t *config)
 {
-  iface->config.rx.eager_block_size = config->rx.eager_block_size;
-  iface->config.max_events          = config->max_events;
-  iface->config.max_outstanding_ops = config->tx.max_outstanding_ops;
-  iface->config.max_iovecs          = iface->md->config.limits.max_iovecs;
-  iface->config.max_msg_size        = iface->md->config.limits.max_msg_size;
-  iface->config.max_short  = ucs_min(iface->md->config.limits.max_volatile_size,
-                                     UCS_ALLOCA_MAX_SIZE);
-  iface->config.max_iovecs = 1;
+  iface->config.seg_size         = config->seg_size;
+  iface->config.tx.max_queue_len = config->tx.max_queue_len;
+  iface->config.rx.max_queue_len = config->rx.max_queue_len;
+
+  iface->config.max_iovecs   = ucs_min(iface->md->config.limits.max_iovecs, 1);
+  iface->config.max_msg_size = iface->md->config.limits.max_msg_size;
+  iface->config.max_short = ucs_min(iface->md->config.limits.max_volatile_size,
+                                    UCS_ALLOCA_MAX_SIZE);
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
-  iface->tm.enabled              = config->tm.enable;
-  iface->tm.num_tags = iface->config.tm.max_tags = config->tm.list_size;
-  iface->tm.num_op_ctx = iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
+
+  iface->tm.enabled = config->tm.enable;
 }
+
+void uct_bxi_iface_send_desc_init(uct_iface_h tl_iface, void *obj,
+                                  uct_mem_h memh)
+{
+  uct_bxi_iface_send_op_t *desc = obj;
+
+  return;
+}
+
+static ucs_mpool_ops_t uct_bxi_pending_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
 
 static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
                                               uct_bxi_iface_config_t *config)
 {
   ucs_status_t       status;
-  ucs_mpool_params_t mp_param;
+  ucs_mpool_params_t mp_params;
 
-  /* Create TX buffers mempool */
-  status = uct_iface_mpool_init(
-          &iface->super, &iface->tx.send_desc,
-          sizeof(uct_bxi_iface_send_op_t) + iface->config.tx.seg_size,
-          sizeof(uct_bxi_iface_send_op_t), UCS_SYS_CACHE_LINE_SIZE,
-          &config->tx.mp, iface->config.tx_qp_len, uct_rc_iface_send_desc_init,
-          "rc_send_desc");
-
-  /* Allocate memory pool of send descriptors. */
-  mp_param = (ucs_mpool_params_t){
-          .max_chunk_size = iface->config.max_outstanding_ops *
+  /* Allocate memory pool of TX send operations without buffer. */
+  mp_params = (ucs_mpool_params_t){
+          .max_chunk_size = iface->config.tx.max_queue_len *
                             sizeof(uct_bxi_iface_send_op_t),
-          .elems_per_chunk = iface->config.max_outstanding_ops,
-          .max_elems       = iface->config.max_outstanding_ops,
-          .elem_size       = sizeof(uct_bxi_op_t),
+          .elems_per_chunk = iface->config.tx.max_queue_len,
+          .max_elems       = iface->config.tx.max_queue_len,
+          .elem_size       = sizeof(uct_bxi_iface_send_op_t),
           .alignment       = 64,
           .align_offset    = 0,
           .ops             = &uct_bxi_mpool_ops,
           .name            = "send-desc-ops",
           .grow_factor     = 1,
   };
-  rc = ucs_mpool_init(&mp_param, &self->ops_mp);
+  status = ucs_mpool_init(&mp_param, &self->ops_mp);
+
+err_cleanup_tx_send_desc:
+  ucs_mpool_cleanup(&iface->tx.send_desc_mp, 1);
+
+  return status;
 }
 
 UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
@@ -264,11 +330,12 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
                     uct_worker_h worker, const uct_iface_params_t *params,
                     const uct_bxi_iface_config_t *config)
 {
-  ucs_status_t            rc = UCS_OK;
-  uct_bxi_md_t           *ms = ucs_derived_of(tl_md, uct_bxi_md_t);
+  ucs_status_t            status = UCS_OK;
+  uct_bxi_md_t           *ms     = ucs_derived_of(tl_md, uct_bxi_md_t);
   uct_bxi_iface_config_t *bxi_config =
           ucs_derived_of(config, uct_bxi_iface_config_t);
   uct_bxi_mem_desc_param_t mem_desc_param;
+  ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
 
   UCS_CLASS_CALL_SUPER_INIT(
@@ -279,6 +346,50 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
                           params->stats_root :
                           dev->stats)
                    UCS_STATS_ARG(params->mode.device.dev_name));
+
+  /* Initialize all config entries. */
+  uct_bxi_iface_config_init(self, bxi_config);
+
+  /* Create RX Queues */
+  rxq_param = (uct_bxi_rxq_param_t){
+          .eqh     = self->md->eqh,
+          .nih     = self->md->nih,
+          .mp      = bxi_config->rx.am_mp,
+          .options = UCT_BXI_RXQ_BLOCK_AM,
+          .name    = "rxq-am",
+  };
+  status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.queue);
+
+  if (self->tm.enabled) {
+  }
+
+  /* Create TX buffers mempool */
+  status = uct_iface_mpool_init(
+          &self->super, &self->tx.send_desc_mp,
+          sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
+          sizeof(uct_bxi_iface_send_op_t), UCS_SYS_CACHE_LINE_SIZE,
+          &config->tx.mp, self->config.tx.max_queue_len,
+          uct_bxi_iface_send_desc_init, "bxi_send_desc");
+  if (status != UCS_OK) {
+    goto err;
+  }
+
+  status = uct_bxi_iface_tx_ops_init(self, config);
+  if (status != UCS_OK) {
+    goto err;
+  }
+
+  /* Create mempool for pending requests */
+  ucs_mpool_params_reset(&mp_params);
+  mp_params.elem_size       = sizeof(uct_bxi_pending_req_t);
+  mp_params.alignment       = 1;
+  mp_params.elems_per_chunk = 128;
+  mp_params.ops             = &uct_bxi_pending_mpool_ops;
+  mp_params.name            = "pending-ops";
+  status                    = ucs_mpool_init(&mp_params, &self->tx.pending_mp);
+  if (status != UCS_OK) {
+    goto err_cleanup_rx;
+  }
 
   /* Work pool of operation. */
   mp_param = (ucs_mpool_params_t){

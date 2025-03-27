@@ -1,20 +1,18 @@
 #ifndef BXI_RQ_H
 #define BXI_RQ_H
 
+#include <uct/base/uct_iface.h>
 #include <uct/bxi/bxi.h>
 
 typedef struct uct_bxi_rxq uct_bxi_rxq_t;
 
 enum {
-  ECR_PTL_BLOCK_AM = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
-                     PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
-                     PTL_ME_IS_ACCESSIBLE,
-  ECR_PTL_BLOCK_TAG = PTL_ME_OP_PUT | PTL_ME_EVENT_LINK_DISABLE |
-                      PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
-                      PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE,
-  ECR_PTL_BLOCK_RMA = PTL_ME_OP_PUT | PTL_ME_OP_GET |
-                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE |
-                      PTL_ME_MAY_ALIGN | PTL_ME_EVENT_COMM_DISABLE,
+  UCT_BXI_RXQ_BLOCK_AM = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
+                         PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
+                         PTL_ME_IS_ACCESSIBLE,
+  UCT_BXI_RXQ_BLOCK_TAG =
+          PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_EVENT_LINK_DISABLE |
+          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN | PTL_ME_IS_ACCESSIBLE,
 };
 
 typedef struct uct_bxi_recv_block {
@@ -27,15 +25,12 @@ typedef struct uct_bxi_recv_block {
 } uct_bxi_recv_block_t;
 
 typedef struct uct_bxi_rxq_param {
-  size_t          item_size;
-  uint32_t        max_items;
-  uint32_t        min_items;
-  ptl_size_t      min_free;
-  int             items_per_chunk;
-  unsigned int    options;
-  char           *name;
-  ptl_handle_ni_t nih;
-  ptl_handle_eq_t eqh;
+  uct_iface_mpool_config_t mp; /* RX Memory pool configuration. */
+  ptl_size_t               min_free;
+  ptl_list_t               list;
+  char                    *name;
+  ptl_handle_ni_t          nih;
+  ptl_handle_eq_t          eqh;
 } uct_bxi_rxq_param_t;
 
 typedef struct uct_bxi_rxq {
@@ -53,7 +48,8 @@ typedef struct uct_bxi_rxq {
   int             bid;
 } uct_bxi_rxq_t;
 
-ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
+ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
+                                uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p);
 void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 

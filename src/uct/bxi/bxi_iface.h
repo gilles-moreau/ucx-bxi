@@ -21,8 +21,18 @@ typedef void (*handle_failure_func_t)(uct_bxi_iface_t         *iface,
                                       uct_bxi_iface_send_op_t *op,
                                       ptl_ni_fail_t            fail);
 
-typedef void (*uct_bxi_send_handler_t)(uct_bxi_iface_send_op_t *op,
-                                       const void              *resp);
+typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
+                                          const void              *resp);
+
+typedef struct uct_bxi_pending_req {
+  uct_pending_req_t super;
+  uct_bxi_ep_t     *ep;
+} uct_bxi_pending_req_t;
+
+typedef struct uct_bxi_pending_purge_arg {
+  uct_pending_purge_callback_t cb;
+  void                        *arg;
+} uct_bxi_pending_purge_arg_t;
 
 typedef struct uct_bxi_iface_addr {
   ptl_pt_index_t am;
@@ -42,11 +52,12 @@ typedef struct uct_bxi_iface_txq {
 } uct_bxi_iface_txq_t;
 
 typedef struct uct_bxi_iface_send_op {
-  unsigned          flags;
-  ucs_queue_elem_t  elem;      /* Element on a TX queue */
-  uct_completion_t *user_comp; /* Completion callback */
-  uct_bxi_ep_t     *ep;        /* OP endpoint */
-  ptl_size_t        sn;        /* OP sequence number */
+  unsigned                  flags;
+  uct_bxi_send_op_handler_t handler;
+  ucs_queue_elem_t          elem;      /* Element on a TX queue */
+  uct_completion_t         *user_comp; /* Completion callback */
+  uct_bxi_ep_t             *ep;        /* OP endpoint */
+  ptl_size_t                sn;        /* OP sequence number */
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_op_ctx {
@@ -66,8 +77,8 @@ typedef struct uct_bxi_iface_ops {
 
 typedef struct uct_bxi_iface_config {
   uct_iface_config_t super;
-  size_t             max_events;
-  int                seg_size; /* Max copy-out size of send buffers */
+  size_t             max_events; /* Maximum number event in Event Queue */
+  int                seg_size;   /* Max copy-out size of send buffers */
 
   struct {
     int max_queue_len; /* Maximum number of outstanding OP */
@@ -75,8 +86,7 @@ typedef struct uct_bxi_iface_config {
   } tx;
 
   struct {
-    int max_queue_len;    /* Maximum number of receive descriptor in the RXQ. */
-    int eager_block_size; /* Receive block size within the memory pool. */
+    int max_queue_len; /* Maximum number of receive descriptor in the RXQ. */
     uct_iface_mpool_config_t am_mp;  /* Receive descriptor for AM RX. */
     uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX. */
   } rx;
@@ -102,14 +112,13 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
   struct {
+    int seg_size;
     struct {
-      int seg_size;
-      int max_copyin_buf;
+      int max_queue_len;
     } tx;
 
     struct {
-      int num_eager_blocks;
-      int eager_block_size;
+      int max_queue_len;
     } rx;
 
     size_t   max_events;
@@ -155,16 +164,17 @@ typedef struct uct_bxi_iface {
     ucs_mpool_t      send_op_mp;   /* Memory pool of send operations */
     ucs_mpool_t      flush_ops_mp; /* Memory pool for flush OP */
     ucs_list_link_t  tx_queues;    /* List of TX Queues */
+    ucs_mpool_t      pending_mp;   /* Memory pool of pending request */
     ucs_queue_head_t pending_q;    /* List of pending OP */
   } tx;
 
   struct {
     ptl_handle_eq_t eqh;
     struct {
-      uct_bxi_rxq_t *rxq;
+      uct_bxi_rxq_t *queue;
     } am;
     struct {
-      uct_bxi_rxq_t *rxq;
+      uct_bxi_rxq_t *queue;
     } tag;
     struct {
       ptl_pt_index_t      pti;

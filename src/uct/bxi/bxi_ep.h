@@ -27,16 +27,6 @@ typedef struct uct_bxi_ep {
   uint8_t               conn_state;
 } uct_bxi_ep_t;
 
-typedef struct uct_bxi_ep_pending_req {
-  uct_pending_req_t super;
-  uct_bxi_ep_t     *ep;
-} uct_bxi_ep_pending_req_t;
-
-typedef struct uct_bxi_ep_pending_purge_arg {
-  uct_pending_purge_callback_t cb;
-  void                        *arg;
-} uct_bxi_ep_pending_purge_arg_t;
-
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
                                   uct_rkey_t rkey);
