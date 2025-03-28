@@ -6,15 +6,6 @@
 
 typedef struct uct_bxi_rxq uct_bxi_rxq_t;
 
-enum {
-  UCT_BXI_RXQ_BLOCK_AM = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
-                         PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
-                         PTL_ME_IS_ACCESSIBLE,
-  UCT_BXI_RXQ_BLOCK_TAG =
-          PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_EVENT_LINK_DISABLE |
-          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN | PTL_ME_IS_ACCESSIBLE,
-};
-
 typedef struct uct_bxi_recv_block {
   void           *start;
   size_t          size;
@@ -36,7 +27,8 @@ typedef struct uct_bxi_rxq_param {
 typedef struct uct_bxi_rxq {
   ptl_handle_ni_t nih;
   ptl_handle_eq_t eqh;
-  ptl_pt_index_t  pti; /* Portal Table Index for RX Queue */
+  ptl_pt_index_t  pti;  /* Portals Table Index for RX Queue */
+  ptl_list_t      list; /* Portals list for blocks */
   struct {
     size_t       blk_size;
     unsigned int blk_opts;
@@ -45,7 +37,6 @@ typedef struct uct_bxi_rxq {
   } config;
   ucs_mpool_t     mp;    /* Memory pool of block buffer */
   ucs_list_link_t bhead; /* List of allocated blocks */
-  int             bid;
 } uct_bxi_rxq_t;
 
 ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,

@@ -137,7 +137,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
 
   rxq->nih                 = params->nih;
   rxq->eqh                 = params->eqh;
-  rxq->config.blk_opts     = params->options;
+  rxq->list                = params->list;
   rxq->config.blk_min_free = params->min_free;
 
   status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
@@ -151,13 +151,12 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
   mp_block_params = (ucs_mpool_params_t){
           .max_chunk_size  = params->mp.max_chunk_size,
           .elems_per_chunk = params->mp.bufs_grow,
-          .elem_size    = sizeof(uct_bxi_recv_block_t) + iface->config.seg_size,
-          .max_elems    = params->mp.max_bufs,
-          .alignment    = 64,
-          .align_offset = 0,
-          .ops          = &uct_bxi_rxq_mpool_ops,
-          .name         = params->name,
-          .grow_factor  = params->mp.grow_factor,
+          .elem_size   = sizeof(uct_bxi_recv_block_t) + iface->config.seg_size,
+          .max_elems   = params->mp.max_bufs,
+          .alignment   = UCS_SYS_CACHE_LINE_SIZE,
+          .ops         = &uct_bxi_rxq_mpool_ops,
+          .name        = params->name,
+          .grow_factor = params->mp.grow_factor,
   };
   status = ucs_mpool_init(&mp_block_params, &rxq->mp);
   if (status != UCS_OK) {

@@ -166,8 +166,8 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
   addr->rma = iface->rx.rma.pti;
-  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.rxq);
-  addr->tag = uct_bxi_rxq_get_addr(iface->rx.tag.rxq);
+  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.queue);
+  addr->tag = uct_bxi_rxq_get_addr(iface->rx.tag.queue);
 
   return UCS_OK;
 }
@@ -210,6 +210,22 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
                                     num_tl_devices_p);
 }
 
+void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_t *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
+  uct_bxi_recv_block_t *block = obj;
+
+  block->rxq = iface->rx.tag.queue;
+}
+
+static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_recv_block_init,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
 static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
                                            const uct_iface_params_t     *params,
                                            const uct_bxi_iface_config_t *config)
@@ -218,7 +234,9 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_t  mp_param;
   uct_bxi_rxq_param_t rxq_param;
 
-  if (!config->tm.enable) {
+  iface->tm.enabled = config->tm.enable;
+
+  if (!iface->tm.enabled) {
     goto out;
   }
 
@@ -238,11 +256,11 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
   rxq_param = (uct_bxi_rxq_param_t){
-          .eqh     = iface->md->eqh,
-          .nih     = iface->md->nih,
-          .mp      = config->rx.tag_mp,
-          .options = UCT_BXI_RXQ_BLOCK_TAG,
-          .name    = "rxq-tag",
+          .eqh  = iface->md->eqh,
+          .nih  = iface->md->nih,
+          .mp   = config->rx.tag_mp,
+          .list = PTL_OVERFLOW_LIST,
+          .name = "rxq-tag",
   };
   status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.queue);
 
@@ -252,16 +270,15 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           .elems_per_chunk = iface->tm.num_tags,
           .max_elems       = iface->tm.num_tags,
           .elem_size       = sizeof(uct_bxi_recv_block_t),
-          .alignment       = 64,
-          .align_offset    = 0,
+          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
           .ops             = &uct_bxi_recv_block_mpool_ops,
           .name            = "recv-block",
           .grow_factor     = 1,
   };
-  rc = ucs_mpool_init(&mp_param, &iface->tm.recv_ops_mp);
+  status = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
 
 out:
-  return rc;
+  return status;
 }
 
 static inline void
@@ -279,17 +296,66 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
-
-  iface->tm.enabled = config->tm.enable;
 }
 
-void uct_bxi_iface_send_desc_init(uct_iface_h tl_iface, void *obj,
-                                  uct_mem_h memh)
+static void uct_bxi_send_desc_op_handler(uct_bxi_iface_send_op_t *op,
+                                         const void              *resp)
 {
-  uct_bxi_iface_send_op_t *desc = obj;
-
-  return;
+  /* Because a TX buffer was used, user completion already happened. 
+   * So no need to call it. Just put the operation back to MP. */
+  ucs_mpool_put_inline(op);
 }
+
+void uct_bxi_iface_send_desc_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_t *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
+  uct_bxi_iface_send_op_t *op = obj;
+
+  op->handler  = uct_bxi_send_desc_op_handler;
+  op->mem_desc = iface->tx.mem_desc;
+}
+
+static ucs_mpool_ops_t uct_bxi_send_desc_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_desc_init,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
+static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
+                                         const void              *resp)
+{
+  /* First, invoke user completion callback. */
+  uct_invoke_completion(op->user_comp, UCS_OK);
+
+  /* Then, we may release the operation. */
+  ucs_mpool_put_inline(op);
+}
+
+void uct_bxi_iface_send_comp_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_t *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
+  uct_bxi_iface_send_op_t *op = obj;
+
+  op->handler  = uct_bxi_send_comp_op_handler;
+  op->mem_desc = iface->tx.mem_desc;
+}
+
+static ucs_mpool_ops_t uct_bxi_send_comp_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_comp_init,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
+static ucs_mpool_ops_t uct_bxi_send_flush_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
 
 static ucs_mpool_ops_t uct_bxi_pending_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
@@ -305,35 +371,56 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
   ucs_mpool_params_t mp_params;
 
   /* Allocate memory pool of TX send operations without buffer. */
+  ucs_mpool_params_reset(&mp_params);
   mp_params = (ucs_mpool_params_t){
-          .max_chunk_size = iface->config.tx.max_queue_len *
+          .max_chunk_size = config->tx.mp.max_chunk_size *
                             sizeof(uct_bxi_iface_send_op_t),
-          .elems_per_chunk = iface->config.tx.max_queue_len,
-          .max_elems       = iface->config.tx.max_queue_len,
+          .elems_per_chunk = config->tx.mp.bufs_grow,
+          .max_elems       = config->tx.mp.max_bufs,
           .elem_size       = sizeof(uct_bxi_iface_send_op_t),
-          .alignment       = 64,
-          .align_offset    = 0,
-          .ops             = &uct_bxi_mpool_ops,
-          .name            = "send-desc-ops",
-          .grow_factor     = 1,
+          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
+          .ops             = &uct_bxi_send_comp_mpool_ops,
+          .name            = "send-comp-ops",
+          .grow_factor     = config->tx.mp.grow_factor,
   };
-  status = ucs_mpool_init(&mp_param, &self->ops_mp);
+  status = ucs_mpool_init(&mp_params, &iface->tx.send_op_mp);
 
-err_cleanup_tx_send_desc:
-  ucs_mpool_cleanup(&iface->tx.send_desc_mp, 1);
+  if (status != UCS_OK) {
+    goto err;
+  }
 
+  /* Allocate memory of flush operations. */
+  ucs_mpool_params_reset(&mp_params);
+  mp_params = (ucs_mpool_params_t){
+          .elems_per_chunk = 256,
+          .max_elems       = iface->config.max_outstanding_ops,
+          .elem_size       = sizeof(uct_bxi_iface_send_op_t),
+          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
+          .ops             = &uct_bxi_send_comp_mpool_ops,
+          .name            = "bxi-flush-ops",
+  };
+  status = ucs_mpool_init(&mp_params, &iface->tx.flush_ops_mp);
+  if (status != UCS_OK) {
+    goto err_free_sendcompmp;
+  }
+
+  return status;
+
+err_free_sendcompmp:
+  ucs_mpool_cleanup(&iface->tx.send_op_mp, 1);
+err:
   return status;
 }
 
 UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
                     uct_bxi_iface_ops_t *ops, uct_md_h tl_md,
                     uct_worker_h worker, const uct_iface_params_t *params,
-                    const uct_bxi_iface_config_t *config)
+                    const uct_bxi_iface_config_t *uct_config)
 {
   ucs_status_t            status = UCS_OK;
   uct_bxi_md_t           *ms     = ucs_derived_of(tl_md, uct_bxi_md_t);
-  uct_bxi_iface_config_t *bxi_config =
-          ucs_derived_of(config, uct_bxi_iface_config_t);
+  uct_bxi_iface_config_t *config =
+          ucs_derived_of(uct_config, uct_bxi_iface_config_t);
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
@@ -348,30 +435,42 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
                    UCS_STATS_ARG(params->mode.device.dev_name));
 
   /* Initialize all config entries. */
-  uct_bxi_iface_config_init(self, bxi_config);
+  uct_bxi_iface_config_init(self, config);
 
-  /* Create RX Queues */
+  /* Create RX Queues for AM messages. Block are posted to the Priority List */
   rxq_param = (uct_bxi_rxq_param_t){
-          .eqh     = self->md->eqh,
-          .nih     = self->md->nih,
-          .mp      = bxi_config->rx.am_mp,
-          .options = UCT_BXI_RXQ_BLOCK_AM,
-          .name    = "rxq-am",
+          .eqh  = self->md->eqh,
+          .nih  = self->md->nih,
+          .mp   = config->rx.am_mp,
+          .list = PTL_PRIORITY_LIST,
+          .name = "rxq-am",
   };
   status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.queue);
+  if (status != UCS_OK) {
+    goto err_clean_super;
+  }
 
-  if (self->tm.enabled) {
+  /* Initialize TAG resources if enabled. */
+  status = uct_bxi_iface_tag_init(self, params, config);
+  if (status != UCS_OK) {
+    goto err_clean_tag;
   }
 
   /* Create TX buffers mempool */
-  status = uct_iface_mpool_init(
-          &self->super, &self->tx.send_desc_mp,
-          sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
-          sizeof(uct_bxi_iface_send_op_t), UCS_SYS_CACHE_LINE_SIZE,
-          &config->tx.mp, self->config.tx.max_queue_len,
-          uct_bxi_iface_send_desc_init, "bxi_send_desc");
+  ucs_mpool_params_reset(&mp_params);
+  mp_params = (ucs_mpool_params_t){
+          .max_chunk_size  = config->tx.mp.max_chunk_size,
+          .elems_per_chunk = config->tx.mp.bufs_grow,
+          .elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
+          .max_elems = config->tx.mp.max_bufs,
+          .alignment = UCS_SYS_CACHE_LINE_SIZE,
+          .ops       = &uct_bxi_send_desc_mpool_ops,
+          .name      = "send-desc-mp",
+          .grow_factor = config->tx.mp.grow_factor,
+  };
+  status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
-    goto err;
+    goto err_clean_pt;
   }
 
   status = uct_bxi_iface_tx_ops_init(self, config);
@@ -391,27 +490,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
     goto err_cleanup_rx;
   }
 
-  /* Work pool of operation. */
-  mp_param = (ucs_mpool_params_t){
-          .max_chunk_size =
-                  self->config.max_outstanding_ops * sizeof(uct_bxi_op_t),
-          .elems_per_chunk = self->config.max_outstanding_ops,
-          .max_elems       = self->config.max_outstanding_ops,
-          .elem_size       = sizeof(uct_bxi_op_t),
-          .alignment       = 64,
-          .align_offset    = 0,
-          .ops             = &uct_bxi_mpool_ops,
-          .name            = "ptl-flush-ops",
-          .grow_factor     = 1,
-  };
-  rc = ucs_mpool_init(&mp_param, &self->flush_ops_mp);
-
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
 
-  ucs_debug("PTL: iface addr. iface=%p, nid=%d, pid=%d, am pti=%d, rma pti=%d, "
-            "tag pti=%d",
-            self, ptl_ms->super.pid.phys.nid, ptl_ms->super.pid.phys.pid,
-            self->am_rq.pti, ptl_ms->super.pti, self->tag_rq.pti);
+err_clean_rxq_am:
+  uct_bxi_rxq_fini(self->rx.am.queue);
 err:
   return rc;
 }
