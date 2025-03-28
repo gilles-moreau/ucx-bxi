@@ -53,6 +53,7 @@ typedef struct uct_bxi_iface_txq {
 
 typedef struct uct_bxi_iface_send_op {
   unsigned                  flags;
+  uct_bxi_mem_desc_t       *mem_desc;
   uct_bxi_send_op_handler_t handler;
   ucs_queue_elem_t          elem;      /* Element on a TX queue */
   uct_completion_t         *user_comp; /* Completion callback */
@@ -155,17 +156,17 @@ typedef struct uct_bxi_iface {
       void                   *arg; /* User defined arg */
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
-    ucs_mpool_t  recv_ops_mp;
+    ucs_mpool_t  recv_block_mp;
     unsigned int recv_tried_offload;
   } tm;
 
   struct {
-    ucs_mpool_t      send_desc_mp; /* Memory pool of send descriptor */
-    ucs_mpool_t      send_op_mp;   /* Memory pool of send operations */
-    ucs_mpool_t      flush_ops_mp; /* Memory pool for flush OP */
-    ucs_list_link_t  tx_queues;    /* List of TX Queues */
-    ucs_mpool_t      pending_mp;   /* Memory pool of pending request */
-    ucs_queue_head_t pending_q;    /* List of pending OP */
+    ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
+    ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
+    ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */
+    uct_bxi_mem_desc_t *mem_desc;     /* Memory Descriptor for sending data */
+    ucs_mpool_t         pending_mp;   /* Memory pool of pending request */
+    ucs_queue_head_t    pending_q;    /* List of pending OP */
   } tx;
 
   struct {
