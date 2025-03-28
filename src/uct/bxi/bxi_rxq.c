@@ -35,7 +35,6 @@ int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
   ptl_match_bits_t match = 0;
   ptl_match_bits_t ign   = ~0;
   uct_bxi_rxq_t   *rxq   = block->rxq;
-  ptl_list_t       list;
 
   if (block->start == NULL) {
     return UCS_ERR_IO_ERROR;
@@ -59,8 +58,8 @@ int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
           .length = block->size,
   };
 
-  return uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, rxq->config.list,
-                                  block, &block->meh));
+  return uct_bxi_wrap(
+          PtlMEAppend(rxq->nih, rxq->pti, &me, rxq->list, block, &block->meh));
 }
 
 static ucs_status_t uct_bxi_recv_blocks_enable(uct_bxi_rxq_t *rxq)

@@ -183,6 +183,49 @@ ucs_status_t uct_bxi_iface_get_device_address(uct_iface_h        tl_iface,
   return UCS_OK;
 }
 
+static inline void
+uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
+  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  op->handler(op, NULL);
+}
+
+int uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface, uct_bxi_mem_desc_t *mem_desc)
+{
+  ucs_status_t             status     = UCS_OK;
+  int                      progressed = 0;
+  uct_bxi_iface_send_op_t *op;
+  ptl_ct_event_t           ct_count;
+
+  /* Do not poll count if there are no outstanding operations. */
+  if (ucs_queue_is_empty(&mem_desc->send_ops)) {
+    return progressed;
+  }
+
+  status = uct_ptl_wrap(PtlCTGet(mem_desc->cth, &ct_count));
+  if (status != UCS_OK) {
+    progressed = status;
+    goto err;
+  }
+
+  if (ct_count.failure > 0) {
+    progressed = UCT_ERR_BXI_CT_FAILURE;
+    goto err;
+  }
+
+  ucs_queue_for_each_extract (
+          op, &mem_desc->send_ops, elem,
+          UCS_CIRCULAR_COMPARE64(ct_count.success, >, op->sn)) {
+    progressed++;
+
+    uct_bxi_iface_mem_desc_completion_op(op);
+  }
+
+err:
+  return progressed;
+}
+
 unsigned uct_bxi_iface_progress(uct_iface_t *super)
 {
   return 0;
@@ -279,6 +322,31 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
 out:
   return status;
+}
+
+static void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
+{
+  void *recv_buffer;
+
+  if (!iface->tm.enabled) {
+    goto out;
+  }
+
+  kh_foreach_key (&iface->tm.tag_addrs, recv_buffer, {
+    ucs_debug("destroying iface %p, with recv buffer %p offloaded to the HW",
+              iface, recv_buffer);
+  })
+    ;
+  kh_destroy_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
+
+  /* Release TAG RX queue. */
+  uct_bxi_rxq_fini(iface->rx.tag.queue);
+
+  /* And receive block memory pool.*/
+  ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
+
+out:
+  return;
 }
 
 static inline void
@@ -412,13 +480,23 @@ err:
   return status;
 }
 
+static void uct_bxi_iface_tx_ops_fini(uct_bxi_iface_t *iface)
+{
+
+  /* Release memory pool of send completion operations. */
+  ucs_mpool_cleanup(&iface->tx.send_op_mp, 1);
+
+  /* Then release flush operations. */
+  ucs_mpool_cleanup(&iface->tx.flush_ops_mp, 1);
+}
+
 UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
                     uct_bxi_iface_ops_t *ops, uct_md_h tl_md,
                     uct_worker_h worker, const uct_iface_params_t *params,
                     const uct_bxi_iface_config_t *uct_config)
 {
   ucs_status_t            status = UCS_OK;
-  uct_bxi_md_t           *ms     = ucs_derived_of(tl_md, uct_bxi_md_t);
+  uct_bxi_md_t           *md     = ucs_derived_of(tl_md, uct_bxi_md_t);
   uct_bxi_iface_config_t *config =
           ucs_derived_of(uct_config, uct_bxi_iface_config_t);
   uct_bxi_mem_desc_param_t mem_desc_param;
@@ -447,11 +525,25 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   };
   status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.queue);
   if (status != UCS_OK) {
-    goto err_clean_super;
+    goto err;
   }
 
   /* Initialize TAG resources if enabled. */
   status = uct_bxi_iface_tag_init(self, params, config);
+  if (status != UCS_OK) {
+    goto err_clean_rxq;
+  }
+
+  /* Before setting TX operations, create the Memory Descriptor that
+   * spans the whole virtual memory range. */
+  mem_desc_param = (uct_bxi_mem_desc_param_t){
+          .eqh     = md->nih,
+          .start   = NULL,
+          .length  = PTL_SIZE_MAX,
+          .options = PTL_CT_ACK_REQ,
+          .flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
+  };
+  status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);
   if (status != UCS_OK) {
     goto err_clean_tag;
   }
@@ -470,12 +562,12 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   };
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
-    goto err_clean_pt;
+    goto err_clean_mem_desc;
   }
 
   status = uct_bxi_iface_tx_ops_init(self, config);
   if (status != UCS_OK) {
-    goto err;
+    goto err_clean_txbuffer;
   }
 
   /* Create mempool for pending requests */
@@ -487,15 +579,26 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   mp_params.name            = "pending-ops";
   status                    = ucs_mpool_init(&mp_params, &self->tx.pending_mp);
   if (status != UCS_OK) {
-    goto err_cleanup_rx;
+    goto err_clean_txops;
   }
 
+  /* PTL hdr is used within internal protocols and 64 bits are needed. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
 
-err_clean_rxq_am:
+  return status;
+
+err_clean_txops:
+  uct_bxi_iface_tx_ops_fini(self);
+err_clean_txbuffer:
+  ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
+err_clean_mem_desc:
+  uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
+err_clean_tag:
+  uct_bxi_iface_tag_fini(self);
+err_clean_rxq:
   uct_bxi_rxq_fini(self->rx.am.queue);
 err:
-  return rc;
+  return status;
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)

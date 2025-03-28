@@ -42,6 +42,78 @@ static const ptl_ni_limits_t default_limits = {
         .features               = 0,
 };
 
+ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
+                                        uct_bxi_mem_desc_param_t *params,
+                                        uct_bxi_mem_desc_t      **mem_desc_p)
+{
+  ucs_status_t        status;
+  uct_bxi_mem_desc_t *mem_desc;
+  ptl_md_t            ptl_md;
+
+  if (params->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATE) {
+    mem_desc = ucs_malloc(sizeof(uct_bxi_mem_desc_t), "mem_desc");
+    if (mem_desc == NULL) {
+      status = UCS_ERR_NO_MEMORY;
+      goto err;
+    }
+    mem_desc->flags = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
+  } else {
+    /* Memory has already been allocate during memory 
+     * pool initialization. */
+    mem_desc = *mem_desc_p;
+  }
+
+  status = uct_ptl_wrap(PtlCTAlloc(md->nih, &mem_desc->cth));
+  if (status != UCS_OK) {
+    goto err_free_memdesc;
+  }
+
+  ptl_md = (ptl_md_t){
+          .start     = params->start,
+          .length    = params->length,
+          .ct_handle = mem_desc->cth,
+          .eq_handle = params->eqh,
+          .options   = params->options,
+  };
+
+  status = uct_ptl_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
+  if (status != UCS_OK) {
+    goto err_clean_ct;
+  }
+
+  ucs_queue_head_init(&mem_desc->send_ops);
+
+  *mem_desc_p = mem_desc;
+
+  return status;
+
+err_clean_ct:
+  uct_bxi_wrap(PtlCTFree(mem_desc->cth));
+err_free_memdesc:
+  /* Only free if it was manually allocated. */
+  if (mem_desc->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATED) {
+    ucs_free(mem_desc);
+  }
+err:
+  return status;
+}
+
+void uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc)
+{
+  /* There must not be any outstanding operations when deleting the 
+   * Memory Descriptor. */
+  ucs_assert(ucs_queue_is_empty(&mem_desc->send_ops));
+
+  /* Then free Portals resources. */
+  uct_bxi_wrap(PtlCTFree(mem_desc->cth));
+
+  uct_bxi_wrap(PtlMDRelease(mem_desc->mdh));
+
+  if (mem_desc->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATED) {
+    ucs_free(mem_desc);
+  }
+}
+
 ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
                              const uct_md_mem_reg_params_t *params,
                              uct_mem_h                     *memh_p)

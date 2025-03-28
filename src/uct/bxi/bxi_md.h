@@ -9,22 +9,8 @@
 #define UCT_BXI_CONFIG_PREFIX "BXI_"
 
 enum {
-  UCT_BXI_MEM_FLAG_ODP             = UCS_BIT(0), /**< The memory region has on
-                                                     demand paging enabled */
-  UCT_BXI_MEM_ACCESS_REMOTE_ATOMIC = UCS_BIT(1), /**< An atomic access was
-                                                     requested for the memory
-                                                     region */
-  UCT_BXI_MEM_MULTITHREADED = UCS_BIT(2), /**< The memory region registration
-                                              handled by chunks in parallel
-                                              threads */
-  UCT_BXI_MEM_IMPORTED      = UCS_BIT(3), /**< The memory handle was
-                                              created by mem_attach */
-#if ENABLE_PARAMS_CHECK
-  UCT_BXI_MEM_ACCESS_REMOTE_RMA = UCS_BIT(4), /**< RMA access was requested
-                                                  for the memory region */
-#else
-  UCT_IB_MEM_ACCESS_REMOTE_RMA = 0,
-#endif
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATE  = UCS_BIT(0),
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATED = UCS_BIT(1),
 };
 
 typedef struct uct_bxi_rkey {
@@ -40,8 +26,10 @@ typedef struct uct_bxi_mem_desc_param {
 } uct_bxi_mem_desc_param_t;
 
 typedef struct uct_bxi_mem_desc {
-  ptl_handle_md_t mdh; /* Portals4 MD handle */
-  ptl_handle_ct_t cth; /* Portals4 CT handle */
+  unsigned         flags;
+  ptl_handle_md_t  mdh;      /* Portals4 MD handle */
+  ptl_handle_ct_t  cth;      /* Portals4 CT handle */
+  ucs_queue_head_t send_ops; /* Queue of outstanding OPs */
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {
@@ -81,6 +69,10 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);
 
+ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
+                                        uct_bxi_mem_desc_param_t *params,
+                                        uct_bxi_mem_desc_t      **mem_desc_p);
+void         uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc);
 /**
  * Memory domain constructor.
  *
