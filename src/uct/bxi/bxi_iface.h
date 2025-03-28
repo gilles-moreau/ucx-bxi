@@ -13,6 +13,10 @@ enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
 };
 
+enum {
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
+};
+
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
 typedef struct uct_bxi_ep            uct_bxi_ep_t;
