@@ -9,6 +9,24 @@
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
+#define UCT_BXI_HDR_RNDV_MATCH_MASK 0x0000000000ffffffULL
+#define UCT_BXI_HDR_AM_ID_MASK      0x0000ffffff000000ULL
+#define UCT_BXI_HDR_PROT_ID_MASK    0xffff000000000000ULL
+
+#define UCT_BXI_HDR_GET_RNDV_MATCH(_hdr)                                       \
+  ((uint32_t)(_hdr & UCT_BXI_HDR_RNDV_MATCH_MASK))
+#define UCT_BXI_HDR_GET_AM_ID(_hdr)                                            \
+  ((uint32_t)((_hdr & UCT_BXI_HDR_AM_ID_MASK) >> 24))
+#define UCT_BXI_HDR_GET_PROT_ID(_hdr)                                          \
+  ((uint32_t)((_hdr & UCT_BXI_HDR_PROT_ID_MASK) >> 48))
+
+#define UCT_BXI_HDR_SET(_hdr, _rndv_match, _am_id, _prot_id)                   \
+  _hdr  = ((_prot_id) & 0xffff);                                               \
+  _hdr  = (_hdr << 24);                                                        \
+  _hdr |= ((_am_id) & 0xffffff);                                               \
+  _hdr  = (_hdr << 24);                                                        \
+  _hdr |= ((_rndv_match) & 0xffffff);
+
 enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
 };
@@ -110,6 +128,10 @@ typedef struct uct_bxi_iface_config {
   } tm;
 } uct_bxi_iface_config_t;
 
+#define uct_bxi_rxq_hash(_ptr) kh_int_hash_func((uint32_t)(_ptr))
+KHASH_INIT(uct_bxi_rxq, uint32_t, uct_bxi_rxq_t *, 0, uct_bxi_rxq_hash,
+           kh_int_hash_equal)
+
 #define uct_bxi_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
 KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
            kh_int64_hash_equal)
@@ -165,6 +187,7 @@ typedef struct uct_bxi_iface {
   } tm;
 
   struct {
+    ptl_handle_eq_t     err_eqh;      /* Event Queue for error handling. */
     ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
     ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
     ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */
@@ -185,6 +208,7 @@ typedef struct uct_bxi_iface {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;
     } rma;
+    khash_t(uct_bxi_rxq) queues;
   } rx;
 
   uct_bxi_md_t *md;
@@ -205,8 +229,15 @@ extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 extern char              *uct_bxi_event_str[];
 
-// FIXME: this triggers a clang include not used error, check other solution
-#define uct_bxi_iface_md(_iface)                                               \
-  (ucs_derived_of((_iface)->super.md, uct_bxi_md_t))
+#define uct_bxi_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
+  uct_iface_trace_am(&(_iface)->super, _type, _am_id, _data, _length, "%cX",   \
+                     ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
+                     ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
+                                                           '?')
+
+static inline int uct_bxi_iface_should_poll_tx(unsigned count)
+{
+  return (count == 0);
+}
 
 #endif

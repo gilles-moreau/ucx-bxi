@@ -73,13 +73,6 @@ typedef enum {
     return UCS_ERR_EXCEEDS_LIMIT;                                              \
   }
 
-#define uct_bxi_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
-  uct_iface_trace_am(&(_iface)->super.super, _type, _am_id, _data, _length,    \
-                     "%cX",                                                    \
-                     ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
-                     ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
-                                                           '?')
-
 extern uct_component_t uct_bxi_component;
 
 #endif

@@ -28,8 +28,7 @@ err:
   return rc;
 }
 
-// FIXME: change return type to ucs_status_t
-int uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
+ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t *block)
 {
   ptl_me_t         me;
   ptl_match_bits_t match = 0;
@@ -102,8 +101,8 @@ static ucs_status_t uct_bxi_recv_block_disable(uct_bxi_rxq_t   *rxq,
   ucs_list_for_each_safe (block, tmp, head, elem) {
     ret = PtlMEUnlink(block->meh);
     if (ret != PTL_OK) {
-      ucs_warn("PTL: block not unlinked. bid=%d, pti=%d, start=%p", block->id,
-               rxq->pti, block->start);
+      ucs_warn("PTL: block not unlinked. pti=%d, start=%p", rxq->pti,
+               block->start);
     }
 
     ucs_mpool_put(block);
@@ -162,6 +161,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
     goto err_clean_pt;
   }
 
+  /* Then create Portals Memory Entries associated with them. */
   status = uct_bxi_recv_blocks_enable(rxq);
   if (status != UCS_OK) {
     goto err_clean_mp;
