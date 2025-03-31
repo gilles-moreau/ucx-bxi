@@ -85,6 +85,122 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {NULL},
 };
 
+static inline void
+uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
+  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  op->handler(op, NULL);
+}
+
+static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
+                                                   ptl_event_t     *ev)
+{
+  ucs_status_t          status = UCS_OK;
+  uint8_t               am_id  = UCT_BXI_HDR_GET_AM_ID(ev->match_bits);
+  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
+
+  switch (ev->type) {
+  case PTL_EVENT_PUT:
+    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
+                                 0);
+
+    uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
+                           ev->mlength);
+    break;
+  case PTL_EVENT_AUTO_UNLINK:
+    /* One block has been unlinked since it is full. All received data has 
+       * been processed at that point. */
+    status = uct_bxi_recv_block_activate(block);
+    break;
+  case PTL_EVENT_PUT_OVERFLOW:
+  case PTL_EVENT_LINK:
+  case PTL_EVENT_GET_OVERFLOW:
+  case PTL_EVENT_GET:
+  case PTL_EVENT_AUTO_FREE:
+  case PTL_EVENT_ATOMIC:
+  case PTL_EVENT_FETCH_ATOMIC:
+  case PTL_EVENT_SEARCH:
+  case PTL_EVENT_SEND:
+  case PTL_EVENT_REPLY:
+  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+  case PTL_EVENT_ATOMIC_OVERFLOW:
+  case PTL_EVENT_ACK:
+    ucs_error("BXI: event %s should not have been triggered",
+              uct_bxi_event_str[ev->type]);
+    status = UCS_ERR_IO_ERROR;
+    break;
+  case PTL_EVENT_PT_DISABLED:
+    ucs_error("BXI: event %s. RX Control flow not implemented.",
+              uct_bxi_event_str[ev->type]);
+    status = UCS_OK;
+    break;
+  default:
+    break;
+  }
+
+  return status;
+}
+
+static inline int uct_bxi_iface_is_unexpected(uct_bxi_recv_block_t *block)
+{
+  return block->rxq != NULL;
+}
+
+static ucs_status_t uct_bxi_iface_handle_tag_events(uct_ptl_iface_t *iface,
+                                                    ptl_event_t     *ev)
+{
+  ucs_status_t          status = UCS_OK;
+  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
+
+  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d",
+            uct_bxi_event_str[ev->type], ev->mlength, ev->start, ev->pt_index);
+
+  // TODO: check for truncated messages
+  switch (ev->type) {
+  case PTL_EVENT_PUT:
+    if (uct_bxi_iface_is_unexpected(block)) {
+      //TODO: handle unexpected
+    } else {
+      //TODO: handle expected
+    }
+    break;
+  case PTL_EVENT_GET:
+    uct_bxi_iface_mem_desc_completion_op(block->op);
+    break;
+  case PTL_EVENT_PT_DISABLED:
+    ucs_error("PTL: event %s. Control flow not implemented.",
+              uct_bxi_event_str[ev->type]);
+    status = UCS_ERR_IO_ERROR;
+    goto err;
+    break;
+  case PTL_EVENT_AUTO_UNLINK:
+    status = uct_bxi_recv_block_activate(block);
+    break;
+  case PTL_EVENT_ACK:
+  case PTL_EVENT_REPLY:
+  case PTL_EVENT_PUT_OVERFLOW:
+  case PTL_EVENT_GET_OVERFLOW:
+  case PTL_EVENT_AUTO_FREE:
+  case PTL_EVENT_ATOMIC:
+  case PTL_EVENT_FETCH_ATOMIC:
+  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+  case PTL_EVENT_ATOMIC_OVERFLOW:
+  case PTL_EVENT_LINK:
+  case PTL_EVENT_SEARCH:
+  case PTL_EVENT_SEND:
+    ucs_error("PTL: event %s should not have been triggered",
+              uct_bxi_event_str[ev->type]);
+    status = UCS_ERR_IO_ERROR;
+    break;
+  default:
+    break;
+  }
+
+err:
+  return status;
+}
+
 ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 {
   uct_bxi_iface_t *iface = ucs_derived_of(uct_iface, uct_bxi_iface_t);
@@ -183,43 +299,123 @@ ucs_status_t uct_bxi_iface_get_device_address(uct_iface_h        tl_iface,
   return UCS_OK;
 }
 
-static inline void
-uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
+static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 {
-  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
-  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  op->handler(op, NULL);
+  unsigned       progressed = 0;
+  ptl_event_t    ev;
+  int            ret;
+  uct_bxi_rxq_t *rxq;
+  khiter_t       iter;
+
+  while (1) {
+    ret = PtlEQGet(iface->rx.eqh, &ev);
+
+    switch (ret) {
+    case PTL_OK:
+      /* Get RX Queue from Portals Table Index */
+      iter = kh_get(uct_bxi_rxq, &iface->rx.queues, ev.pt_index);
+      if (iter == kh_end(&iface->rx.queues)) {
+        ucs_error("BXI: unknown Portals Table Index. pti=%d", ev.pt_index);
+        progressed = 0;
+        goto out;
+      }
+      rxq = kh_val(&iface->rx.queues, iter);
+
+      /* Handle the event. */
+      progressed += rxq->handler(iface, &ev);
+      break;
+    case PTL_EQ_EMPTY:
+      goto out;
+      break;
+    case PTL_EQ_DROPPED:
+      ucs_error("BXI: EQ event dropped.");
+      goto out;
+      break;
+    default:
+      uct_bxi_rc_log(ret);
+      progressed = 0;
+      goto out;
+    }
+  }
+
+out:
+  return progressed;
 }
 
-int uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface, uct_bxi_mem_desc_t *mem_desc)
+static ucs_status_t uct_bxi_iface_handle_tx_err(uct_bxi_iface_t    *iface,
+                                                uct_bxi_mem_desc_t *mem_desc,
+                                                ptl_ct_event_t      failures)
+{
+  int                      i;
+  ucs_status_t             status = UCS_OK;
+  uct_bxi_iface_send_op_t *op;
+  ptl_event_t              ev;
+
+  for (i = 0; i < failures.failure; i++) {
+    status = uct_bxi_wrap(PtlEQGet(iface->tx.err_eqh, &ev));
+    if (status != UCS_OK)
+      break;
+
+    ucs_assert(ev.type == PTL_EVENT_PT_DISABLED);
+    op = (uct_bxi_iface_send_op_t *)ev.user_ptr;
+    ucs_error("BXI: operation failed. op=%p, sn=%lu, mem desc=%p", op, op->sn,
+              mem_desc);
+
+    /* Remove operation from queue. */
+    ucs_queue_remove(&mem_desc->send_ops, &op->elem);
+
+    /* Close endpoint. */
+    op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
+
+    status = uct_iface_handle_ep_err(&iface->super.super, &op->ep->super.super,
+                                     UCS_ERR_ENDPOINT_TIMEOUT);
+
+    ucs_assert(status == UCS_OK);
+  }
+
+  /* Error has been handled, reset counter. */
+  status = uct_bxi_wrap(PtlCTInc(
+          mem_desc->cth, (ptl_ct_event_t){.success = failures.failure,
+                                          .failure = -failures.failure}));
+
+  return status;
+}
+
+unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
+                               uct_bxi_mem_desc_t *mem_desc)
 {
   ucs_status_t             status     = UCS_OK;
-  int                      progressed = 0;
+  unsigned                 progressed = 0;
   uct_bxi_iface_send_op_t *op;
   ptl_ct_event_t           ct_count;
 
   /* Do not poll count if there are no outstanding operations. */
   if (ucs_queue_is_empty(&mem_desc->send_ops)) {
-    return progressed;
+    return 0;
   }
 
-  status = uct_ptl_wrap(PtlCTGet(mem_desc->cth, &ct_count));
+  status = uct_bxi_wrap(PtlCTGet(mem_desc->cth, &ct_count));
   if (status != UCS_OK) {
-    progressed = status;
+    ucs_error("BXI: error polling counter.");
     goto err;
   }
 
   if (ct_count.failure > 0) {
-    progressed = UCT_ERR_BXI_CT_FAILURE;
-    goto err;
+    status = uct_bxi_iface_handle_tx_err(iface, mem_desc, ct_count);
+    if (status != UCS_OK) {
+      ucs_error("BXI: error handling error.");
+      goto err;
+    }
   }
 
+  /* Loop on all outstanding operation and compare their sequence number 
+   * with the current value of the completion counter. */
   ucs_queue_for_each_extract (
           op, &mem_desc->send_ops, elem,
           UCS_CIRCULAR_COMPARE64(ct_count.success, >, op->sn)) {
-    progressed++;
-
     uct_bxi_iface_mem_desc_completion_op(op);
+
+    progressed++;
   }
 
 err:
@@ -228,7 +424,16 @@ err:
 
 unsigned uct_bxi_iface_progress(uct_iface_t *super)
 {
-  return 0;
+  unsigned         count = 0;
+  uct_bxi_iface_t *iface = ucs_derived_of(super, uct_bxi_iface_t);
+
+  count = uct_bxi_iface_poll_rx(iface);
+  if (!uct_bxi_iface_should_poll_tx(count)) {
+    return count;
+  }
+
+  count = uct_bxi_iface_poll_tx(iface, iface->tx.mem_desc);
+  return count;
 }
 
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
@@ -251,6 +456,23 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
   return uct_single_device_resource(uct_md, md->device, UCT_DEVICE_TYPE_NET,
                                     UCS_SYS_DEVICE_ID_UNKNOWN, tl_devices_p,
                                     num_tl_devices_p);
+}
+
+static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,
+                                          uct_bxi_rxq_t   *rxq)
+{
+  int            ret;
+  khiter_t       iter;
+  ptl_pt_index_t pti = uct_bxi_rxq_get_addr(rxq);
+
+  /* Enable event handling. It is retrieved on event polling
+  * using the Portals Table Index. */
+  iter = kh_put(uct_bxi_rxq, &iface->rx.queues, pti, &ret);
+  ucs_assertv((ret != UCS_KH_PUT_FAILED) && (ret != UCS_KH_PUT_KEY_PRESENT),
+              "ret %d", ret);
+  kh_value(&iface->rx.queues, iter) = rxq;
+
+  return UCS_OK;
 }
 
 void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
@@ -299,7 +521,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
   rxq_param = (uct_bxi_rxq_param_t){
-          .eqh  = iface->md->eqh,
+          .eqh  = iface->rx.eqh,
           .nih  = iface->md->nih,
           .mp   = config->rx.tag_mp,
           .list = PTL_OVERFLOW_LIST,
@@ -380,6 +602,7 @@ void uct_bxi_iface_send_desc_init(ucs_mpool_t *mp, void *obj, void *chunk)
           ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
   uct_bxi_iface_send_op_t *op = obj;
 
+  op->flags    = 0;
   op->handler  = uct_bxi_send_desc_op_handler;
   op->mem_desc = iface->tx.mem_desc;
 }
@@ -515,9 +738,16 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   /* Initialize all config entries. */
   uct_bxi_iface_config_init(self, config);
 
+  /* Create Event Queue used for RX events. */
+  status = uct_bxi_wrap(
+          PtlEQAlloc(md->nih, self->config.max_events, &self->rx.eqh));
+  if (status != UCS_OK) {
+    goto err;
+  }
+
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
   rxq_param = (uct_bxi_rxq_param_t){
-          .eqh  = self->md->eqh,
+          .eqh  = self->rx.eqh,
           .nih  = self->md->nih,
           .mp   = config->rx.am_mp,
           .list = PTL_PRIORITY_LIST,
@@ -525,13 +755,22 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   };
   status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.queue);
   if (status != UCS_OK) {
-    goto err;
+    goto err_clean_rxevq;
   }
+  uct_bxi_iface_add_rxq(self, self->rx.am.queue);
 
   /* Initialize TAG resources if enabled. */
   status = uct_bxi_iface_tag_init(self, params, config);
   if (status != UCS_OK) {
     goto err_clean_rxq;
+  }
+
+  /* Create TX Event Queue that will be used for error handling. */
+  //FIXME: maybe set a lower number of events for the error queue.
+  status = uct_bxi_wrap(
+          PtlEQAlloc(md->nih, self->config.max_events, &self->tx.err_eqh));
+  if (status != UCS_OK) {
+    goto err_clean_tag;
   }
 
   /* Before setting TX operations, create the Memory Descriptor that
@@ -545,7 +784,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   };
   status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);
   if (status != UCS_OK) {
-    goto err_clean_tag;
+    goto err_clean_errevq;
   }
 
   /* Create TX buffers mempool */
@@ -593,10 +832,14 @@ err_clean_txbuffer:
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
 err_clean_mem_desc:
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
+err_clean_errevq:
+  uct_bxi_wrap(PtlEQFree(self->tx.err_eqh));
 err_clean_tag:
   uct_bxi_iface_tag_fini(self);
 err_clean_rxq:
   uct_bxi_rxq_fini(self->rx.am.queue);
+err_clean_rxevq:
+  uct_bxi_wrap(PtlEQFree(self->rx.eqh));
 err:
   return status;
 }
