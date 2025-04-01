@@ -2,6 +2,7 @@
 #define BXI_EP_H
 
 #include "bxi_iface.h"
+#include "bxi_md.h"
 
 #include <ucs/debug/debug_int.h>
 #include <uct/api/uct.h>
@@ -13,6 +14,11 @@ enum {
   UCT_BXI_EP_CONN_CLOSED,
 };
 
+#define UCT_BXI_CHECK_EP(_ep)                                                  \
+  if ((_ep)->conn_state == UCT_BXI_EP_CONN_CLOSED) {                           \
+    return UCS_ERR_TIMED_OUT;                                                  \
+  }
+
 typedef struct uct_bxi_ep_config {
   int max_retries;
 } uct_bxi_ep_config_t;
@@ -23,6 +29,7 @@ typedef struct uct_bxi_ep {
     int max_retries;
   } config;
   uct_bxi_device_addr_t dev_addr;
+  uct_bxi_iface_addr_t  iface_addr;
   ucs_mpool_t          *ops_mp;
   uint8_t               conn_state;
 } uct_bxi_ep_t;
@@ -156,5 +163,26 @@ UCS_CLASS_DECLARE_DELETE_FUNC(uct_bxi_ep_t, uct_ep_t);
 void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_mem_desc_add_send_op(uct_bxi_mem_desc_t      *mem_desc,
+                             uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op != NULL);
+  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  ucs_queue_push(&mem_desc->send_ops, &op->elem);
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_ep_add_send_op_sn(uct_bxi_mem_desc_t      *mem_desc,
+                          uct_bxi_iface_send_op_t *op)
+{
+  op->sn = mem_desc->sn++;
+  uct_bxi_mem_desc_add_send_op(mem_desc, op);
+
+  ucs_trace_poll("mem desc %p add send op %p sn %lu handler %s", mem_desc, op,
+                 op->sn, ucs_debug_get_symbol_name((void *)op->handler));
+}
 
 #endif

@@ -207,13 +207,13 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   uct_base_iface_query(&iface->super, attr);
 
-  attr->cap.am.max_short = iface->config.max_short - sizeof(uint64_t);
+  attr->cap.am.max_short = iface->config.max_inline - sizeof(uint64_t);
   attr->cap.am.max_bcopy = iface->config.seg_size;
   attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
 
   attr->cap.tag.recv.min_recv   = 0;
-  attr->cap.tag.eager.max_short = iface->config.max_short;
+  attr->cap.tag.eager.max_short = iface->config.max_inline;
   attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_zcopy = iface->config.max_msg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
@@ -221,7 +221,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.rndv.max_iov    = 1;
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
-  attr->cap.put.max_short       = iface->config.max_short;
+  attr->cap.put.max_short       = iface->config.max_inline;
   attr->cap.put.max_bcopy       = iface->config.seg_size;
   attr->cap.put.min_zcopy       = 0;
   attr->cap.put.max_zcopy       = iface->config.max_msg_size;
@@ -229,7 +229,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.put.opt_zcopy_align = 1;
   attr->cap.put.align_mtu       = attr->cap.put.opt_zcopy_align;
 
-  attr->cap.get.max_short       = iface->config.max_short;
+  attr->cap.get.max_short       = iface->config.max_inline;
   attr->cap.get.max_bcopy       = iface->config.seg_size;
   attr->cap.get.min_zcopy       = 0;
   attr->cap.get.max_zcopy       = iface->config.max_msg_size;
@@ -581,63 +581,26 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
 
   iface->config.max_iovecs   = ucs_min(iface->md->config.limits.max_iovecs, 1);
   iface->config.max_msg_size = iface->md->config.limits.max_msg_size;
-  iface->config.max_short = ucs_min(iface->md->config.limits.max_volatile_size,
-                                    UCS_ALLOCA_MAX_SIZE);
+  iface->config.max_inline = ucs_min(iface->md->config.limits.max_volatile_size,
+                                     UCS_ALLOCA_MAX_SIZE);
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
 }
 
-static void uct_bxi_send_desc_op_handler(uct_bxi_iface_send_op_t *op,
-                                         const void              *resp)
-{
-  /* Because a TX buffer was used, user completion already happened. 
-   * So no need to call it. Just put the operation back to MP. */
-  ucs_mpool_put_inline(op);
-}
-
-void uct_bxi_iface_send_desc_init(ucs_mpool_t *mp, void *obj, void *chunk)
+void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   uct_bxi_iface_t *iface =
           ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
   uct_bxi_iface_send_op_t *op = obj;
 
-  op->flags    = 0;
-  op->handler  = uct_bxi_send_desc_op_handler;
   op->mem_desc = iface->tx.mem_desc;
 }
 
-static ucs_mpool_ops_t uct_bxi_send_desc_mpool_ops = {
+static ucs_mpool_ops_t uct_bxi_send_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = uct_bxi_iface_send_desc_init,
-        .obj_cleanup   = NULL,
-        .obj_str       = NULL};
-
-static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
-                                         const void              *resp)
-{
-  /* First, invoke user completion callback. */
-  uct_invoke_completion(op->user_comp, UCS_OK);
-
-  /* Then, we may release the operation. */
-  ucs_mpool_put_inline(op);
-}
-
-void uct_bxi_iface_send_comp_init(ucs_mpool_t *mp, void *obj, void *chunk)
-{
-  uct_bxi_iface_t *iface =
-          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
-  uct_bxi_iface_send_op_t *op = obj;
-
-  op->handler  = uct_bxi_send_comp_op_handler;
-  op->mem_desc = iface->tx.mem_desc;
-}
-
-static ucs_mpool_ops_t uct_bxi_send_comp_mpool_ops = {
-        .chunk_alloc   = ucs_mpool_chunk_malloc,
-        .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = uct_bxi_iface_send_comp_init,
+        .obj_init      = uct_bxi_iface_send_init,
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
@@ -670,7 +633,7 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
           .max_elems       = config->tx.mp.max_bufs,
           .elem_size       = sizeof(uct_bxi_iface_send_op_t),
           .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_send_comp_mpool_ops,
+          .ops             = &uct_bxi_send_mpool_ops,
           .name            = "send-comp-ops",
           .grow_factor     = config->tx.mp.grow_factor,
   };
@@ -684,10 +647,10 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
   ucs_mpool_params_reset(&mp_params);
   mp_params = (ucs_mpool_params_t){
           .elems_per_chunk = 256,
-          .max_elems       = iface->config.max_outstanding_ops,
+          .max_elems       = 256,
           .elem_size       = sizeof(uct_bxi_iface_send_op_t),
           .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_send_comp_mpool_ops,
+          .ops             = &uct_bxi_send_flush_mpool_ops,
           .name            = "bxi-flush-ops",
   };
   status = ucs_mpool_init(&mp_params, &iface->tx.flush_ops_mp);
@@ -795,7 +758,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
           .elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
           .max_elems = config->tx.mp.max_bufs,
           .alignment = UCS_SYS_CACHE_LINE_SIZE,
-          .ops       = &uct_bxi_send_desc_mpool_ops,
+          .ops       = &uct_bxi_send_mpool_ops,
           .name      = "send-desc-mp",
           .grow_factor = config->tx.mp.grow_factor,
   };

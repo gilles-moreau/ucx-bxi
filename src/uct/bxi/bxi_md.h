@@ -30,6 +30,7 @@ typedef struct uct_bxi_mem_desc {
   ptl_handle_md_t  mdh;      /* Portals4 MD handle */
   ptl_handle_ct_t  cth;      /* Portals4 CT handle */
   ucs_queue_head_t send_ops; /* Queue of outstanding OPs */
+  uint64_t         sn;
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {

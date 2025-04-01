@@ -6,6 +6,7 @@
 
 #include <ucs/type/status.h>
 #include <uct/base/uct_iface.h>
+#include <uct/base/uct_iov.inl>
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
@@ -81,6 +82,9 @@ typedef struct uct_bxi_iface_send_op {
   uct_completion_t         *user_comp; /* Completion callback */
   uct_bxi_ep_t             *ep;        /* OP endpoint */
   ptl_size_t                sn;        /* OP sequence number */
+  uct_unpack_callback_t     unpack_cb;
+  void                     *unpack_arg;
+  size_t                    length;
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_op_ctx {
@@ -141,30 +145,26 @@ typedef struct uct_bxi_iface {
   struct {
     int seg_size;
     struct {
-      int max_queue_len;
+      int max_queue_len; /* Maximum outstanding operations */
     } tx;
 
     struct {
-      int max_queue_len;
+      int max_queue_len; /* Maximum receive context */
     } rx;
 
-    size_t   max_events;
-    int      max_ep_retries;
-    int      max_outstanding_ops;
-    int      copyout_buf_per_block;
-    int      max_copyout_buf;
-    int      max_iovecs;
-    int      max_short;
-    size_t   max_msg_size;
-    size_t   max_atomic_size;
-    unsigned features;
-    size_t   iface_addr_size;
-    size_t   device_addr_size;
-    size_t   ep_addr_size;
+    size_t max_events;   /* Maximum number of event in EQ */
+    int    max_iovecs;   /* Maximum number of iovec */
+    int    max_inline;   /* Maximum short message size */
+    size_t max_msg_size; /* Maximum message size */
+    size_t max_atomic_size;
     struct {
       unsigned int max_op_ctx;
       unsigned int max_tags;
     } tm;
+
+    size_t iface_addr_size;
+    size_t device_addr_size;
+    size_t ep_addr_size;
   } config;
 
   struct {
@@ -225,6 +225,25 @@ static inline int uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
          dev1->pid.phys.nid == dev2->pid.phys.nid;
 }
 
+static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
+                                                         const uct_iov_t *iov,
+                                                         size_t iovcnt)
+{
+  size_t iov_it, ptl_it = 0;
+
+  for (iov_it = 0; iov_it < iovcnt; ++iov_it) {
+    ptl_iov[ptl_it].iov_len = uct_iov_get_length(&iov[iov_it]);
+    if (ptl_iov[ptl_it].iov_len > 0) {
+      ptl_iov[ptl_it].iov_base = (void *)(iov[iov_it].buffer);
+    } else {
+      continue; /* to avoid zero length elements in sge */
+    }
+    ++ptl_it;
+  }
+
+  return ptl_it;
+}
+
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 extern char              *uct_bxi_event_str[];
@@ -234,6 +253,50 @@ extern char              *uct_bxi_event_str[];
                      ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
+#define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
+                           return UCS_ERR_NO_RESOURCE);
+
+#define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _pack_cb, _arg, \
+                                           _length)                            \
+  ({                                                                           \
+    UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                              \
+    (_desc)->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;               \
+    *(_length)       = _pack_cb(_desc + 1, _arg);                              \
+  })
+
+#define UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(_iface, _mp, _desc, _pack_cb,      \
+                                            _arg, _length)                     \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  (_desc)->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;                 \
+  _length          = _pack_cb(_desc + 1, _arg);                                \
+  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+
+#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _unpack_cb,    \
+                                            _comp, _arg, _length)              \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  ucs_assert(_length <= (_iface)->config.seg_size);                            \
+  _desc->handler    = (_comp == NULL) ?                                        \
+                              uct_bxi_ep_get_bcopy_handler_no_completion :     \
+                              uct_bxi_ep_get_bcopy_handler;                    \
+  _desc->unpack_arg = _arg;                                                    \
+  _desc->user_comp  = _comp;                                                   \
+  _desc->length     = _length;                                                 \
+  _desc->unpack_cb  = _unpack_cb;
+
+#define UCT_BXI_IFACE_GET_TX_OP(_iface, _mp, _desc, _length)                   \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  _desc->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;                   \
+  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+
+#define UCT_BXI_IFACE_GET_TX_OP_COMP(_iface, _mp, _desc, _user_comp, _handler, \
+                                     _length)                                  \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  _desc->handler     = (_user_comp == NULL) ?                                  \
+                               (uct_bxi_send_op_handler_t)ucs_mpool_put :      \
+                               _handler;                                       \
+  (_desc)->user_comp = _user_comp;                                             \
+  UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
 static inline int uct_bxi_iface_should_poll_tx(unsigned count)
 {
