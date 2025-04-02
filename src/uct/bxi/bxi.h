@@ -68,9 +68,26 @@ typedef enum {
     loc_rc;                                                                    \
   })
 
+#define UCT_BXI_SKIP_ZERO_LENGTH_PTR(_length, ...)                             \
+  if (0 == (_length)) {                                                        \
+    ucs_trace_data("Zero length request: skip it");                            \
+    UCS_PP_FOREACH (_UCT_RELEASE_DESC, _, __VA_ARGS__)                         \
+      return UCS_STATUS_PTR(UCS_OK);                                           \
+  }
+
 #define UCT_BXI_CHECK_TAG(_ptl_iface)                                          \
   if (ucs_unlikely((_ptl_iface)->tm.num_tags == 0)) {                          \
     return UCS_ERR_EXCEEDS_LIMIT;                                              \
+  }
+
+#define UCT_BXI_CHECK_EP(_ep)                                                  \
+  if ((_ep)->conn_state == UCT_BXI_EP_CONN_CLOSED) {                           \
+    return UCS_ERR_TIMED_OUT;                                                  \
+  }
+
+#define UCT_BXI_CHECK_EP_PTR(_ep)                                              \
+  if ((_ep)->conn_state == UCT_BXI_EP_CONN_CLOSED) {                           \
+    return UCS_STATUS_PTR(UCS_ERR_TIMED_OUT);                                  \
   }
 
 extern uct_component_t uct_bxi_component;
