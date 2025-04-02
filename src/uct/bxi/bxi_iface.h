@@ -47,6 +47,12 @@ typedef void (*handle_failure_func_t)(uct_bxi_iface_t         *iface,
 typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
+typedef struct uct_bxi_hdr_rndv {
+  uint64_t remote_addr;
+  size_t   length;
+  size_t   header_length;
+} uct_bxi_hdr_rndv_t;
+
 typedef struct uct_bxi_pending_req {
   uct_pending_req_t super;
   uct_bxi_ep_t     *ep;
@@ -67,13 +73,6 @@ typedef struct uct_bxi_ep_addr {
   uct_bxi_iface_addr_t iface_addr;
 } uct_bxi_ep_addr_t;
 
-typedef struct uct_bxi_iface_txq {
-  uct_bxi_mem_desc_t mem_desc; /* Memory Descriptor */
-  ucs_list_link_t    elem;     /* Element in the list of TX to poll */
-  ucs_queue_head_t   op_q;     /* Queue of outstanding operations */
-  uint64_t           sn;       /* TX Queue sequence number */
-} uct_bxi_iface_txq_t;
-
 typedef struct uct_bxi_iface_send_op {
   unsigned                  flags;
   uct_bxi_mem_desc_t       *mem_desc;
@@ -82,9 +81,17 @@ typedef struct uct_bxi_iface_send_op {
   uct_completion_t         *user_comp; /* Completion callback */
   uct_bxi_ep_t             *ep;        /* OP endpoint */
   ptl_size_t                sn;        /* OP sequence number */
-  uct_unpack_callback_t     unpack_cb;
-  void                     *unpack_arg;
   size_t                    length;
+
+  union {
+    struct {
+      uct_unpack_callback_t unpack_cb;  /* Unpack callback for GET OP */
+      void                 *unpack_arg; /* Unpack user arg for GET OP */
+    } get;
+    struct {
+      ptl_handle_me_t meh;
+    } rndv;
+  };
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_op_ctx {
@@ -218,8 +225,9 @@ UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_iface_ops_t *, uct_bxi_iface_ops_t *,
                   uct_md_h, uct_worker_h, const uct_iface_params_t *,
                   const uct_bxi_iface_config_t *);
 
-static inline int uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
-                                                uct_bxi_device_addr_t *dev2)
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
+                              uct_bxi_device_addr_t *dev2)
 {
   return dev1->pid.phys.pid == dev2->pid.phys.nid &&
          dev1->pid.phys.nid == dev2->pid.phys.nid;
@@ -244,6 +252,11 @@ static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
   return ptl_it;
 }
 
+static UCS_F_ALWAYS_INLINE int uct_bxi_iface_should_poll_tx(unsigned count)
+{
+  return (count == 0);
+}
+
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 extern char              *uct_bxi_event_str[];
@@ -253,9 +266,14 @@ extern char              *uct_bxi_event_str[];
                      ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
+
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
                            return UCS_ERR_NO_RESOURCE);
+
+#define UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                      \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
+                           return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE));
 
 #define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _pack_cb, _arg, \
                                            _length)                            \
@@ -298,9 +316,25 @@ extern char              *uct_bxi_event_str[];
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-static inline int uct_bxi_iface_should_poll_tx(unsigned count)
-{
-  return (count == 0);
-}
+#define UCT_BXI_IFACE_GET_TX_TAG_DESC_PTR(_iface, _mp, _desc, _user_comp,      \
+                                          _handler, _length)                   \
+  UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                            \
+  _desc->handler     = (_user_comp == NULL) ?                                  \
+                               (uct_bxi_send_op_handler_t)ucs_mpool_put :      \
+                               _handler;                                       \
+  (_desc)->user_comp = _user_comp;                                             \
+  UCT_BXI_SKIP_ZERO_LENGTH_PTR(_length, _desc);
+
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc)                      \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
+                           return UCS_ERR_NO_RESOURCE);
+
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(_iface, _mp, _desc, _err_code)       \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err_code);
+
+#define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
+  UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \
+                      "iovcnt(%lu) should be limited by %lu in %s", _iovcnt,   \
+                      _max_iov, _name)
 
 #endif

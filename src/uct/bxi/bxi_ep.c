@@ -1,6 +1,7 @@
 #include "bxi_ep.h"
 #include "bxi_iface.h"
 #include "bxi_log.h"
+#include "bxi_rxq.h"
 #include "ptl_types.h"
 
 #include <sys/types.h>
@@ -158,7 +159,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 {
   ucs_status_t     status;
   size_t           iov_size;
-  ptl_iovec_t      ptl_iov;
+  ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
@@ -172,11 +173,12 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                uct_iov_total_length(iov, iovcnt));
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  iov_size = uct_bxi_fill_ptl_iovec(&ptl_iov, iov, iovcnt);
+  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
+  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
   status = uct_ptl_wrap(PtlPut(iface->tx.mem_desc->mdh,
-                               (ptl_size_t)iov[0].buffer, iov[0].length,
+                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
                                PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
@@ -233,7 +235,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 {
   ucs_status_t     status;
   size_t           iov_size;
-  ptl_iovec_t      ptl_iov;
+  ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
@@ -247,12 +249,14 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                uct_iov_total_length(iov, iovcnt));
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  iov_size = uct_bxi_fill_ptl_iovec(&ptl_iov, iov, iovcnt);
+  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_size_t));
+  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  status = uct_ptl_wrap(PtlGet(
-          iface->tx.mem_desc->mdh, (ptl_size_t)iov[0].buffer, iov[0].length,
-          ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, NULL));
+  status = uct_ptl_wrap(PtlGet(iface->tx.mem_desc->mdh,
+                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
+                               ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                               remote_addr, NULL));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
@@ -331,61 +335,55 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                         uct_completion_t *comp)
 {
 
-  ucs_status_t       rc    = UCS_OK;
-  uct_bxi_ep_t      *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t   *iface = uct_ptl_ep_iface(ep, uct_bxi_iface_t);
-  uct_ptl_op_t      *op;
-  uct_ptl_oop_ctx_t *oop_ctx;
+  ucs_status_t      status;
+  size_t            iov_size;
+  ptl_iovec_t      *ptl_iov;
+  uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_op_ctx_t *op_ctx;
+  uct_bxi_iface_send_op_t *op;
 
-  if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
-    rc = UCS_ERR_TIMED_OUT;
-    goto err;
-  }
+  UCT_BXI_CHECK_EP(ep);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_get_zcopy");
 
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_ZCOPY, 0, comp, NULL, &iface->super,
-                             &ep->super, ep->am_mmd, &op);
-  if (rc != UCS_OK) {
-    rc = UCS_ERR_NO_RESOURCE;
-    goto err;
-  }
-  op->seqn = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
-  op->pti  = ep->iface_addr.tag_pti;
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+                               uct_bxi_send_comp_op_handler,
+                               uct_iov_total_length(iov, iovcnt));
+
+  //TODO: sometimes, implement support for PTL_IOVEC for MD.
+  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
+  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+  UCT_SKIP_ZERO_LENGTH(iov_size);
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    oop_ctx = ucs_derived_of(comp->oop_ctx, uct_ptl_oop_ctx_t);
-    ucs_error("PTL: ep tag zcopy trig. iface pti=%d, tag=0x%016lx, "
-              "imm=0x%016lx, op=%p, oop thresh=%lu",
-              iface->tag_rq.pti, tag, imm, op, oop_ctx->threshold);
-    ucs_assert(!PtlHandleIsEqual(oop_ctx->cth, PTL_INVALID_HANDLE));
+    op_ctx = ucs_derived_of(comp->oop_ctx, uct_bxi_op_ctx_t);
+    ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
-    rc = uct_ptl_wrap(PtlTriggeredPut(
-            ep->am_mmd->mdh, (ptl_size_t)iov->buffer, iov->length,
-            PTL_CT_ACK_REQ, ep->super.dev_addr.pid, ep->iface_addr.tag_pti, tag,
-            0, op, imm, oop_ctx->cth, oop_ctx->threshold));
+    status = uct_ptl_wrap(PtlTriggeredPut(
+            iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+            ptl_iov->iov_len, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+            ep->iface_addr.tag, tag, 0, op, imm, op_ctx->cth,
+            op_ctx->threshold));
   } else {
-    ucs_debug("PTL: ep tag zcopy. iface pti=%d, tag=0x%016lx, imm=0x%016lx, "
-              "op=%p",
-              iface->tag_rq.pti, tag, imm, op);
-    rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)iov->buffer,
-                             iov->length, PTL_CT_ACK_REQ,
-                             ep->super.dev_addr.pid, ep->iface_addr.tag_pti,
-                             tag, 0, op, imm));
+    status = uct_ptl_wrap(
+            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+                   ptl_iov->iov_len, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                   ep->iface_addr.tag, tag, 0, op, imm));
   }
-
-  if (rc != UCS_OK) {
-    ucs_atomic_fadd64(&ep->am_mmd->seqn, -1);
-    ucs_mpool_put(op->buffer);
-    ucs_mpool_put(op);
-    rc = UCS_ERR_IO_ERROR;
-    goto err;
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlGet bcopy return %d", status);
+  } else {
+    status = UCS_INPROGRESS;
   }
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
 
-  ucs_queue_push(&ep->am_mmd->opq, &op->elem);
-
-  rc = UCS_INPROGRESS;
+  UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, length);
+  uct_bxi_log_put(iface);
 
 err:
-  return rc;
+  return status;
 }
 
 static inline size_t uct_bxi_pack_rndv(void *src, uint64_t remote_addr,
@@ -405,45 +403,18 @@ static inline size_t uct_bxi_pack_rndv(void *src, uint64_t remote_addr,
   return len + header_length;
 }
 
-ucs_status_ptr_t
-uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
-                          unsigned header_length, const uct_iov_t *iov,
-                          size_t iovcnt, unsigned flags, uct_completion_t *comp)
+static inline ucs_status_t
+uct_bxi_ep_post_rndv_mem_entry(uct_bxi_iface_t         *iface,
+                               uct_bxi_iface_send_op_t *op, ptl_iovec_t *iov,
+                               int iovcnt)
 {
-  ucs_status_t     rc    = UCS_OK;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = uct_ptl_ep_iface(ep, uct_bxi_iface_t);
-  ptl_hdr_data_t   hdr   = 0;
-  uct_ptl_op_t    *op    = NULL;
-  ptl_me_t         me;
+  ucs_status_t          status;
+  uct_bxi_recv_block_t *block;
+  ptl_me_t              me;
 
-  assert(iovcnt <= 1);
-
-  if (iface->tm.num_get_tags == 0) {
-    op = (uct_ptl_op_t *)UCS_ERR_NO_RESOURCE;
-    goto err;
-  }
-
-  if (ep->super.conn_state == UCT_PTL_EP_CONN_CLOSED) {
-    rc = UCS_ERR_TIMED_OUT;
-    goto err;
-  }
-
-  rc = uct_ptl_ep_prepare_op(UCT_PTL_OP_TAG_BCOPY, 1, comp, NULL, &iface->super,
-                             &ep->super, ep->am_mmd, &op);
-  if (rc != UCS_OK) {
-    op = (uct_ptl_op_t *)UCS_ERR_NO_RESOURCE;
-    goto err;
-  }
-
-  op->tag.meh   = PTL_INVALID_HANDLE;
-  op->type      = UCT_PTL_OP_RMA_PUT_ZCOPY_TAG;
-  op->pti       = ep->iface_addr.tag_pti;
-  op->tag.flags = 0;
-  op->seqn      = ucs_atomic_fadd64(&ep->am_mmd->seqn, 1);
-  op->size      = uct_bxi_pack_rndv(op->buffer, (uint64_t)iov[0].buffer,
-                                    iov[0].length, header, header_length);
-  op->tag.tag   = ucs_atomic_fadd32(&iface->tm.rndv_tag, 1);
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
+                                    status = UCS_ERR_NO_RESOURCE;
+                                    goto err);
 
   me = (ptl_me_t){
           .ct_handle   = PTL_CT_NONE,
@@ -458,13 +429,41 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE,
   };
 
-  iface->tm.num_get_tags--;
-  rc = uct_ptl_wrap(PtlMEAppend(uct_ptl_iface_md(&iface->super)->nih,
-                                iface->tag_rq.pti, &me, PTL_PRIORITY_LIST, op,
-                                &op->tag.meh));
-  if (rc != UCS_OK) {
-    return (ucs_status_ptr_t)UCS_ERR_NO_RESOURCE;
-  }
+  rc = uct_ptl_wrap(PtlMEAppend(iface->md->nih, iface->rx.tag.queue->pti, &me,
+                                PTL_PRIORITY_LIST, op, &op->tag.meh));
+err:
+  return status;
+}
+
+ucs_status_ptr_t
+uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
+                          unsigned header_length, const uct_iov_t *iov,
+                          size_t iovcnt, unsigned flags, uct_completion_t *comp)
+{
+  ucs_status_t          rc = UCS_OK;
+  size_t                iov_size;
+  ptl_iovec_t          *ptl_iov;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_recv_block_t *block;
+  uct_bxi_iface_send_op_t *op;
+  ptl_hdr_data_t           hdr = 0;
+  ptl_me_t                 me;
+
+  UCT_BXI_CHECK_EP_PTR(ep);
+  UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
+                             "uct_bxi_ep_get_zcopy");
+
+  UCT_BXI_IFACE_GET_TX_TAG_DESC_PTR(iface, &iface->tx.send_desc_mp, op, comp,
+                                    uct_bxi_send_comp_op_handler,
+                                    uct_iov_total_length(iov, iovcnt));
+
+  //TODO: sometimes, implement support for PTL_IOVEC for MD.
+  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
+  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+
+  op->length = uct_bxi_pack_rndv(op + 1, (uint64_t)ptl_iov->iov_base,
+                                 ptl_iov->iov_len, header, header_length);
 
   UCT_PTL_HDR_SET(hdr, op->tag.tag, iface->tag_rq.pti, UCT_PTL_RNDV_HW_MAGIC);
   rc = uct_ptl_wrap(PtlPut(ep->am_mmd->mdh, (ptl_size_t)op->buffer, op->size,

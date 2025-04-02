@@ -14,11 +14,6 @@ enum {
   UCT_BXI_EP_CONN_CLOSED,
 };
 
-#define UCT_BXI_CHECK_EP(_ep)                                                  \
-  if ((_ep)->conn_state == UCT_BXI_EP_CONN_CLOSED) {                           \
-    return UCS_ERR_TIMED_OUT;                                                  \
-  }
-
 typedef struct uct_bxi_ep_config {
   int max_retries;
 } uct_bxi_ep_config_t;
