@@ -68,11 +68,11 @@ typedef enum {
     loc_rc;                                                                    \
   })
 
-#define UCT_BXI_SKIP_ZERO_LENGTH_PTR(_length, ...)                             \
+#define UCT_BXI_SKIP_ZERO_LENGTH_ERR(_length, _err, ...)                       \
   if (0 == (_length)) {                                                        \
     ucs_trace_data("Zero length request: skip it");                            \
     UCS_PP_FOREACH (_UCT_RELEASE_DESC, _, __VA_ARGS__)                         \
-      return UCS_STATUS_PTR(UCS_OK);                                           \
+      _err;                                                                    \
   }
 
 #define UCT_BXI_CHECK_TAG(_ptl_iface)                                          \

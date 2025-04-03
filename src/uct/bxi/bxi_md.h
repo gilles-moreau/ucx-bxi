@@ -60,7 +60,6 @@ typedef struct uct_bxi_md {
   char           *device;
   ptl_handle_ni_t nih;
   ptl_process_t   pid;
-  ptl_pt_index_t  pti;
   size_t          rkey_size;
 } uct_bxi_md_t;
 

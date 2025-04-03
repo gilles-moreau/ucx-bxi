@@ -64,6 +64,7 @@ void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params);
+void         uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block);
 
 static inline ptl_pt_index_t uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
 {

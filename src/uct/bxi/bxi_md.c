@@ -50,6 +50,7 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
   uct_bxi_mem_desc_t *mem_desc;
   ptl_md_t            ptl_md;
 
+  //FIXME: recheck if these flags are actually used
   if (params->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATE) {
     mem_desc = ucs_malloc(sizeof(uct_bxi_mem_desc_t), "mem_desc");
     if (mem_desc == NULL) {

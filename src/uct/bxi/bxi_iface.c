@@ -85,7 +85,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {NULL},
 };
 
-static inline void
+static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
@@ -111,7 +111,7 @@ static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
   case PTL_EVENT_AUTO_UNLINK:
     /* One block has been unlinked since it is full. All received data has 
        * been processed at that point. */
-    status = uct_bxi_recv_block_activate(block);
+    status = uct_bxi_recv_block_activate(block, NULL);
     break;
   case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_LINK:
@@ -144,25 +144,57 @@ static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
 
 static inline int uct_bxi_iface_is_unexpected(uct_bxi_recv_block_t *block)
 {
-  return block->rxq != NULL;
+  return block->list != PTL_OVERFLOW_LIST;
 }
 
-static ucs_status_t uct_bxi_iface_handle_tag_events(uct_ptl_iface_t *iface,
+static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
                                                     ptl_event_t     *ev)
 {
   ucs_status_t          status = UCS_OK;
-  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
+  uct_bxi_hdr_rndv_t   *hdr;
+  uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)ev->user_ptr;
 
-  ucs_debug("PTL: event. type=%s, size=%lu, start=%p, pti=%d",
+  ucs_debug("BXI: event. type=%s, size=%lu, start=%p, pti=%d",
             uct_bxi_event_str[ev->type], ev->mlength, ev->start, ev->pt_index);
 
   // TODO: check for truncated messages
   switch (ev->type) {
   case PTL_EVENT_PUT:
     if (uct_bxi_iface_is_unexpected(block)) {
-      //TODO: handle unexpected
+      if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
+        switch (ev->hdr_data & 0xful) {
+        case UCT_BXI_TAG_PROT_RNDV_HW:
+          hdr    = ev->start;
+          status = iface->tm.rndv_unexp.cb(
+                  iface->tm.rndv_unexp.arg, 0, ev->match_bits,
+                  (const void *)(hdr + 1), hdr->header_length, hdr->remote_addr,
+                  hdr->length, NULL);
+          break;
+        case UCT_BXI_TAG_PROT_RNDV_SW:
+          status = iface->tm.rndv_unexp.cb(
+                  iface->tm.rndv_unexp.arg, 0, ev->match_bits,
+                  (const void *)ev->start, ev->mlength, 0, 0, NULL);
+          break;
+        default:
+          ucs_fatal("BXI: unrecognized rndv protocol.");
+          break;
+        }
+      } else {
+        status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
+                                          ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
+                                          ev->match_bits, ev->hdr_data, NULL);
+      }
     } else {
-      //TODO: handle expected
+      if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
+        switch (ev->hdr_data & 0xful) {
+        case UCT_BXI_TAG_PROT_RNDV_HW:
+        case UCT_BXI_TAG_PROT_RNDV_SW:
+        default:
+          ucs_fatal("BXI: unrecognized rndv protocol.");
+          break;
+        }
+      } else {
+      }
     }
     break;
   case PTL_EVENT_GET:
@@ -175,7 +207,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_ptl_iface_t *iface,
     goto err;
     break;
   case PTL_EVENT_AUTO_UNLINK:
-    status = uct_bxi_recv_block_activate(block);
+    status = uct_bxi_recv_block_activate(block, NULL);
     break;
   case PTL_EVENT_ACK:
   case PTL_EVENT_REPLY:
@@ -528,6 +560,12 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           .name = "rxq-tag",
   };
   status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.queue);
+  if (status != UCS_OK) {
+    goto out;
+  }
+
+  /* Append RXQ to the hash table for event handling. */
+  uct_bxi_iface_add_rxq(iface, iface->rx.tag.queue);
 
   /* Work pool of operation. */
   mp_param = (ucs_mpool_params_t){
@@ -541,7 +579,14 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           .grow_factor     = 1,
   };
   status = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
+  if (status != UCS_OK) {
+    goto err_release_rxq;
+  }
 
+  return status;
+
+err_release_rxq:
+  uct_bxi_rxq_fini(iface->rx.tag.queue);
 out:
   return status;
 }
@@ -688,6 +733,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
+  ptl_me_t                 me;
 
   UCS_CLASS_CALL_SUPER_INIT(
           uct_base_iface_t, tl_ops, &ops->super, tl_md, worker, params,
@@ -720,6 +766,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   if (status != UCS_OK) {
     goto err_clean_rxevq;
   }
+
+  /* Append RXQ to the hash table for event handling. */
   uct_bxi_iface_add_rxq(self, self->rx.am.queue);
 
   /* Initialize TAG resources if enabled. */
@@ -739,7 +787,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
   /* Before setting TX operations, create the Memory Descriptor that
    * spans the whole virtual memory range. */
   mem_desc_param = (uct_bxi_mem_desc_param_t){
-          .eqh     = md->nih,
+          .eqh     = self->tx.err_eqh,
           .start   = NULL,
           .length  = PTL_SIZE_MAX,
           .options = PTL_CT_ACK_REQ,
@@ -767,6 +815,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
     goto err_clean_mem_desc;
   }
 
+  /* Initialize operation for the TX Queue. They are not associated with 
+   * a buffer. */
   status = uct_bxi_iface_tx_ops_init(self, config);
   if (status != UCS_OK) {
     goto err_clean_txbuffer;
@@ -784,11 +834,42 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_iface_ops_t *tl_ops,
     goto err_clean_txops;
   }
 
+  /* Initialize Portals Table Entry for RDMA operations. */
+  status = uct_bxi_wrap(PtlPTAlloc(md->nih, PTL_PT_FLOWCTRL, self->rx.eqh,
+                                   PTL_PT_ANY, &self->rx.rma.pti));
+  if (status != UCS_OK) {
+    goto err_clean_pending;
+  }
+
+  me.ct_handle         = PTL_CT_NONE;
+  me.match_bits        = 0;
+  me.ignore_bits       = ~0;
+  me.match_id.phys.nid = PTL_NID_ANY;
+  me.match_id.phys.pid = PTL_PID_ANY;
+  me.min_free          = 0;
+  me.uid               = PTL_UID_ANY;
+  me.start             = NULL;
+  me.length            = PTL_SIZE_MAX;
+  me.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE;
+
+  /* RDMA operations are always matched on the same silent ME. */
+  status = uct_ptl_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
+                                    PTL_PRIORITY_LIST, NULL,
+                                    &self->rx.rma.entry.meh));
+  if (status != UCS_OK) {
+    goto err_clean_rmapti;
+  }
+
   /* PTL hdr is used within internal protocols and 64 bits are needed. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
 
   return status;
 
+err_clean_rmapti:
+  PtlPTFree(md->nih, self->rx.rma.pti);
+err_clean_pending:
+  ucs_mpool_cleanup(&self->tx.pending_mp, 1);
 err_clean_txops:
   uct_bxi_iface_tx_ops_fini(self);
 err_clean_txbuffer:
@@ -809,6 +890,25 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
+  /* Clean RDMA resources. */
+  PtlMEUnlink(self->rx.rma.entry.meh);
+  PtlPTFree(self->md->nih, self->rx.rma.pti);
+
+  /* Clean TX resources. */
+  ucs_mpool_cleanup(&self->tx.pending_mp, 1);
+  uct_bxi_iface_tx_ops_fini(self);
+  ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
+  uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
+  PtlEQFree(self->tx.err_eqh);
+
+  /* Clean RX resources */
+  /* Clean TAG resources if enabled. */
+  uct_bxi_iface_tag_fini(self);
+
+  /* Clean AM resources */
+  uct_bxi_rxq_fini(self->rx.am.queue);
+  PtlEQFree(self->rx.eqh);
+
   return;
 }
 
