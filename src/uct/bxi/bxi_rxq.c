@@ -48,6 +48,17 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                   &block->meh));
 }
 
+void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
+{
+  int ret;
+
+  ret = PtlMEUnlink(block->meh);
+  if (ret != PTL_OK) {
+    ucs_warn("PTL: block not unlinked. pti=%d, start=%p", block->rxq->pti,
+             block->start);
+  }
+}
+
 static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
 {
   ucs_status_t rc = UCS_OK;

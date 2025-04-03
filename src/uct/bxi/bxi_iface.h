@@ -14,6 +14,10 @@
 #define UCT_BXI_HDR_AM_ID_MASK      0x0000ffffff000000ULL
 #define UCT_BXI_HDR_PROT_ID_MASK    0xffff000000000000ULL
 
+#define UCT_BXI_RNDV_PREFIX 0xdededad
+#define UCT_BXI_RNDV_GET_TAG(_sn)                                              \
+  0xdeadbeef00000000 | (0x00000000ffffffff & _sn)
+
 #define UCT_BXI_HDR_GET_RNDV_MATCH(_hdr)                                       \
   ((uint32_t)(_hdr & UCT_BXI_HDR_RNDV_MATCH_MASK))
 #define UCT_BXI_HDR_GET_AM_ID(_hdr)                                            \
@@ -21,12 +25,17 @@
 #define UCT_BXI_HDR_GET_PROT_ID(_hdr)                                          \
   ((uint32_t)((_hdr & UCT_BXI_HDR_PROT_ID_MASK) >> 48))
 
-#define UCT_BXI_HDR_SET(_hdr, _rndv_match, _am_id, _prot_id)                   \
-  _hdr  = ((_prot_id) & 0xffff);                                               \
-  _hdr  = (_hdr << 24);                                                        \
-  _hdr |= ((_am_id) & 0xffffff);                                               \
-  _hdr  = (_hdr << 24);                                                        \
-  _hdr |= ((_rndv_match) & 0xffffff);
+#define UCT_BXI_HDR_SET(_hdr, _match, _prot)                                   \
+  _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
+  _hdr  = (_hdr << 28);                                                        \
+  _hdr |= ((_match) & 0xfffffff);                                              \
+  _hdr  = (_hdr << 32);                                                        \
+  _hdr |= ((_prot) & 0xf)
+
+static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
+{
+  return (((hdr & 0xfffffff000000000) >> 36) == UCT_BXI_RNDV_PREFIX);
+}
 
 enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
@@ -35,6 +44,12 @@ enum {
 enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
 };
+
+typedef enum uct_bxi_tag_prot {
+  UCT_BXI_TAG_PROT_EAGER = 0,
+  UCT_BXI_TAG_PROT_RNDV_HW,
+  UCT_BXI_TAG_PROT_RNDV_SW,
+} uct_bxi_tag_prot_t;
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
@@ -48,9 +63,10 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint64_t remote_addr;
-  size_t   length;
-  size_t   header_length;
+  ptl_pt_index_t pti;
+  uint64_t       remote_addr;
+  size_t         length;
+  size_t         header_length;
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {
@@ -89,7 +105,7 @@ typedef struct uct_bxi_iface_send_op {
       void                 *unpack_arg; /* Unpack user arg for GET OP */
     } get;
     struct {
-      ptl_handle_me_t meh;
+      uct_bxi_recv_block_t *block;
     } rndv;
   };
 } uct_bxi_iface_send_op_t;
@@ -225,6 +241,30 @@ UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_iface_ops_t *, uct_bxi_iface_ops_t *,
                   uct_md_h, uct_worker_h, const uct_iface_params_t *,
                   const uct_bxi_iface_config_t *);
 
+static UCS_F_ALWAYS_INLINE ucs_status_t
+uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
+{
+  int ret;
+  kh_put(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer, &ret);
+  if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
+    /* Do not post the same buffer more than once (even with different tags)
+     * to avoid memory corruption. */
+    return UCS_ERR_ALREADY_EXISTS;
+  }
+  ucs_assert(ret != UCS_KH_PUT_FAILED);
+  return UCS_OK;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
+{
+  khiter_t iter;
+
+  iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
+  ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
+  kh_del(uct_bxi_tag_addrs, &iface->tm.tag_addrs, iter);
+}
+
 static UCS_F_ALWAYS_INLINE int
 uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
                               uct_bxi_device_addr_t *dev2)
@@ -275,6 +315,9 @@ extern char              *uct_bxi_event_str[];
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
                            return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE));
 
+#define UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err);
+
 #define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _pack_cb, _arg, \
                                            _length)                            \
   ({                                                                           \
@@ -290,17 +333,17 @@ extern char              *uct_bxi_event_str[];
   _length          = _pack_cb(_desc + 1, _arg);                                \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _unpack_cb,    \
-                                            _comp, _arg, _length)              \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  ucs_assert(_length <= (_iface)->config.seg_size);                            \
-  _desc->handler    = (_comp == NULL) ?                                        \
-                              uct_bxi_ep_get_bcopy_handler_no_completion :     \
-                              uct_bxi_ep_get_bcopy_handler;                    \
-  _desc->unpack_arg = _arg;                                                    \
-  _desc->user_comp  = _comp;                                                   \
-  _desc->length     = _length;                                                 \
-  _desc->unpack_cb  = _unpack_cb;
+#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _unpack_cb,      \
+                                            _comp, _arg, _length)                \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                  \
+  ucs_assert(_length <= (_iface)->config.seg_size);                              \
+  (_desc)->handler        = (_comp == NULL) ?                                    \
+                                    uct_bxi_ep_get_bcopy_handler_no_completion : \
+                                    uct_bxi_ep_get_bcopy_handler;                \
+  (_desc)->user_comp      = _comp;                                               \
+  (_desc)->length         = _length;                                             \
+  (_desc)->get.unpack_arg = _arg;                                                \
+  (_desc)->get.unpack_cb  = _unpack_cb;
 
 #define UCT_BXI_IFACE_GET_TX_OP(_iface, _mp, _desc, _length)                   \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
@@ -316,14 +359,14 @@ extern char              *uct_bxi_event_str[];
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_TAG_DESC_PTR(_iface, _mp, _desc, _user_comp,      \
-                                          _handler, _length)                   \
-  UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                            \
+#define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _user_comp,      \
+                                          _length, _err)                       \
+  UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
   _desc->handler     = (_user_comp == NULL) ?                                  \
-                               (uct_bxi_send_op_handler_t)ucs_mpool_put :      \
-                               _handler;                                       \
+                               uct_bxi_send_rndv_op_handler_no_completion :    \
+                               uct_bxi_send_rndv_comp_op_handler;              \
   (_desc)->user_comp = _user_comp;                                             \
-  UCT_BXI_SKIP_ZERO_LENGTH_PTR(_length, _desc);
+  UCT_BXI_SKIP_ZERO_LENGTH_ERR(_length, _err, _desc);
 
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc)                      \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
