@@ -7,8 +7,6 @@
 #include <ucs/debug/debug_int.h>
 #include <uct/api/uct.h>
 
-extern ptl_op_t uct_bxi_atomic_op_table[];
-
 enum {
   UCT_BXI_EP_CONN_CONNECTED,
   UCT_BXI_EP_CONN_CLOSED,
@@ -89,10 +87,10 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                          unsigned    header_length,
                                          unsigned    flags);
 
-ucs_status_t uct_bxi_iface_tag_create_oop_ctx(uct_iface_h    tl_iface,
-                                              uct_oop_ctx_h *oop_ctx_p);
-void         uct_bxi_iface_tag_delete_oop_ctx(uct_iface_h   tl_iface,
-                                              uct_oop_ctx_h tl_oop_ctx);
+ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h    tl_iface,
+                                             uct_oop_ctx_h *oop_ctx_p);
+void         uct_bxi_iface_tag_delete_op_ctx(uct_iface_h   tl_iface,
+                                             uct_oop_ctx_h tl_oop_ctx);
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_t        tag_mask,

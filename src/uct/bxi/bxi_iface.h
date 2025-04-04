@@ -114,6 +114,10 @@ typedef struct uct_bxi_iface_send_op {
       uct_tag_t tag; /* Initiator tag to be passed to target's comp callback. */
       uct_bxi_iface_t *iface; /* Useful back pointer for completion */
     } rndv;
+    struct {
+      uint64_t value;
+      uint64_t compare;
+    } atomic;
   };
 } uct_bxi_iface_send_op_t;
 
@@ -155,9 +159,10 @@ typedef struct uct_bxi_iface_config {
   int      max_copyout_buf;
   unsigned features;
   struct {
-    int          enable;
-    unsigned int list_size;
-    unsigned int max_op_ctx;
+    int                      enable;
+    unsigned int             list_size;
+    unsigned int             max_op_ctx; /* Maximum number of OP context */
+    uct_iface_mpool_config_t op_ctx_mp;  /* Receive descriptor for TAG RX. */
   } tm;
 } uct_bxi_iface_config_t;
 
@@ -202,10 +207,7 @@ typedef struct uct_bxi_iface {
 
   struct {
     unsigned int               enabled;
-    unsigned int               num_outstanding;
-    unsigned int               unexpected_cnt;
-    unsigned int               num_tags;
-    unsigned int               num_op_ctx;
+    ucs_mpool_t                op_ctx_mp; /* Operation context for Triggered */
     khash_t(uct_bxi_tag_addrs) tag_addrs;
     struct {
       void                    *arg; /* User defined arg */
@@ -251,6 +253,21 @@ typedef struct uct_bxi_iface {
 UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_md_h, uct_worker_h,
                   const uct_iface_params_t *, const uct_iface_config_t *);
 
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_iface_cmp_iface_addr(uct_bxi_iface_addr_t *addr1,
+                             uct_bxi_iface_addr_t *addr2)
+{
+  return addr1->am == addr2->am && addr1->rma == addr2->rma;
+}
+
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
+                              uct_bxi_device_addr_t *dev2)
+{
+  return dev1->pid.phys.pid == dev2->pid.phys.nid &&
+         dev1->pid.phys.nid == dev2->pid.phys.nid;
+}
+
 ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
@@ -275,14 +292,6 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
   kh_del(uct_bxi_tag_addrs, &iface->tm.tag_addrs, iter);
-}
-
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
-                              uct_bxi_device_addr_t *dev2)
-{
-  return dev1->pid.phys.pid == dev2->pid.phys.nid &&
-         dev1->pid.phys.nid == dev2->pid.phys.nid;
 }
 
 static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
