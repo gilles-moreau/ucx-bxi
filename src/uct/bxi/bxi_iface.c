@@ -78,7 +78,18 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
                 "RX_TAG_", -1, 32, 128m, 1.0, "recv_tag",
-                ucs_offsetof(uct_bxi_iface_config_t, rx.tag_mp), "\n"),
+                ucs_offsetof(uct_bxi_iface_config_t, rx.tag_mp),
+                "Memory pool of bounced buffers posted in the Portals overflow "
+                "list.\n"),
+
+        {"MAX_TM_OP_CTX", "256",
+         "Maximum number of tag matching operation contexts (default: 256).",
+         ucs_offsetof(uct_bxi_iface_config_t, tm.max_op_ctx),
+         UCS_CONFIG_TYPE_UINT},
+
+        UCT_IFACE_MPOOL_CONFIG_FIELDS(
+                "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_op_ctx",
+                ucs_offsetof(uct_bxi_iface_config_t, tm.op_ctx_mp), "\n"),
 
         {"TM_LIST_SIZE", "4",
          "Limits the number of tags posted to the HW for matching. The actual "
@@ -630,6 +641,15 @@ static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
+//NOTE: Think of preallocating all the counters associated with the
+//      operation contexts during memory pool initialization.
+static ucs_mpool_ops_t uct_bxi_op_ctx_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
 static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
                                            const uct_iface_params_t     *params,
                                            const uct_bxi_iface_config_t *config)
@@ -644,8 +664,8 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto out;
   }
 
-  iface->tm.num_tags = iface->config.tm.max_tags = config->tm.list_size;
-  iface->tm.num_op_ctx = iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
+  iface->config.tm.max_tags   = config->tm.list_size;
+  iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
 
   iface->tm.eager_unexp.cb = params->eager_cb;
   iface->tm.rndv_unexp.cb  = params->rndv_cb;
@@ -653,8 +673,6 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
   iface->tm.rndv_unexp.arg =
           UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
-  iface->tm.unexpected_cnt     = 0;
-  iface->tm.num_outstanding    = 0;
   iface->tm.recv_tried_offload = 0;
 
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
@@ -676,14 +694,16 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   uct_bxi_iface_add_rxq(iface, iface->rx.tag.queue);
 
   /* Work pool of operation. */
+  ucs_mpool_params_reset(&mp_param);
   mp_param = (ucs_mpool_params_t){
-          .max_chunk_size  = iface->tm.num_tags * sizeof(uct_bxi_recv_block_t),
-          .elems_per_chunk = iface->tm.num_tags,
-          .max_elems       = iface->tm.num_tags,
+          .max_chunk_size =
+                  iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t),
+          .elems_per_chunk = iface->config.tm.max_tags,
+          .max_elems       = iface->config.tm.max_tags,
           .elem_size       = sizeof(uct_bxi_recv_block_t),
           .alignment       = UCS_SYS_CACHE_LINE_SIZE,
           .ops             = &uct_bxi_recv_block_mpool_ops,
-          .name            = "recv-block",
+          .name            = "tag-recv-block",
           .grow_factor     = 1,
   };
   status = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
@@ -691,8 +711,26 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto err_release_rxq;
   }
 
+  ucs_mpool_params_reset(&mp_param);
+  mp_param = (ucs_mpool_params_t){
+          .max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size,
+          .elems_per_chunk = config->tm.op_ctx_mp.bufs_grow,
+          .max_elems       = config->tm.max_op_ctx,
+          .elem_size       = sizeof(uct_bxi_op_ctx_t),
+          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
+          .ops             = &uct_bxi_op_ctx_mpool_ops,
+          .name            = "tag-op-ctx",
+          .grow_factor     = 1,
+  };
+  status = ucs_mpool_init(&mp_param, &iface->tm.op_ctx_mp);
+  if (status != UCS_OK) {
+    goto err_release_blockrecvmp;
+  }
+
   return status;
 
+err_release_blockrecvmp:
+  ucs_mpool_cleanup(&iface->tm.recv_block_mp, 0);
 err_release_rxq:
   uct_bxi_rxq_fini(iface->rx.tag.queue);
 out:
@@ -970,15 +1008,17 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_rmapti;
   }
 
-  /* PTL hdr is used within internal protocols and 64 bits are needed. */
+  /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
+   * hash table uses ptl_process_t supposing it is 8 bytes. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
+  ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
 
   return status;
 
 err_clean_rmapti:
   PtlPTFree(md->nih, self->rx.rma.pti);
 err_clean_pending:
-  ucs_mpool_cleanup(&self->tx.pending_mp, 1);
+  ucs_mpool_cleanup(&self->tx.pending_mp, 0);
 err_clean_txops:
   uct_bxi_iface_tx_ops_fini(self);
 err_clean_txbuffer:
@@ -1069,8 +1109,8 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
         .iface_tag_recv_overflow  = uct_bxi_iface_tag_recv_overflow,
-        .iface_tag_create_oop     = uct_bxi_iface_tag_create_oop_ctx,
-        .iface_tag_delete_oop     = uct_bxi_iface_tag_delete_oop_ctx,
+        .iface_tag_create_oop     = uct_bxi_iface_tag_create_op_ctx,
+        .iface_tag_delete_oop     = uct_bxi_iface_tag_delete_op_ctx,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {
