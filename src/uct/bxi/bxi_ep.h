@@ -19,13 +19,9 @@ typedef struct uct_bxi_ep_config {
 } uct_bxi_ep_config_t;
 
 typedef struct uct_bxi_ep {
-  uct_base_ep_t super;
-  struct {
-    int max_retries;
-  } config;
+  uct_base_ep_t         super;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
-  ucs_mpool_t          *ops_mp;
   uint8_t               conn_state;
 } uct_bxi_ep_t;
 
@@ -82,6 +78,9 @@ ucs_status_ptr_t uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                            const uct_iov_t *iov, size_t iovcnt,
                                            unsigned          flags,
                                            uct_completion_t *comp);
+
+ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t tag,
+                                           uct_bxi_recv_block_t *block);
 
 ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
 
@@ -151,9 +150,8 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
 ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags);
 
-UCS_CLASS_DECLARE(uct_bxi_ep_t, uct_bxi_iface_t *, const uct_ep_params_t *);
-UCS_CLASS_DECLARE_NEW_FUNC(uct_bxi_ep_t, uct_ep_t, const uct_ep_params_t *);
-UCS_CLASS_DECLARE_DELETE_FUNC(uct_bxi_ep_t, uct_ep_t);
+ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t tag,
+                                        uct_bxi_recv_block_t *block);
 
 void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
@@ -179,5 +177,9 @@ uct_bxi_ep_add_send_op_sn(uct_bxi_mem_desc_t      *mem_desc,
   ucs_trace_poll("mem desc %p add send op %p sn %lu handler %s", mem_desc, op,
                  op->sn, ucs_debug_get_symbol_name((void *)op->handler));
 }
+
+UCS_CLASS_DECLARE(uct_bxi_ep_t, const uct_ep_params_t *);
+UCS_CLASS_DECLARE_NEW_FUNC(uct_bxi_ep_t, uct_ep_t, const uct_ep_params_t *);
+UCS_CLASS_DECLARE_DELETE_FUNC(uct_bxi_ep_t, uct_ep_t);
 
 #endif

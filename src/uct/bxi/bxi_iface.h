@@ -16,7 +16,7 @@
 
 #define UCT_BXI_RNDV_PREFIX 0xdededad
 #define UCT_BXI_RNDV_GET_TAG(_sn)                                              \
-  0xdeadbeef00000000 | (0x00000000ffffffff & _sn)
+  (0xdeadbeef00000000 | (0x00000000ffffffff & (_sn)))
 
 #define UCT_BXI_HDR_GET_RNDV_MATCH(_hdr)                                       \
   ((uint32_t)(_hdr & UCT_BXI_HDR_RNDV_MATCH_MASK))
@@ -24,6 +24,8 @@
   ((uint32_t)((_hdr & UCT_BXI_HDR_AM_ID_MASK) >> 24))
 #define UCT_BXI_HDR_GET_PROT_ID(_hdr)                                          \
   ((uint32_t)((_hdr & UCT_BXI_HDR_PROT_ID_MASK) >> 48))
+
+#define UCT_BXI_HDR_GET_MATCH(_hdr) (((_hdr) >> 4) & 0xffffffff)
 
 #define UCT_BXI_HDR_SET(_hdr, _match, _prot)                                   \
   _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
@@ -70,8 +72,10 @@ typedef struct uct_bxi_hdr_rndv {
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {
-  uct_pending_req_t super;
-  uct_bxi_ep_t     *ep;
+  uct_pending_req_t     super;
+  uct_bxi_ep_t         *ep;
+  uct_tag_t             tag;
+  uct_bxi_recv_block_t *block;
 } uct_bxi_pending_req_t;
 
 typedef struct uct_bxi_pending_purge_arg {
@@ -91,13 +95,13 @@ typedef struct uct_bxi_ep_addr {
 
 typedef struct uct_bxi_iface_send_op {
   unsigned                  flags;
-  uct_bxi_mem_desc_t       *mem_desc;
-  uct_bxi_send_op_handler_t handler;
+  uct_bxi_mem_desc_t       *mem_desc;  /* MD on which OP is performed */
+  uct_bxi_send_op_handler_t handler;   /* Handler called completion */
   ucs_queue_elem_t          elem;      /* Element on a TX queue */
-  uct_completion_t         *user_comp; /* Completion callback */
+  uct_completion_t         *user_comp; /* User completion callback */
   uct_bxi_ep_t             *ep;        /* OP endpoint */
   ptl_size_t                sn;        /* OP sequence number */
-  size_t                    length;
+  size_t                    length;    /* Length of the OP */
 
   union {
     struct {
@@ -105,7 +109,10 @@ typedef struct uct_bxi_iface_send_op {
       void                 *unpack_arg; /* Unpack user arg for GET OP */
     } get;
     struct {
-      uct_bxi_recv_block_t *block;
+      uct_bxi_recv_block_t *block; /* ME for initiator GET OP */
+      uct_tag_context_t    *ctx;   /* Tag context attached from target ME. */
+      uct_tag_t tag; /* Initiator tag to be passed to target's comp callback. */
+      uct_bxi_iface_t *iface; /* Useful back pointer for completion */
     } rndv;
   };
 } uct_bxi_iface_send_op_t;
@@ -122,7 +129,6 @@ typedef struct uct_bxi_device_addr {
 
 typedef struct uct_bxi_iface_ops {
   uct_iface_internal_ops_t super;
-  handle_failure_func_t    handle_failure;
 } uct_bxi_iface_ops_t;
 
 typedef struct uct_bxi_iface_config {
@@ -161,6 +167,10 @@ KHASH_INIT(uct_bxi_rxq, uint32_t, uct_bxi_rxq_t *, 0, uct_bxi_rxq_hash,
 
 #define uct_bxi_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
 KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
+           kh_int64_hash_equal)
+
+#define uct_bxi_eps_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
+KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_t *, 0, uct_bxi_eps_hash,
            kh_int64_hash_equal)
 
 typedef struct uct_bxi_iface {
@@ -234,12 +244,14 @@ typedef struct uct_bxi_iface {
     khash_t(uct_bxi_rxq) queues;
   } rx;
 
-  uct_bxi_md_t *md;
+  khash_t(uct_bxi_eps) eps;
+  uct_bxi_md_t        *md;
 } uct_bxi_iface_t;
 
-UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_iface_ops_t *, uct_bxi_iface_ops_t *,
-                  uct_md_h, uct_worker_h, const uct_iface_params_t *,
-                  const uct_bxi_iface_config_t *);
+UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_md_h, uct_worker_h,
+                  const uct_iface_params_t *, const uct_iface_config_t *);
+
+ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
