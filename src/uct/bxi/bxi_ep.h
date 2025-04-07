@@ -8,8 +8,9 @@
 #include <uct/api/uct.h>
 
 enum {
-  UCT_BXI_EP_CONN_CONNECTED,
-  UCT_BXI_EP_CONN_CLOSED,
+  UCT_BXI_EP_CONN_CONNECTED     = UCS_BIT(0),
+  UCT_BXI_EP_CONN_CLOSED        = UCS_BIT(1),
+  UCT_BXI_EP_KEEP_ALIVE_PENDING = UCS_BIT(2),
 };
 
 typedef struct uct_bxi_ep_config {
@@ -18,6 +19,7 @@ typedef struct uct_bxi_ep_config {
 
 typedef struct uct_bxi_ep {
   uct_base_ep_t         super;
+  unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
   uint8_t               conn_state;

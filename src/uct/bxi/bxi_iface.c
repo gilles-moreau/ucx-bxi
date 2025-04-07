@@ -530,7 +530,45 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp)
 {
-  return UCS_OK;
+  ucs_status_t             status    = UCS_OK;
+  ptl_size_t               last_seqn = 0;
+  uct_bxi_iface_send_op_t *op        = NULL;
+  uct_bxi_iface_t         *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+
+  if (ucs_queue_is_empty(&iface->tx.mem_desc->send_ops)) {
+    return status;
+  }
+  ucs_list_for_each (md, &iface->m, elem) {
+    if (ucs_queue_is_empty(&mmd->opq)) {
+      continue;
+    }
+
+    /* Load the sequence number of the last operations. */
+    if (last_seqn < mmd->seqn) {
+      last_seqn = mmd->seqn;
+      last_mmd  = mmd;
+    }
+
+    status = UCS_INPROGRESS;
+  }
+
+  if (status == UCS_INPROGRESS && comp != NULL) {
+    op = ucs_mpool_get(&iface->super.flush_ops_mp);
+    if (ucs_unlikely(op == NULL)) {
+      ucs_error("Failed to allocate flush completion");
+      return UCS_ERR_NO_MEMORY;
+    }
+    op->type   = UCT_PTL_OP_RMA_FLUSH;
+    op->comp   = comp;
+    op->buffer = NULL;
+    // FIXME: uniformize pending and outstanding operation count
+    op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
+
+    ucs_queue_push(&last_mmd->opq, &op->elem);
+  }
+
+err:
+  return status;
 }
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
@@ -570,9 +608,8 @@ ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
   return UCS_OK;
 }
 
-static ucs_status_t uct_bxi_iface_get_ep(uct_bxi_iface_t *iface,
-                                         ptl_process_t    ptl_pid,
-                                         uct_bxi_ep_t   **ep_p)
+static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_get_ep(
+        uct_bxi_iface_t *iface, ptl_process_t ptl_pid, uct_bxi_ep_t **ep_p)
 {
   khiter_t iter;
   uint64_t pid;
@@ -610,9 +647,8 @@ static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,
   return UCS_OK;
 }
 
-static ucs_status_t uct_bxi_iface_get_rxq(uct_bxi_iface_t *iface,
-                                          ptl_pt_index_t   pti,
-                                          uct_bxi_rxq_t  **rxq_p)
+static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_get_rxq(
+        uct_bxi_iface_t *iface, ptl_pt_index_t pti, uct_bxi_rxq_t **rxq_p)
 {
   khiter_t iter;
 

@@ -76,6 +76,7 @@ typedef struct uct_bxi_pending_req {
   uct_bxi_ep_t         *ep;
   uct_tag_t             tag;
   uct_bxi_recv_block_t *block;
+  uct_completion_t     *comp;
 } uct_bxi_pending_req_t;
 
 typedef struct uct_bxi_pending_purge_arg {

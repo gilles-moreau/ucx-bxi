@@ -984,6 +984,7 @@ int uct_bxi_ep_is_connected(const uct_ep_h                      tl_ep,
   return is_connected;
 }
 
+//TODO: use arbiter group on each endpoint to enforce fairness between endpoints.
 ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags)
 {
@@ -1000,25 +1001,80 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
   return UCS_OK;
 }
 
+static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
+                                          uct_completion_t *comp)
+{
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  // Send 0 length message, set length to 1 to pass IOV check.
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+                               uct_bxi_send_comp_op_handler, 1);
+
+  /* Endpoint status is checked on the RMA PTE since we do not need 
+   * to generate an event on the target. */
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, NULL, 0, PTL_ACK_REQ,
+                               ep->dev_addr.pid, ep->iface_addr.rma, 0, 0, op,
+                               0));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut ep check return %d", status);
+  } else {
+    /* For zcopy call, operation is always in progress. */
+    status = UCS_INPROGRESS;
+  }
+
+  /* Append operation to completion queue. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY, 0);
+  uct_bxi_log_put(iface);
+
+  return status;
+}
+
+static ucs_status_t uct_bxi_ep_check_progress(uct_pending_req_t *uct_req)
+{
+  uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
+
+  return uct_bxi_ep_check_send(&req->ep->super.super, req->comp);
+}
+
 ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
                               uct_completion_t *comp)
 {
-  ucs_status_t rc;
-  uct_iov_t    iov;
+  ucs_status_t           status;
+  uct_bxi_ep_t          *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t       *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_pending_req_t *req;
 
   UCT_EP_KEEPALIVE_CHECK_PARAM(flags, comp);
 
-  iov.buffer = NULL;
-  iov.length = 0;
-  // Send 0 length message.
-  rc = uct_bxi_ep_put_zcopy(tl_ep, &iov, 1, 0, 0, comp);
-  if (rc != UCS_OK) {
-    // FIXME: if no resource, add to pending requests
-    return ((rc == UCS_ERR_NO_RESOURCE) || (rc == UCS_INPROGRESS)) ? UCS_OK :
-                                                                     rc;
+  ucs_assert(ep->flags & UCT_BXI_EP_CONN_CONNECTED);
+
+  if (ep->flags & UCT_BXI_EP_KEEP_ALIVE_PENDING) {
+    return UCS_OK;
   }
 
-  return rc;
+  status = uct_bxi_ep_check_send(tl_ep, comp);
+  if (status != UCS_ERR_NO_RESOURCE) {
+    ucs_assert(status == UCS_INPROGRESS);
+    return status;
+  }
+
+  req = ucs_mpool_get(&iface->tx.pending_mp);
+  if (req == NULL) {
+    return UCS_ERR_NO_MEMORY;
+  }
+
+  req->ep          = ep;
+  req->super.func  = uct_bxi_ep_check_progress;
+  ep->flags       |= UCT_BXI_EP_KEEP_ALIVE_PENDING;
+  status           = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);
+
+  ucs_assert_always(status == UCS_OK);
+
+  return UCS_OK;
 }
 
 void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg)
