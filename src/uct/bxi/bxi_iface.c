@@ -106,6 +106,13 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {NULL},
 };
 
+static void uct_bxi_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
+                                          const void              *resp)
+{
+  uct_invoke_completion(op->user_comp, UCS_OK);
+  ucs_mpool_put_inline(op);
+}
+
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
 {
@@ -472,17 +479,19 @@ static ucs_status_t uct_bxi_iface_handle_tx_err(uct_bxi_iface_t    *iface,
   return status;
 }
 
+/* Poll tx is both used for interface progression. */
 unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
                                uct_bxi_mem_desc_t *mem_desc)
 {
-  ucs_status_t             status     = UCS_OK;
+  ucs_status_t             status;
   unsigned                 progressed = 0;
   uct_bxi_iface_send_op_t *op;
   ptl_ct_event_t           ct_count;
 
-  /* Do not poll count if there are no outstanding operations. */
+  /* Do not poll count if there are no outstanding operations. It means there 
+   * are no outstanding operations. */
   if (ucs_queue_is_empty(&mem_desc->send_ops)) {
-    return 0;
+    return progressed;
   }
 
   status = uct_bxi_wrap(PtlCTGet(mem_desc->cth, &ct_count));
@@ -500,7 +509,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
   }
 
   /* Loop on all outstanding operation and compare their sequence number 
-   * with the current value of the completion counter. */
+   * with the current value of the MD completion counter. */
   ucs_queue_for_each_extract (
           op, &mem_desc->send_ops, elem,
           UCS_CIRCULAR_COMPARE64(ct_count.success, >, op->sn)) {
@@ -524,51 +533,47 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
   }
 
   count = uct_bxi_iface_poll_tx(iface, iface->tx.mem_desc);
+  /* Update send credits. */
+  uct_bxi_mem_desc_available_add(iface->tx.mem_desc, count);
+
   return count;
+}
+
+static inline int uct_bxi_iface_need_flush(uct_bxi_iface_t *iface)
+{
+  /* We count both the operations of send descriptor and normal send 
+   * memory pools. In total, there are 2 * max_queue_len available operations. */
+  return (iface->tx.mem_desc->available == 2 * iface->config.tx.max_queue_len);
 }
 
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp)
 {
-  ucs_status_t             status    = UCS_OK;
-  ptl_size_t               last_seqn = 0;
-  uct_bxi_iface_send_op_t *op        = NULL;
+  uct_bxi_iface_send_op_t *op    = NULL;
   uct_bxi_iface_t         *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  if (ucs_queue_is_empty(&iface->tx.mem_desc->send_ops)) {
-    return status;
-  }
-  ucs_list_for_each (md, &iface->m, elem) {
-    if (ucs_queue_is_empty(&mmd->opq)) {
-      continue;
-    }
+  UCT_CHECK_PARAM(!ucs_test_all_flags(flags, UCT_FLUSH_FLAG_CANCEL |
+                                                     UCT_FLUSH_FLAG_REMOTE),
+                  "flush flags CANCEL and REMOTE are mutually exclusive");
 
-    /* Load the sequence number of the last operations. */
-    if (last_seqn < mmd->seqn) {
-      last_seqn = mmd->seqn;
-      last_mmd  = mmd;
-    }
-
-    status = UCS_INPROGRESS;
+  if (!uct_bxi_iface_need_flush(iface)) {
+    return UCS_OK;
   }
 
-  if (status == UCS_INPROGRESS && comp != NULL) {
-    op = ucs_mpool_get(&iface->super.flush_ops_mp);
-    if (ucs_unlikely(op == NULL)) {
-      ucs_error("Failed to allocate flush completion");
-      return UCS_ERR_NO_MEMORY;
-    }
-    op->type   = UCT_PTL_OP_RMA_FLUSH;
-    op->comp   = comp;
-    op->buffer = NULL;
-    // FIXME: uniformize pending and outstanding operation count
-    op->seqn = last_seqn - 1 + ucs_queue_length(&iface->super.pending_q);
-
-    ucs_queue_push(&last_mmd->opq, &op->elem);
+  op = ucs_mpool_get(&iface->tx.flush_ops_mp);
+  if (op == NULL) {
+    ucs_error("BXI: no more flush operations.");
+    return UCS_ERR_NO_MEMORY;
   }
+  op->user_comp = comp;
+  op->handler   = uct_bxi_flush_comp_op_handler;
 
-err:
-  return status;
+  /* Append operation descriptor to completion queue. */
+  //NOTE: Do not increment the MD sequence number since we only need to know
+  //      when is the last operation completed.
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn);
+
+  return UCS_INPROGRESS;
 }
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
@@ -857,7 +862,7 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
           .max_chunk_size = config->tx.mp.max_chunk_size *
                             sizeof(uct_bxi_iface_send_op_t),
           .elems_per_chunk = config->tx.mp.bufs_grow,
-          .max_elems       = config->tx.mp.max_bufs,
+          .max_elems       = config->tx.max_queue_len,
           .elem_size       = sizeof(uct_bxi_iface_send_op_t),
           .alignment       = UCS_SYS_CACHE_LINE_SIZE,
           .ops             = &uct_bxi_send_mpool_ops,
@@ -865,16 +870,16 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
           .grow_factor     = config->tx.mp.grow_factor,
   };
   status = ucs_mpool_init(&mp_params, &iface->tx.send_op_mp);
-
   if (status != UCS_OK) {
     goto err;
   }
+  uct_bxi_mem_desc_available_add(iface->tx.mem_desc, config->tx.max_queue_len);
 
   /* Allocate memory of flush operations. */
   ucs_mpool_params_reset(&mp_params);
   mp_params = (ucs_mpool_params_t){
           .elems_per_chunk = 256,
-          .max_elems       = 256,
+          .max_elems       = -1,
           .elem_size       = sizeof(uct_bxi_iface_send_op_t),
           .alignment       = UCS_SYS_CACHE_LINE_SIZE,
           .ops             = &uct_bxi_send_flush_mpool_ops,
@@ -980,6 +985,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   if (status != UCS_OK) {
     goto err_clean_errevq;
   }
+  /* Initialize available send credits to 0. TX initialization below will 
+   * increment it. */
+  uct_bxi_mem_desc_available_set(self->tx.mem_desc, 0);
 
   /* Create TX buffers mempool */
   ucs_mpool_params_reset(&mp_params);
@@ -987,7 +995,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
           .max_chunk_size  = config->tx.mp.max_chunk_size,
           .elems_per_chunk = config->tx.mp.bufs_grow,
           .elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
-          .max_elems = config->tx.mp.max_bufs,
+          .max_elems = config->tx.max_queue_len,
           .alignment = UCS_SYS_CACHE_LINE_SIZE,
           .ops       = &uct_bxi_send_mpool_ops,
           .name      = "send-desc-mp",
@@ -997,6 +1005,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   if (status != UCS_OK) {
     goto err_clean_mem_desc;
   }
+  uct_bxi_mem_desc_available_add(self->tx.mem_desc, config->tx.max_queue_len);
 
   /* Initialize operation for the TX Queue. They are not associated with 
    * a buffer. */

@@ -165,13 +165,15 @@ uct_bxi_mem_desc_add_send_op(uct_bxi_mem_desc_t      *mem_desc,
   ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
   ucs_queue_push(&mem_desc->send_ops, &op->elem);
+  /* Remove one available send credit from MD. */
+  uct_bxi_mem_desc_available_add(mem_desc, -1);
 }
 
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_ep_add_send_op_sn(uct_bxi_mem_desc_t      *mem_desc,
-                          uct_bxi_iface_send_op_t *op)
+                          uct_bxi_iface_send_op_t *op, uint64_t sn)
 {
-  op->sn = mem_desc->sn++;
+  op->sn = sn;
   uct_bxi_mem_desc_add_send_op(mem_desc, op);
 
   ucs_trace_poll("mem desc %p add send op %p sn %lu handler %s", mem_desc, op,

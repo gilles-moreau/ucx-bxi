@@ -27,10 +27,11 @@ typedef struct uct_bxi_mem_desc_param {
 
 typedef struct uct_bxi_mem_desc {
   unsigned         flags;
-  ptl_handle_md_t  mdh;      /* Portals4 MD handle */
-  ptl_handle_ct_t  cth;      /* Portals4 CT handle */
-  ucs_queue_head_t send_ops; /* Queue of outstanding OPs */
-  uint64_t         sn;
+  ptl_handle_md_t  mdh;       /* Portals4 MD handle */
+  ptl_handle_ct_t  cth;       /* Portals4 CT handle */
+  ucs_queue_head_t send_ops;  /* Queue of outstanding OPs */
+  uint64_t         sn;        /* Current sequence number */
+  uint64_t         available; /* Current available send credits */
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {
@@ -67,6 +68,24 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
 ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);
+
+static UCS_F_ALWAYS_INLINE uint64_t
+uct_bxi_mem_desc_available(uct_bxi_mem_desc_t *mem_desc)
+{
+  return mem_desc->available;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_mem_desc_available_add(uct_bxi_mem_desc_t *mem_desc, uint64_t count)
+{
+  mem_desc->available += count;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_mem_desc_available_set(uct_bxi_mem_desc_t *mem_desc, uint64_t count)
+{
+  mem_desc->available = count;
+}
 
 ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
                                         uct_bxi_mem_desc_param_t *params,
