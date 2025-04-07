@@ -101,8 +101,9 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     ucs_fatal("BXI: PtlPut return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, length);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
@@ -140,8 +141,9 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
     ucs_fatal("BXI: PtlPut short return %d", status);
   }
 
-  /* Append operation to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
 
@@ -175,8 +177,9 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -221,8 +224,9 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY,
                     uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -254,8 +258,9 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, BCOPY, length);
   uct_bxi_log_put(iface);
@@ -299,8 +304,9 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, length);
   uct_bxi_log_put(iface);
@@ -358,8 +364,9 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -416,8 +423,9 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, length);
   uct_bxi_log_put(iface);
@@ -508,8 +516,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   return (ucs_status_ptr_t)op;
 
@@ -563,8 +572,9 @@ ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t tag,
     ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
   return status;
 }
@@ -639,8 +649,9 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
     ucs_fatal("BXI: PtlPut rndv request return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
 
 err:
   return status;
@@ -815,8 +826,9 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -852,8 +864,9 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -890,8 +903,9 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -1015,7 +1029,7 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
 
   /* Endpoint status is checked on the RMA PTE since we do not need 
    * to generate an event on the target. */
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, NULL, 0, PTL_ACK_REQ,
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, 0, 0, PTL_ACK_REQ,
                                ep->dev_addr.pid, ep->iface_addr.rma, 0, 0, op,
                                0));
   if (status != UCS_OK) {
@@ -1025,8 +1039,9 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation to completion queue. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op);
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
   UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY, 0);
   uct_bxi_log_put(iface);
 
