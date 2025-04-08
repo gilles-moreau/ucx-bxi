@@ -578,7 +578,7 @@ bool ucp_test::check_tls(const std::string& tls)
         return iter->second;
     }
 
-    if (tls != "ptl_am") {
+    if (tls != "bxi") {
         UCS_TEST_MESSAGE << "Skip " << tls << " verbs tests with valgrind";
         return cache[tls] = false;
     }

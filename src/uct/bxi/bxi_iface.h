@@ -248,7 +248,6 @@ typedef struct uct_bxi_iface {
   } rx;
 
   khash_t(uct_bxi_eps) eps;
-  uct_bxi_md_t        *md;
 } uct_bxi_iface_t;
 
 UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_md_h, uct_worker_h,
@@ -268,6 +267,10 @@ uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
   return dev1->pid.phys.pid == dev2->pid.phys.nid &&
          dev1->pid.phys.nid == dev2->pid.phys.nid;
 }
+
+ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
+                                 uct_completion_t *comp);
+ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 
@@ -322,6 +325,8 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_should_poll_tx(unsigned count)
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 extern char              *uct_bxi_event_str[];
+
+#define uct_bxi_iface_md(iface) ucs_derived_of(iface->super.md, uct_bxi_md_t)
 
 #define uct_bxi_iface_trace_am(_iface, _type, _am_id, _data, _length)          \
   uct_iface_trace_am(&(_iface)->super, _type, _am_id, _data, _length, "%cX",   \

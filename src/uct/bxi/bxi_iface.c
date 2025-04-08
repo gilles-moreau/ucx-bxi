@@ -44,6 +44,11 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {"", "ALLOC=heap", NULL, ucs_offsetof(uct_bxi_iface_config_t, super),
          UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
+        {"MAX_EVENTS", "2048",
+         "Maximum number of events per event queue (default: 2048).",
+         ucs_offsetof(uct_bxi_iface_config_t, max_events),
+         UCS_CONFIG_TYPE_UINT},
+
         {"MAX_TX_QUEUE_LEN", "256",
          "Maximum number of outstanding operations (default: 256).",
          ucs_offsetof(uct_bxi_iface_config_t, tx.max_queue_len),
@@ -105,6 +110,11 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         {NULL},
 };
+
+static void uct_bxi_fence_completion(uct_completion_t *comp)
+{
+  return;
+}
 
 static void uct_bxi_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                           const void              *resp)
@@ -399,7 +409,7 @@ ucs_status_t uct_bxi_iface_get_device_address(uct_iface_h        tl_iface,
   uct_bxi_device_addr_t *addr  = (void *)tl_addr;
   uct_bxi_iface_t       *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  addr->pid = iface->md->pid;
+  addr->pid = uct_bxi_iface_md(iface)->pid;
 
   return UCS_OK;
 }
@@ -562,7 +572,6 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
 
   op = ucs_mpool_get(&iface->tx.flush_ops_mp);
   if (op == NULL) {
-    ucs_error("BXI: no more flush operations.");
     return UCS_ERR_NO_MEMORY;
   }
   op->user_comp = comp;
@@ -576,9 +585,32 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
   return UCS_INPROGRESS;
 }
 
+//NOTE: Fence should enforce order of operations completion before and after.
+//      Infiniband has dedicated send flags for that but not Portals4. So one
+//      way is to flush all operations and wait for its completion.
+//TODO: improved fence implementation.
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 {
-  return UCS_OK;
+  ucs_status_t     status;
+  uct_completion_t comp = {.func   = uct_bxi_fence_completion,
+                           .status = UCS_INPROGRESS,
+                           .count  = 1};
+
+  status = uct_bxi_iface_flush(tl_iface, flags, &comp);
+  if (status == UCS_OK) {
+    /* There are no outstanding operations, so return directly. */
+    return status;
+  }
+
+  do {
+    status = uct_bxi_iface_progress(tl_iface);
+    if (status < 0) {
+      goto err;
+    }
+  } while (comp.status != UCS_OK);
+
+err:
+  return status;
 }
 
 ucs_status_t
@@ -596,7 +628,7 @@ ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
 {
   int      ret;
   khiter_t iter;
-  uint64_t pid = 0;
+  uint64_t pid;
 
   /* Transform Portals pid to uint64_t. */
   pid  = ep->dev_addr.pid.phys.nid;
@@ -720,7 +752,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   rxq_param = (uct_bxi_rxq_param_t){
           .eqh     = iface->rx.eqh,
-          .nih     = iface->md->nih,
+          .nih     = uct_bxi_iface_md(iface)->nih,
           .mp      = config->rx.tag_mp,
           .list    = PTL_OVERFLOW_LIST,
           .name    = "rxq-tag",
@@ -807,14 +839,17 @@ static inline void
 uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
                           const uct_bxi_iface_config_t *config)
 {
+  uct_bxi_md_t *md = uct_bxi_iface_md(iface);
+
+  iface->config.max_events       = config->max_events;
   iface->config.seg_size         = config->seg_size;
   iface->config.tx.max_queue_len = config->tx.max_queue_len;
   iface->config.rx.max_queue_len = config->rx.max_queue_len;
 
-  iface->config.max_iovecs   = ucs_min(iface->md->config.limits.max_iovecs, 1);
-  iface->config.max_msg_size = iface->md->config.limits.max_msg_size;
-  iface->config.max_inline = ucs_min(iface->md->config.limits.max_volatile_size,
-                                     UCS_ALLOCA_MAX_SIZE);
+  iface->config.max_iovecs   = ucs_min(md->config.limits.max_iovecs, 1);
+  iface->config.max_msg_size = md->config.limits.max_msg_size;
+  iface->config.max_inline =
+          ucs_min(md->config.limits.max_volatile_size, UCS_ALLOCA_MAX_SIZE);
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
@@ -913,7 +948,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
                     const uct_iface_config_t *uct_config)
 {
   ucs_status_t            status = UCS_OK;
-  uct_bxi_md_t           *md     = ucs_derived_of(tl_md, uct_bxi_md_t);
+  uct_bxi_md_t           *md;
   uct_bxi_iface_config_t *config =
           ucs_derived_of(uct_config, uct_bxi_iface_config_t);
   uct_bxi_mem_desc_param_t mem_desc_param;
@@ -931,6 +966,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
                           dev->stats)
                    UCS_STATS_ARG(params->mode.device.dev_name));
 
+  md = uct_bxi_iface_md(self);
+
   /* Initialize all config entries. */
   uct_bxi_iface_config_init(self, config);
 
@@ -944,7 +981,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
   rxq_param = (uct_bxi_rxq_param_t){
           .eqh     = self->rx.eqh,
-          .nih     = self->md->nih,
+          .nih     = md->nih,
           .mp      = config->rx.am_mp,
           .list    = PTL_PRIORITY_LIST,
           .handler = uct_bxi_iface_handle_am_events,
@@ -1084,9 +1121,11 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
+  uct_bxi_md_t *md = uct_bxi_iface_md(self);
+
   /* Clean RDMA resources. */
   PtlMEUnlink(self->rx.rma.entry.meh);
-  PtlPTFree(self->md->nih, self->rx.rma.pti);
+  PtlPTFree(md->nih, self->rx.rma.pti);
 
   /* Clean TX resources. */
   ucs_mpool_cleanup(&self->tx.pending_mp, 1);
