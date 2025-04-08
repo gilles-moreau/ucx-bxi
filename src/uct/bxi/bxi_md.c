@@ -17,10 +17,6 @@ ucs_config_field_t uct_bxi_md_config_table[] = {
         {"", "", NULL, ucs_offsetof(uct_bxi_md_config_t, super),
          UCS_CONFIG_TYPE_TABLE(uct_md_config_table)},
 
-        {"MAX_EVENTS", "65536",
-         "Maximum number of events per event queue (default: 2048).",
-         ucs_offsetof(uct_bxi_md_config_t, max_events), UCS_CONFIG_TYPE_UINT},
-
         {NULL}};
 
 static const ptl_ni_limits_t default_limits = {

@@ -491,7 +491,7 @@ protected:
     tcp,                     \
     UCT_TEST_MM_TLS,         \
     cma,                     \
-    ptl_am,                  \
+    bxi,                     \
     knem
 
 #define UCT_TEST_CUDA_MEM_TYPE_TLS \

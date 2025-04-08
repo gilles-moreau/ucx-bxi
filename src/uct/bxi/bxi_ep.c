@@ -768,7 +768,7 @@ ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h    tl_iface,
   op_ctx->threshold     = 0;
   op_ctx->super.ref_cnt = 0;
 
-  status = uct_bxi_wrap(PtlCTAlloc(iface->md->nih, &op_ctx->cth));
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &op_ctx->cth));
   if (status != UCS_OK) {
     goto err_free_op_ctx;
   }
@@ -965,6 +965,17 @@ ucs_status_t uct_bxi_ep_atomic64_fetch(uct_ep_h tl_ep, uct_atomic_op_t opcode,
   return uct_bxi_ep_atomic_fetch_common(tl_ep, opcode, value, result,
                                         sizeof(uint64_t), PTL_UINT64_T,
                                         remote_addr, rkey, comp);
+}
+
+ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
+                              uct_completion_t *comp)
+{
+  return uct_bxi_iface_flush(tl_ep->iface, flags, comp);
+}
+
+ucs_status_t uct_bxi_ep_fence(uct_ep_h tl_ep, unsigned flags)
+{
+  return uct_bxi_iface_fence(tl_ep->iface, flags);
 }
 
 ucs_status_t uct_bxi_ep_get_address(uct_ep_h tl_ep, uct_ep_addr_t *addr)
