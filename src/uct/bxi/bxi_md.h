@@ -26,12 +26,11 @@ typedef struct uct_bxi_mem_desc_param {
 } uct_bxi_mem_desc_param_t;
 
 typedef struct uct_bxi_mem_desc {
-  unsigned         flags;
-  ptl_handle_md_t  mdh;       /* Portals4 MD handle */
-  ptl_handle_ct_t  cth;       /* Portals4 CT handle */
-  ucs_queue_head_t send_ops;  /* Queue of outstanding OPs */
-  uint64_t         sn;        /* Current sequence number */
-  uint64_t         available; /* Current available send credits */
+  unsigned        flags;
+  ptl_handle_md_t mdh;       /* Portals4 MD handle */
+  ucs_list_link_t send_ops;  /* Queue of outstanding OPs */
+  uint64_t        sn;        /* Current sequence number */
+  uint64_t        available; /* Current available send credits */
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {

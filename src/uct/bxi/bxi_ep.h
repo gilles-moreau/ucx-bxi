@@ -164,7 +164,10 @@ uct_bxi_mem_desc_add_send_op(uct_bxi_mem_desc_t      *mem_desc,
   ucs_assert(op != NULL);
   ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  ucs_queue_push(&mem_desc->send_ops, &op->elem);
+
+  //FIXME: Since operations are completed through event handling, see TX poll,
+  //       there might not be reasons to keep track of outstanding operations.
+  ucs_list_add_tail(&mem_desc->send_ops, &op->elem);
   /* Remove one available send credit from MD. */
   uct_bxi_mem_desc_available_add(mem_desc, -1);
 }
