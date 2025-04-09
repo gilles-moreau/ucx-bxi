@@ -58,8 +58,9 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "TX_", -1, 32, 128m, 1.0, "send",
                 ucs_offsetof(uct_bxi_iface_config_t, tx.mp), "\n"),
 
-        {"MAX_RX_QUEUE_LEN", "256",
-         "Maximum number of receive posted (default: 256).",
+        {"MAX_RX_QUEUE_LEN", "32",
+         "Maximum number of bounced buffer in the Receive Queue (default: "
+         "32).",
          ucs_offsetof(uct_bxi_iface_config_t, rx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
@@ -127,7 +128,10 @@ static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_mem_desc_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
-  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  /* Remove operations from the list of outstandings. */
+  ucs_list_del(&op->elem);
+  op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
+                 UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
   op->handler(op, NULL);
 }
 
@@ -450,85 +454,92 @@ out:
   return progressed;
 }
 
-static ucs_status_t uct_bxi_iface_handle_tx_err(uct_bxi_iface_t    *iface,
-                                                uct_bxi_mem_desc_t *mem_desc,
-                                                ptl_ct_event_t      failures)
+static inline int uct_bxi_iface_tx_need_poll(uct_bxi_iface_t *iface)
 {
-  int                      i;
-  ucs_status_t             status = UCS_OK;
-  uct_bxi_iface_send_op_t *op;
-  ptl_event_t              ev;
-
-  for (i = 0; i < failures.failure; i++) {
-    status = uct_bxi_wrap(PtlEQGet(iface->tx.err_eqh, &ev));
-    if (status != UCS_OK)
-      break;
-
-    ucs_assert(ev.type == PTL_EVENT_PT_DISABLED);
-    op = (uct_bxi_iface_send_op_t *)ev.user_ptr;
-    ucs_error("BXI: operation failed. op=%p, sn=%lu, mem desc=%p", op, op->sn,
-              mem_desc);
-
-    /* Remove operation from queue. */
-    ucs_queue_remove(&mem_desc->send_ops, &op->elem);
-
-    /* Close endpoint. */
-    op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
-
-    status = uct_iface_handle_ep_err(&iface->super.super, &op->ep->super.super,
-                                     UCS_ERR_ENDPOINT_TIMEOUT);
-
-    ucs_assert(status == UCS_OK);
-  }
-
-  /* Error has been handled, reset counter. */
-  status = uct_bxi_wrap(PtlCTInc(
-          mem_desc->cth, (ptl_ct_event_t){.success = failures.failure,
-                                          .failure = -failures.failure}));
-
-  return status;
+  /* We count both the operations of send descriptor and normal send 
+   * memory pools. In total, there are 2 * max_queue_len available operations. */
+  return (iface->tx.mem_desc->available == 2 * iface->config.tx.max_queue_len);
 }
 
 /* Poll tx is both used for interface progression. */
 unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
                                uct_bxi_mem_desc_t *mem_desc)
 {
-  ucs_status_t             status;
   unsigned                 progressed = 0;
-  uct_bxi_iface_send_op_t *op;
-  ptl_ct_event_t           ct_count;
+  ucs_status_t             status;
+  uct_bxi_iface_send_op_t *op, *tmp;
+  int                      ret;
+  ptl_event_t              ev;
 
-  /* Do not poll count if there are no outstanding operations. It means there 
-   * are no outstanding operations. */
-  if (ucs_queue_is_empty(&mem_desc->send_ops)) {
-    return progressed;
-  }
+  while (1) {
+    ret = PtlEQGet(iface->tx.eqh, &ev);
 
-  status = uct_bxi_wrap(PtlCTGet(mem_desc->cth, &ct_count));
-  if (status != UCS_OK) {
-    ucs_error("BXI: error polling counter.");
-    goto err;
-  }
+    switch (ret) {
+    case PTL_OK:
+      switch (ev.type) {
+      case PTL_EVENT_ACK:
+        uct_bxi_iface_mem_desc_completion_op(ev.user_ptr);
+        break;
+      case PTL_EVENT_PUT:
+      case PTL_EVENT_AUTO_UNLINK:
+      case PTL_EVENT_PUT_OVERFLOW:
+      case PTL_EVENT_LINK:
+      case PTL_EVENT_GET_OVERFLOW:
+      case PTL_EVENT_GET:
+      case PTL_EVENT_AUTO_FREE:
+      case PTL_EVENT_ATOMIC:
+      case PTL_EVENT_FETCH_ATOMIC:
+      case PTL_EVENT_SEARCH:
+      case PTL_EVENT_SEND:
+      case PTL_EVENT_REPLY:
+      case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+      case PTL_EVENT_ATOMIC_OVERFLOW:
+        ucs_fatal("BXI: event %s should not have been triggered",
+                  uct_bxi_event_str[ev.type]);
+        break;
+      case PTL_EVENT_PT_DISABLED:
+        op = (uct_bxi_iface_send_op_t *)ev.user_ptr;
+        ucs_error("BXI: operation failed. op=%p, sn=%lu, mem desc=%p", op,
+                  op->sn, mem_desc);
 
-  if (ct_count.failure > 0) {
-    status = uct_bxi_iface_handle_tx_err(iface, mem_desc, ct_count);
-    if (status != UCS_OK) {
-      ucs_error("BXI: error handling error.");
-      goto err;
+        /* Remove operation from outstanding list. */
+        ucs_list_del(&op->elem);
+
+        /* Close endpoint. */
+        op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
+
+        status = uct_iface_handle_ep_err(&iface->super.super,
+                                         &op->ep->super.super,
+                                         UCS_ERR_ENDPOINT_TIMEOUT);
+
+        ucs_assert(status == UCS_OK);
+        break;
+      default:
+        break;
+      }
+      break;
+    case PTL_EQ_EMPTY:
+      goto out;
+      break;
+    case PTL_EQ_DROPPED:
+      ucs_error("BXI: EQ event dropped.");
+      goto out;
+      break;
+    default:
+      uct_bxi_rc_log(ret);
+      progressed = 0;
+      goto out;
     }
   }
 
-  /* Loop on all outstanding operation and compare their sequence number 
-   * with the current value of the MD completion counter. */
-  ucs_queue_for_each_extract (
-          op, &mem_desc->send_ops, elem,
-          UCS_CIRCULAR_COMPARE64(ct_count.success, >, op->sn)) {
-    uct_bxi_iface_mem_desc_completion_op(op);
-
-    progressed++;
+  /* Check for pending flush operations. */
+  ucs_list_for_each_safe (op, tmp, &iface->tx.mem_desc->send_ops, elem) {
+    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
+      uct_bxi_iface_mem_desc_completion_op(op);
+    }
   }
 
-err:
+out:
   return progressed;
 }
 
@@ -549,13 +560,6 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
   return count;
 }
 
-static inline int uct_bxi_iface_need_flush(uct_bxi_iface_t *iface)
-{
-  /* We count both the operations of send descriptor and normal send 
-   * memory pools. In total, there are 2 * max_queue_len available operations. */
-  return (iface->tx.mem_desc->available == 2 * iface->config.tx.max_queue_len);
-}
-
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp)
 {
@@ -566,7 +570,7 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                                      UCT_FLUSH_FLAG_REMOTE),
                   "flush flags CANCEL and REMOTE are mutually exclusive");
 
-  if (!uct_bxi_iface_need_flush(iface)) {
+  if (!uct_bxi_iface_tx_need_poll(iface)) {
     return UCS_OK;
   }
 
@@ -576,6 +580,8 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
   }
   op->user_comp = comp;
   op->handler   = uct_bxi_flush_comp_op_handler;
+  op->flags =
+          UCT_BXI_IFACE_SEND_OP_FLAG_INUSE | UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH;
 
   /* Append operation descriptor to completion queue. */
   //NOTE: Do not increment the MD sequence number since we only need to know
@@ -737,8 +743,15 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto out;
   }
 
+  /* First, initialize interface configuration. */
   iface->config.tm.max_tags   = config->tm.list_size;
   iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
+
+  iface->config.rx.tag_mp = config->rx.tag_mp;
+  //FIXME: Memory pool max elements is reset here, thus overwriting initial
+  //       configuration. See FIXME comment in rxq_create about Memory Pool
+  //       usage.
+  iface->config.rx.tag_mp.max_bufs = config->rx.max_queue_len;
 
   iface->tm.eager_unexp.cb = params->eager_cb;
   iface->tm.rndv_unexp.cb  = params->rndv_cb;
@@ -753,7 +766,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   rxq_param = (uct_bxi_rxq_param_t){
           .eqh     = iface->rx.eqh,
           .nih     = uct_bxi_iface_md(iface)->nih,
-          .mp      = config->rx.tag_mp,
+          .mp      = iface->config.rx.tag_mp,
           .list    = PTL_OVERFLOW_LIST,
           .name    = "rxq-tag",
           .handler = uct_bxi_iface_handle_tag_events,
@@ -845,6 +858,16 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.seg_size         = config->seg_size;
   iface->config.tx.max_queue_len = config->tx.max_queue_len;
   iface->config.rx.max_queue_len = config->rx.max_queue_len;
+  //NOTE: There can only be as many ACK in the EQ as the maximal number of
+  //      outstanding operations, which is 2 * max_queue_len. Add + 1 to avoid
+  //      generating PT_DISABLED event.
+  iface->config.tx.max_events = 2 * config->tx.max_queue_len + 1;
+
+  iface->config.rx.am_mp = config->tx.mp;
+  //FIXME: Memory pool max elements is reset here, thus overwriting initial
+  //       configuration. See FIXME comment in rxq_create about Memory Pool
+  //       usage.
+  iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
   iface->config.max_iovecs   = ucs_min(md->config.limits.max_iovecs, 1);
   iface->config.max_msg_size = md->config.limits.max_msg_size;
@@ -978,11 +1001,14 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err;
   }
 
+  /* Initialize hash table for receive queues. */
+  kh_init_inplace(uct_bxi_rxq, &self->rx.queues);
+
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
   rxq_param = (uct_bxi_rxq_param_t){
           .eqh     = self->rx.eqh,
           .nih     = md->nih,
-          .mp      = config->rx.am_mp,
+          .mp      = self->config.rx.am_mp,
           .list    = PTL_PRIORITY_LIST,
           .handler = uct_bxi_iface_handle_am_events,
           .name    = "rxq-am",
@@ -1001,10 +1027,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_rxq;
   }
 
-  /* Create TX Event Queue that will be used for error handling. */
+  /* Create TX Event Queue that will be used for completion of OP. */
   //FIXME: maybe set a lower number of events for the error queue.
   status = uct_bxi_wrap(
-          PtlEQAlloc(md->nih, self->config.max_events, &self->tx.err_eqh));
+          PtlEQAlloc(md->nih, self->config.tx.max_events, &self->tx.eqh));
   if (status != UCS_OK) {
     goto err_clean_tag;
   }
@@ -1012,15 +1038,15 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Before setting TX operations, create the Memory Descriptor that
    * spans the whole virtual memory range. */
   mem_desc_param = (uct_bxi_mem_desc_param_t){
-          .eqh     = self->tx.err_eqh,
+          .eqh     = self->tx.eqh,
           .start   = NULL,
           .length  = PTL_SIZE_MAX,
-          .options = PTL_CT_ACK_REQ,
+          .options = 0,
           .flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
   };
   status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);
   if (status != UCS_OK) {
-    goto err_clean_errevq;
+    goto err_clean_txevq;
   }
   /* Initialize available send credits to 0. TX initialization below will 
    * increment it. */
@@ -1090,6 +1116,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_rmapti;
   }
 
+  /* Initialize hash table for endpoints. */
+  kh_init_inplace(uct_bxi_eps, &self->eps);
+
   /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
    * hash table uses ptl_process_t supposing it is 8 bytes. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
@@ -1107,8 +1136,8 @@ err_clean_txbuffer:
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
 err_clean_mem_desc:
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
-err_clean_errevq:
-  uct_bxi_wrap(PtlEQFree(self->tx.err_eqh));
+err_clean_txevq:
+  uct_bxi_wrap(PtlEQFree(self->tx.eqh));
 err_clean_tag:
   uct_bxi_iface_tag_fini(self);
 err_clean_rxq:
@@ -1132,7 +1161,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   uct_bxi_iface_tx_ops_fini(self);
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
-  PtlEQFree(self->tx.err_eqh);
+  PtlEQFree(self->tx.eqh);
 
   /* Clean RX resources */
   /* Clean TAG resources if enabled. */

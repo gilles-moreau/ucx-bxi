@@ -147,12 +147,18 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
   rxq->eqh                 = params->eqh;
   rxq->list                = params->list;
   rxq->config.blk_min_free = params->min_free;
+  rxq->config.num_blk      = params->mp.max_bufs;
 
   status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
                                    PTL_PT_ANY, &rxq->pti));
   if (status != UCS_OK) {
     goto err;
   }
+
+  //FIXME: we may question the use of a memory pool here since the number of
+  //       buffer is fixed and everything should be posted to the NIC at init
+  //       time. In implement a dynamic behavior then block initialization
+  //       should be moved to the memory bool init callback.
 
   /* First, initialize memory pool of receive buffers. */
   ucs_mpool_params_reset(&mp_block_params);

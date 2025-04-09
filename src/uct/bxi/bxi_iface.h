@@ -43,8 +43,10 @@ enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
 };
 
+/* Operation flags */
 enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -98,7 +100,7 @@ typedef struct uct_bxi_iface_send_op {
   unsigned                  flags;
   uct_bxi_mem_desc_t       *mem_desc;  /* MD on which OP is performed */
   uct_bxi_send_op_handler_t handler;   /* Handler called completion */
-  ucs_queue_elem_t          elem;      /* Element on a TX queue */
+  ucs_list_link_t           elem;      /* Element on a TX outstanding list */
   uct_completion_t         *user_comp; /* User completion callback */
   uct_bxi_ep_t             *ep;        /* OP endpoint */
   ptl_size_t                sn;        /* OP sequence number */
@@ -168,7 +170,7 @@ typedef struct uct_bxi_iface_config {
 } uct_bxi_iface_config_t;
 
 #define uct_bxi_rxq_hash(_ptr) kh_int_hash_func((uint32_t)(_ptr))
-KHASH_INIT(uct_bxi_rxq, uint32_t, uct_bxi_rxq_t *, 0, uct_bxi_rxq_hash,
+KHASH_INIT(uct_bxi_rxq, uint32_t, uct_bxi_rxq_t *, 1, uct_bxi_rxq_hash,
            kh_int_hash_equal)
 
 #define uct_bxi_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
@@ -176,7 +178,7 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
            kh_int64_hash_equal)
 
 #define uct_bxi_eps_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
-KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_t *, 0, uct_bxi_eps_hash,
+KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_t *, 1, uct_bxi_eps_hash,
            kh_int64_hash_equal)
 
 typedef struct uct_bxi_iface {
@@ -184,11 +186,15 @@ typedef struct uct_bxi_iface {
   struct {
     int seg_size;
     struct {
-      int max_queue_len; /* Maximum outstanding operations */
+      int max_events;              /*NOTE: non configurable */
+      int max_queue_len;           /* Maximum outstanding operations */
+      uct_iface_mpool_config_t mp; /* Memory pool config for TX OP. */
     } tx;
 
     struct {
-      int max_queue_len; /* Maximum receive context */
+      int                      max_queue_len; /* Maximum receive context */
+      uct_iface_mpool_config_t am_mp;  /* Memory pool config for AM RX. */
+      uct_iface_mpool_config_t tag_mp; /* Memory pool config for TAG RX. */
     } rx;
 
     size_t max_events;   /* Maximum number of event in EQ */
@@ -223,7 +229,7 @@ typedef struct uct_bxi_iface {
   } tm;
 
   struct {
-    ptl_handle_eq_t     err_eqh;      /* Event Queue for error handling. */
+    ptl_handle_eq_t     eqh;          /* Event Queue for OP completion. */
     ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
     ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
     ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */

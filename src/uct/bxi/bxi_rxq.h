@@ -49,7 +49,7 @@ typedef struct uct_bxi_rxq {
     size_t       blk_size;
     unsigned int blk_opts;
     ptl_size_t   blk_min_free;
-    int          num_blk;
+    unsigned     num_blk;
   } config;
   ucs_mpool_t            mp;      /* Memory pool of block buffer */
   ucs_list_link_t        bhead;   /* List of allocated blocks */
