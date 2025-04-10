@@ -162,16 +162,16 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
 
   /* First, initialize memory pool of receive buffers. */
   ucs_mpool_params_reset(&mp_block_params);
-  mp_block_params = (ucs_mpool_params_t){
-          .max_chunk_size  = params->mp.max_chunk_size,
-          .elems_per_chunk = params->mp.bufs_grow,
-          .elem_size   = sizeof(uct_bxi_recv_block_t) + iface->config.seg_size,
-          .max_elems   = params->mp.max_bufs,
-          .alignment   = UCS_SYS_CACHE_LINE_SIZE,
-          .ops         = &uct_bxi_rxq_mpool_ops,
-          .name        = params->name,
-          .grow_factor = params->mp.grow_factor,
-  };
+  mp_block_params.max_chunk_size  = params->mp.max_chunk_size;
+  mp_block_params.elems_per_chunk = params->mp.bufs_grow;
+  mp_block_params.elem_size =
+          sizeof(uct_bxi_recv_block_t) + iface->config.seg_size;
+  mp_block_params.max_elems   = params->mp.max_bufs;
+  mp_block_params.alignment   = UCS_SYS_CACHE_LINE_SIZE;
+  mp_block_params.ops         = &uct_bxi_rxq_mpool_ops;
+  mp_block_params.name        = params->name;
+  mp_block_params.grow_factor = params->mp.grow_factor;
+
   status = ucs_mpool_init(&mp_block_params, &rxq->mp);
   if (status != UCS_OK) {
     goto err_clean_pt;

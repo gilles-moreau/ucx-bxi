@@ -139,7 +139,7 @@ static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
                                                    ptl_event_t     *ev)
 {
   ucs_status_t          status = UCS_OK;
-  uint8_t               am_id  = UCT_BXI_HDR_GET_AM_ID(ev->match_bits);
+  uint8_t               am_id  = ev->match_bits;
   uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
 
   switch (ev->type) {
@@ -245,7 +245,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           /* First, get the initiator endpoint. */
           uct_bxi_iface_get_ep(iface, ev->initiator, &reply_ep);
 
-          /* No not forget to overwrite block size with initiator data: sender size
+          /* Do not forget to overwrite block size with initiator data: sender size
            * may differ from receiver size! */
           block->size = hdr->length;
 
@@ -402,7 +402,8 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
 
   addr->rma = iface->rx.rma.pti;
   addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.queue);
-  addr->tag = uct_bxi_rxq_get_addr(iface->rx.tag.queue);
+  addr->tag = !iface->tm.enabled ? UCT_BXI_PT_NULL :
+                                   uct_bxi_rxq_get_addr(iface->rx.tag.queue);
 
   return UCS_OK;
 }
@@ -477,6 +478,8 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
     switch (ret) {
     case PTL_OK:
       switch (ev.type) {
+      case PTL_EVENT_REPLY:
+        /* This event is generated after TAG GET operation completion. */
       case PTL_EVENT_ACK:
         uct_bxi_iface_mem_desc_completion_op(ev.user_ptr);
         break;
@@ -491,7 +494,6 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
       case PTL_EVENT_FETCH_ATOMIC:
       case PTL_EVENT_SEARCH:
       case PTL_EVENT_SEND:
-      case PTL_EVENT_REPLY:
       case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
       case PTL_EVENT_ATOMIC_OVERFLOW:
         ucs_fatal("BXI: event %s should not have been triggered",
@@ -781,33 +783,30 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   /* Work pool of operation. */
   ucs_mpool_params_reset(&mp_param);
-  mp_param = (ucs_mpool_params_t){
-          .max_chunk_size =
-                  iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t),
-          .elems_per_chunk = iface->config.tm.max_tags,
-          .max_elems       = iface->config.tm.max_tags,
-          .elem_size       = sizeof(uct_bxi_recv_block_t),
-          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_recv_block_mpool_ops,
-          .name            = "tag-recv-block",
-          .grow_factor     = 1,
-  };
+  mp_param.max_chunk_size =
+          iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t);
+  mp_param.elems_per_chunk = iface->config.tm.max_tags;
+  mp_param.max_elems       = iface->config.tm.max_tags;
+  mp_param.elem_size       = sizeof(uct_bxi_recv_block_t);
+  mp_param.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops             = &uct_bxi_recv_block_mpool_ops;
+  mp_param.name            = "tag-recv-block";
+  mp_param.grow_factor     = 1;
   status = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
   if (status != UCS_OK) {
     goto err_release_rxq;
   }
 
   ucs_mpool_params_reset(&mp_param);
-  mp_param = (ucs_mpool_params_t){
-          .max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size,
-          .elems_per_chunk = config->tm.op_ctx_mp.bufs_grow,
-          .max_elems       = config->tm.max_op_ctx,
-          .elem_size       = sizeof(uct_bxi_op_ctx_t),
-          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_op_ctx_mpool_ops,
-          .name            = "tag-op-ctx",
-          .grow_factor     = 1,
-  };
+  mp_param.max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size;
+  mp_param.elems_per_chunk = config->tm.op_ctx_mp.bufs_grow;
+  mp_param.max_elems       = config->tm.max_op_ctx;
+  mp_param.elem_size       = sizeof(uct_bxi_op_ctx_t);
+  mp_param.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops             = &uct_bxi_op_ctx_mpool_ops;
+  mp_param.name            = "tag-op-ctx";
+  mp_param.grow_factor     = 1;
+
   status = ucs_mpool_init(&mp_param, &iface->tm.op_ctx_mp);
   if (status != UCS_OK) {
     goto err_release_blockrecvmp;
@@ -916,17 +915,16 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
 
   /* Allocate memory pool of TX send operations without buffer. */
   ucs_mpool_params_reset(&mp_params);
-  mp_params = (ucs_mpool_params_t){
-          .max_chunk_size = config->tx.mp.max_chunk_size *
-                            sizeof(uct_bxi_iface_send_op_t),
-          .elems_per_chunk = config->tx.mp.bufs_grow,
-          .max_elems       = config->tx.max_queue_len,
-          .elem_size       = sizeof(uct_bxi_iface_send_op_t),
-          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_send_mpool_ops,
-          .name            = "send-comp-ops",
-          .grow_factor     = config->tx.mp.grow_factor,
-  };
+  mp_params.max_chunk_size =
+          config->tx.mp.max_chunk_size * sizeof(uct_bxi_iface_send_op_t);
+  mp_params.elems_per_chunk = config->tx.mp.bufs_grow;
+  mp_params.max_elems       = config->tx.max_queue_len;
+  mp_params.elem_size       = sizeof(uct_bxi_iface_send_op_t);
+  mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+  mp_params.ops             = &uct_bxi_send_mpool_ops;
+  mp_params.name            = "send-comp-ops";
+  mp_params.grow_factor     = config->tx.mp.grow_factor;
+
   status = ucs_mpool_init(&mp_params, &iface->tx.send_op_mp);
   if (status != UCS_OK) {
     goto err;
@@ -935,14 +933,12 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
 
   /* Allocate memory of flush operations. */
   ucs_mpool_params_reset(&mp_params);
-  mp_params = (ucs_mpool_params_t){
-          .elems_per_chunk = 256,
-          .max_elems       = -1,
-          .elem_size       = sizeof(uct_bxi_iface_send_op_t),
-          .alignment       = UCS_SYS_CACHE_LINE_SIZE,
-          .ops             = &uct_bxi_send_flush_mpool_ops,
-          .name            = "bxi-flush-ops",
-  };
+  mp_params.elems_per_chunk = 256;
+  mp_params.max_elems       = -1;
+  mp_params.elem_size       = sizeof(uct_bxi_iface_send_op_t);
+  mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+  mp_params.ops             = &uct_bxi_send_flush_mpool_ops;
+  mp_params.name            = "bxi-flush-ops";
   status = ucs_mpool_init(&mp_params, &iface->tx.flush_ops_mp);
   if (status != UCS_OK) {
     goto err_free_sendcompmp;
@@ -1054,16 +1050,15 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   /* Create TX buffers mempool */
   ucs_mpool_params_reset(&mp_params);
-  mp_params = (ucs_mpool_params_t){
-          .max_chunk_size  = config->tx.mp.max_chunk_size,
-          .elems_per_chunk = config->tx.mp.bufs_grow,
-          .elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size,
-          .max_elems = config->tx.max_queue_len,
-          .alignment = UCS_SYS_CACHE_LINE_SIZE,
-          .ops       = &uct_bxi_send_mpool_ops,
-          .name      = "send-desc-mp",
-          .grow_factor = config->tx.mp.grow_factor,
-  };
+  mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
+  mp_params.elems_per_chunk = config->tx.mp.bufs_grow;
+  mp_params.elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size;
+  mp_params.max_elems = config->tx.max_queue_len;
+  mp_params.alignment = UCS_SYS_CACHE_LINE_SIZE;
+  mp_params.ops       = &uct_bxi_send_mpool_ops;
+  mp_params.name      = "send-desc-mp";
+  mp_params.grow_factor = config->tx.mp.grow_factor;
+
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
     goto err_clean_mem_desc;

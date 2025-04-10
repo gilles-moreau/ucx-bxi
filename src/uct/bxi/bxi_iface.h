@@ -18,13 +18,6 @@
 #define UCT_BXI_RNDV_GET_TAG(_sn)                                              \
   (0xdeadbeef00000000 | (0x00000000ffffffff & (_sn)))
 
-#define UCT_BXI_HDR_GET_RNDV_MATCH(_hdr)                                       \
-  ((uint32_t)(_hdr & UCT_BXI_HDR_RNDV_MATCH_MASK))
-#define UCT_BXI_HDR_GET_AM_ID(_hdr)                                            \
-  ((uint32_t)((_hdr & UCT_BXI_HDR_AM_ID_MASK) >> 24))
-#define UCT_BXI_HDR_GET_PROT_ID(_hdr)                                          \
-  ((uint32_t)((_hdr & UCT_BXI_HDR_PROT_ID_MASK) >> 48))
-
 #define UCT_BXI_HDR_GET_MATCH(_hdr) (((_hdr) >> 4) & 0xffffffff)
 
 #define UCT_BXI_HDR_SET(_hdr, _match, _prot)                                   \
@@ -67,10 +60,10 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  ptl_pt_index_t pti;
-  uint64_t       remote_addr;
-  size_t         length;
-  size_t         header_length;
+  uint16_t ep_id;
+  uint64_t remote_addr;
+  size_t   length;
+  size_t   header_length;
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {
