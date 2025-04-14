@@ -51,6 +51,7 @@ typedef enum uct_bxi_tag_prot {
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
 typedef struct uct_bxi_ep            uct_bxi_ep_t;
+typedef struct uct_bxi_ep_list       uct_bxi_ep_list_t;
 
 typedef void (*handle_failure_func_t)(uct_bxi_iface_t         *iface,
                                       uct_bxi_iface_send_op_t *op,
@@ -60,7 +61,7 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint16_t ep_id;
+  uint16_t ep_list_id;
   uint64_t remote_addr;
   size_t   length;
   size_t   header_length;
@@ -171,7 +172,7 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
            kh_int64_hash_equal)
 
 #define uct_bxi_eps_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
-KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_t *, 1, uct_bxi_eps_hash,
+KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_list_t *, 1, uct_bxi_eps_hash,
            kh_int64_hash_equal)
 
 typedef struct uct_bxi_iface {
@@ -323,7 +324,6 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_should_poll_tx(unsigned count)
 
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
-extern char              *uct_bxi_event_str[];
 
 #define uct_bxi_iface_md(iface) ucs_derived_of(iface->super.md, uct_bxi_md_t)
 

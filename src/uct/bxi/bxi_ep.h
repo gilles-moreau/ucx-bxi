@@ -22,8 +22,16 @@ typedef struct uct_bxi_ep {
   unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
-  uint8_t               conn_state;
+  uint8_t               conn_state; /* Connection state. */
+  uint16_t              list_id;    /* ID in Portals PID list. */
+  ucs_list_link_t       elem;       /* Element in Portals PID list. */
 } uct_bxi_ep_t;
+
+typedef struct uct_bxi_ep_list {
+  ucs_list_link_t head;
+  unsigned        num_ep;
+  ptl_process_t   pid;
+} uct_bxi_ep_list_t;
 
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
