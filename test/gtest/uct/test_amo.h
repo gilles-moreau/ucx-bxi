@@ -23,7 +23,7 @@ public:
         return (RUNNING_ON_VALGRIND) ? 2 : 4;
     }
     static inline unsigned count() {
-        return 1000 / ucs::test_time_multiplier();
+        return 1 / ucs::test_time_multiplier();
     }
 
     uct_amo_test();

@@ -95,7 +95,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                               size, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.am, id, 0, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut return %d", status);
@@ -135,7 +135,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, length);
 
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                               length, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
@@ -171,7 +171,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   }
 
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                               size, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
@@ -352,11 +352,11 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh,
             (ptl_size_t)UCS_PTR_BYTE_OFFSET(op + 1, sizeof(uct_oop_ctx_h)),
-            size, PTL_CT_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0,
-            op, imm, op_ctx->cth, op_ctx->threshold));
+            size, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op,
+            imm, op_ctx->cth, op_ctx->threshold));
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, imm));
   }
 
@@ -409,13 +409,12 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-            ptl_iov->iov_len, PTL_CT_ACK_REQ, ep->dev_addr.pid,
-            ep->iface_addr.tag, tag, 0, op, imm, op_ctx->cth,
-            op_ctx->threshold));
+            ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
+            tag, 0, op, imm, op_ctx->cth, op_ctx->threshold));
   } else {
     status = uct_bxi_wrap(
             PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-                   ptl_iov->iov_len, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
                    ep->iface_addr.tag, tag, 0, op, imm));
   }
   if (status != UCS_OK) {
@@ -435,6 +434,7 @@ err:
 }
 
 static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
+                                       unsigned ep_list_id,
                                        uint64_t remote_addr, size_t length,
                                        const void *header,
                                        unsigned    header_length)
@@ -442,7 +442,7 @@ static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
   size_t              len = 0;
   uct_bxi_hdr_rndv_t *hdr = src;
 
-  hdr->pti            = iface->rx.rma.pti;
+  hdr->ep_list_id     = ep_list_id;
   hdr->remote_addr    = remote_addr;
   hdr->length         = length;
   hdr->header_length  = header_length;
@@ -504,13 +504,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 
-  op->length = uct_bxi_pack_rndv(iface, op + 1, (uint64_t)ptl_iov->iov_base,
-                                 ptl_iov->iov_len, header, header_length);
+  op->length = uct_bxi_pack_rndv(iface, op + 1, ep->list_id,
+                                 (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len,
+                                 header, header_length);
 
   UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
   //TODO: implement triggered operation
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               op->length, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                               op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.tag, tag, 0, op, hdr));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
@@ -642,7 +643,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   //TODO: implement triggered operation
   UCT_BXI_HDR_SET(hdr, 0, UCT_BXI_TAG_PROT_RNDV_SW);
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               header_length, PTL_CT_ACK_REQ, ep->dev_addr.pid,
+                               header_length, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
@@ -819,8 +820,8 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
 
   status = uct_bxi_wrap(
           PtlAtomic(iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                    PTL_CT_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                    remote_addr, NULL, 0, uct_bxi_atomic_op_table[opcode], dt));
+                    PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                    remote_addr, op, 0, uct_bxi_atomic_op_table[opcode], dt));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
@@ -855,7 +856,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   status = uct_bxi_wrap(PtlFetchAtomic(
           iface->tx.mem_desc->mdh, (uint64_t)result, iface->tx.mem_desc->mdh,
           (uint64_t)&op->atomic.value, size, ep->dev_addr.pid,
-          ep->iface_addr.rma, 0, remote_addr, NULL, 0,
+          ep->iface_addr.rma, 0, remote_addr, op, 0,
           uct_bxi_atomic_op_table[opcode], dt));
 
   if (status != UCS_OK) {
@@ -894,7 +895,7 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   status = uct_bxi_wrap(
           PtlSwap(iface->tx.mem_desc->mdh, (uint64_t)result,
                   iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                  ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, NULL, 0,
+                  ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
                   &op->atomic.compare, PTL_CSWAP, dt));
 
   if (status != UCS_OK) {
@@ -1143,13 +1144,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
 {
-  uct_ep_pending_purge(&self->super.super, ucs_empty_function_do_assert_void,
-                       NULL);
+  uct_bxi_ep_pending_purge(&self->super.super,
+                           ucs_empty_function_do_assert_void, NULL);
 
   //TODO: finish all pending operations that are not on the pending list.
   return;
 }
 
-UCS_CLASS_DEFINE(uct_bxi_ep_t, uct_bxi_ep_t);
+UCS_CLASS_DEFINE(uct_bxi_ep_t, uct_ep_t);
 UCS_CLASS_DEFINE_NEW_FUNC(uct_bxi_ep_t, uct_ep_t, const uct_ep_params_t *);
 UCS_CLASS_DEFINE_DELETE_FUNC(uct_bxi_ep_t, uct_ep_t);
