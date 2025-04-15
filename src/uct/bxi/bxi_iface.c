@@ -571,19 +571,11 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
 
 static inline int uct_bxi_iface_tx_need_flush(uct_bxi_iface_t *iface)
 {
-  uct_bxi_iface_send_op_t *op;
-
   /* We count both the operations of send descriptor and normal send 
    * memory pools. In total, there are 2 * max_queue_len available operations. */
-  if (iface->tx.mem_desc->available == 2 * iface->config.tx.max_queue_len) {
-    return 0;
-  }
-
-  /* Also, if the last operation that was pushed to the queue is a flush, 
-   * do not do another one. */
-  op = ucs_list_tail(&iface->tx.mem_desc->send_ops, uct_bxi_iface_send_op_t,
-                     elem);
-  return !(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
+  return (iface->tx.mem_desc->available ==
+          2 * iface->config.tx.max_queue_len) ||
+         (iface->tx.mem_desc->flags & UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH);
 }
 
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
@@ -613,6 +605,7 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
   //NOTE: Do not increment the MD sequence number since we only need to know
   //      when is the last operation completed.
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn);
+  uct_bxi_mem_desc_disable_flush(iface->tx.mem_desc);
 
   return UCS_INPROGRESS;
 }

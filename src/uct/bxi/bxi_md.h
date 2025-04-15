@@ -9,8 +9,9 @@
 #define UCT_BXI_CONFIG_PREFIX "BXI_"
 
 enum {
-  UCT_BXI_MEM_DESC_FLAG_ALLOCATE  = UCS_BIT(0),
-  UCT_BXI_MEM_DESC_FLAG_ALLOCATED = UCS_BIT(1),
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATE     = UCS_BIT(0),
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATED    = UCS_BIT(1),
+  UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH = UCS_BIT(2),
 };
 
 typedef struct uct_bxi_rkey {
@@ -67,6 +68,18 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
 ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_mem_desc_enable_flush(uct_bxi_mem_desc_t *mem_desc)
+{
+  mem_desc->flags |= UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_mem_desc_disable_flush(uct_bxi_mem_desc_t *mem_desc)
+{
+  mem_desc->flags = ~UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH;
+}
 
 static UCS_F_ALWAYS_INLINE uint64_t
 uct_bxi_mem_desc_available(uct_bxi_mem_desc_t *mem_desc)

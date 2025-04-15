@@ -144,6 +144,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
 
@@ -180,6 +181,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -227,6 +229,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
   UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY,
                     uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -261,6 +264,7 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, BCOPY, length);
   uct_bxi_log_put(iface);
@@ -307,6 +311,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, length);
   uct_bxi_log_put(iface);
