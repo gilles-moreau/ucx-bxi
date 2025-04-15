@@ -847,7 +847,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_iface_send_op_t *op;
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
                                uct_bxi_send_comp_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
@@ -885,7 +885,7 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   uct_bxi_iface_send_op_t *op;
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
                                uct_bxi_send_comp_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
