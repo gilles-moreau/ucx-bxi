@@ -114,6 +114,8 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
 static void uct_bxi_fence_completion(uct_completion_t *comp)
 {
+  /* Set completion status to complete fence operation. */
+  comp->status = UCS_OK;
   return;
 }
 
@@ -467,7 +469,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
 {
   unsigned                 progressed = 0;
   ucs_status_t             status;
-  uct_bxi_iface_send_op_t *op, *tmp;
+  uct_bxi_iface_send_op_t *op;
   int                      ret;
   ptl_event_t              ev;
 
@@ -538,12 +540,13 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t    *iface,
   }
 
 out:
-  /* Check for pending flush operations. */
-  ucs_list_for_each_safe (op, tmp, &iface->tx.mem_desc->send_ops, elem) {
-    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
-      uct_bxi_iface_mem_desc_completion_op(op);
-      progressed++;
-    }
+  /* If the last operation in the queue is a flush, then it means all 
+   * previous operations were completed. */
+  op = ucs_list_head(&iface->tx.mem_desc->send_ops, uct_bxi_iface_send_op_t,
+                     elem);
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
+    uct_bxi_iface_mem_desc_completion_op(op);
+    progressed++;
   }
 
   return progressed;
@@ -576,9 +579,10 @@ static inline int uct_bxi_iface_tx_need_flush(uct_bxi_iface_t *iface)
     return 0;
   }
 
-  op = ucs_list_head(&iface->tx.mem_desc->send_ops, uct_bxi_iface_send_op_t,
+  /* Also, if the last operation that was pushed to the queue is a flush, 
+   * do not do another one. */
+  op = ucs_list_tail(&iface->tx.mem_desc->send_ops, uct_bxi_iface_send_op_t,
                      elem);
-  /* Also, if the last operation was a flush, do not do another one. */
   return !(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
 }
 
