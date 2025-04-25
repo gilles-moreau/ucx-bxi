@@ -62,6 +62,10 @@ public:
         status = uct_config_modify(m_iface_config, "RC_TM_MP_SRQ_ENABLE", "no");
         ASSERT_TRUE((status == UCS_OK) || (status == UCS_ERR_NO_ELEM));
 
+        status = uct_config_modify(m_iface_config,
+                                   "BXI_TM_ENABLE", "y");
+        ASSERT_TRUE((status == UCS_OK) || (status == UCS_ERR_NO_ELEM));
+
         uct_test::init();
 
         uct_test::create_connected_entities(0ul, NULL, unexp_eager, unexp_rndv,

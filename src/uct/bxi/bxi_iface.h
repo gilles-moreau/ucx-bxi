@@ -10,10 +10,6 @@
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
-#define UCT_BXI_HDR_RNDV_MATCH_MASK 0x0000000000ffffffULL
-#define UCT_BXI_HDR_AM_ID_MASK      0x0000ffffff000000ULL
-#define UCT_BXI_HDR_PROT_ID_MASK    0xffff000000000000ULL
-
 #define UCT_BXI_RNDV_PREFIX 0xdededad
 #define UCT_BXI_RNDV_GET_TAG(_sn)                                              \
   (0xdeadbeef00000000 | (0x00000000ffffffff & (_sn)))
@@ -22,9 +18,9 @@
 
 #define UCT_BXI_HDR_SET(_hdr, _match, _prot)                                   \
   _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
-  _hdr  = (_hdr << 28);                                                        \
-  _hdr |= ((_match) & 0xfffffff);                                              \
   _hdr  = (_hdr << 32);                                                        \
+  _hdr |= ((_match) & 0xffffffff);                                             \
+  _hdr  = (_hdr << 4);                                                         \
   _hdr |= ((_prot) & 0xf)
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
@@ -61,10 +57,11 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint16_t ep_list_id;
-  uint64_t remote_addr;
-  size_t   length;
-  size_t   header_length;
+  uint16_t     ep_list_id;
+  unsigned int pti;
+  uint64_t     remote_addr;
+  size_t       length;
+  size_t       header_length;
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {
@@ -143,9 +140,10 @@ typedef struct uct_bxi_iface_config {
   } tx;
 
   struct {
-    int max_queue_len; /* Maximum number of receive descriptor in the RXQ. */
-    uct_iface_mpool_config_t am_mp;  /* Receive descriptor for AM RX. */
-    uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX. */
+    int max_queue_len; /* Maximum number of receive descriptor in the RXQ */
+    int num_seg;       /* Number of segments per receive descriptor */
+    uct_iface_mpool_config_t am_mp;  /* Receive descriptor for AM RX */
+    uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX */
   } rx;
 
   int      max_ep_retries;
@@ -187,8 +185,9 @@ typedef struct uct_bxi_iface {
 
     struct {
       int                      max_queue_len; /* Maximum receive context */
-      uct_iface_mpool_config_t am_mp;  /* Memory pool config for AM RX. */
-      uct_iface_mpool_config_t tag_mp; /* Memory pool config for TAG RX. */
+      int                      num_seg; /* Number of segments in RX buffer */
+      uct_iface_mpool_config_t am_mp;   /* Memory pool config for AM RX. */
+      uct_iface_mpool_config_t tag_mp;  /* Memory pool config for TAG RX. */
     } rx;
 
     size_t max_events;   /* Maximum number of event in EQ */
@@ -230,6 +229,7 @@ typedef struct uct_bxi_iface {
     uct_bxi_mem_desc_t *mem_desc;     /* Memory Descriptor for sending data */
     ucs_mpool_t         pending_mp;   /* Memory pool of pending request */
     ucs_queue_head_t    pending_q;    /* List of pending OP */
+    uint64_t            available;    /* Current available send credits */
   } tx;
 
   struct {
@@ -273,6 +273,7 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
+void         uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
@@ -322,6 +323,30 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_should_poll_tx(unsigned count)
   return (count == 0);
 }
 
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_iface_tx_need_flush(uct_bxi_iface_t *iface)
+{
+  return (iface->tx.available != iface->config.tx.max_queue_len);
+}
+
+static UCS_F_ALWAYS_INLINE uint64_t
+uct_bxi_iface_available(uct_bxi_iface_t *iface)
+{
+  return iface->tx.available;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_available_add(uct_bxi_iface_t *iface, uint64_t count)
+{
+  iface->tx.available += count;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
+{
+  iface->tx.available = count;
+}
+
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 
@@ -332,6 +357,21 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                      ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
+
+#define UCT_BXI_CHECK_IFACE_RES(_iface)                                        \
+  if (uct_bxi_iface_available(_iface) <= 0) {                                  \
+    return UCS_ERR_NO_RESOURCE;                                                \
+  }
+
+#define UCT_BXI_CHECK_IFACE_RES_PTR(_iface)                                    \
+  if (uct_bxi_iface_available(_iface) <= 0) {                                  \
+    return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE);                                \
+  }
+
+#define UCT_BXI_CHECK_IFACE_RES_ERR(_iface, _err)                              \
+  if (uct_bxi_iface_available(_iface) <= 0) {                                  \
+    _err;                                                                      \
+  }
 
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
@@ -344,25 +384,28 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 #define UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err);
 
-#define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _pack_cb, _arg, \
-                                           _length)                            \
+#define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb,  \
+                                           _arg, _length)                      \
   ({                                                                           \
     UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                              \
     (_desc)->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;               \
+    (_desc)->ep      = _ep;                                                    \
     *(_length)       = _pack_cb(_desc + 1, _arg);                              \
   })
 
-#define UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(_iface, _mp, _desc, _pack_cb,      \
+#define UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb, \
                                             _arg, _length)                     \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
   (_desc)->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;                 \
+  (_desc)->ep      = _ep;                                                      \
   _length          = _pack_cb(_desc + 1, _arg);                                \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _unpack_cb,      \
-                                            _comp, _arg, _length)                \
+#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _ep,             \
+                                            _unpack_cb, _comp, _arg, _length)    \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                  \
   ucs_assert(_length <= (_iface)->config.seg_size);                              \
+  (_desc)->ep             = _ep;                                                 \
   (_desc)->handler        = (_comp == NULL) ?                                    \
                                     uct_bxi_ep_get_bcopy_handler_no_completion : \
                                     uct_bxi_ep_get_bcopy_handler;                \
@@ -371,24 +414,27 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->get.unpack_arg = _arg;                                                \
   (_desc)->get.unpack_cb  = _unpack_cb;
 
-#define UCT_BXI_IFACE_GET_TX_OP(_iface, _mp, _desc, _length)                   \
+#define UCT_BXI_IFACE_GET_TX_OP(_iface, _mp, _desc, _ep, _length)              \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  _desc->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;                   \
+  (_desc)->ep      = _ep;                                                      \
+  (_desc)->handler = (uct_bxi_send_op_handler_t)ucs_mpool_put;                 \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_OP_COMP(_iface, _mp, _desc, _user_comp, _handler, \
-                                     _length)                                  \
+#define UCT_BXI_IFACE_GET_TX_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,      \
+                                     _handler, _length)                        \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  _desc->handler     = (_user_comp == NULL) ?                                  \
+  (_desc)->ep        = _ep;                                                    \
+  (_desc)->handler   = (_user_comp == NULL) ?                                  \
                                (uct_bxi_send_op_handler_t)ucs_mpool_put :      \
                                _handler;                                       \
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _user_comp,      \
+#define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _ep, _user_comp, \
                                           _length, _err)                       \
   UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
-  _desc->handler     = (_user_comp == NULL) ?                                  \
+  (_desc)->ep        = _ep;                                                    \
+  (_desc)->handler   = (_user_comp == NULL) ?                                  \
                                uct_bxi_send_rndv_op_handler_no_completion :    \
                                uct_bxi_send_rndv_comp_op_handler;              \
   (_desc)->user_comp = _user_comp;                                             \

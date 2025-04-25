@@ -9,9 +9,8 @@
 #define UCT_BXI_CONFIG_PREFIX "BXI_"
 
 enum {
-  UCT_BXI_MEM_DESC_FLAG_ALLOCATE     = UCS_BIT(0),
-  UCT_BXI_MEM_DESC_FLAG_ALLOCATED    = UCS_BIT(1),
-  UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH = UCS_BIT(2),
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATE  = UCS_BIT(0),
+  UCT_BXI_MEM_DESC_FLAG_ALLOCATED = UCS_BIT(1),
 };
 
 typedef struct uct_bxi_rkey {
@@ -28,10 +27,9 @@ typedef struct uct_bxi_mem_desc_param {
 
 typedef struct uct_bxi_mem_desc {
   unsigned        flags;
-  ptl_handle_md_t mdh;       /* Portals4 MD handle */
-  ucs_list_link_t send_ops;  /* Queue of outstanding OPs */
-  uint64_t        sn;        /* Current sequence number */
-  uint64_t        available; /* Current available send credits */
+  ptl_handle_md_t mdh; /* Portals4 MD handle */
+  uint64_t        sn;  /* Current sequence number
+                       //FIXME: review sn ownership (iface, ep,...) */
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {
@@ -68,36 +66,6 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
 ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);
-
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_mem_desc_enable_flush(uct_bxi_mem_desc_t *mem_desc)
-{
-  mem_desc->flags |= UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH;
-}
-
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_mem_desc_disable_flush(uct_bxi_mem_desc_t *mem_desc)
-{
-  mem_desc->flags = ~UCT_BXI_MEM_DESC_FLAG_ENABLE_FLUSH;
-}
-
-static UCS_F_ALWAYS_INLINE uint64_t
-uct_bxi_mem_desc_available(uct_bxi_mem_desc_t *mem_desc)
-{
-  return mem_desc->available;
-}
-
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_mem_desc_available_add(uct_bxi_mem_desc_t *mem_desc, uint64_t count)
-{
-  mem_desc->available += count;
-}
-
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_mem_desc_available_set(uct_bxi_mem_desc_t *mem_desc, uint64_t count)
-{
-  mem_desc->available = count;
-}
 
 ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
                                         uct_bxi_mem_desc_param_t *params,

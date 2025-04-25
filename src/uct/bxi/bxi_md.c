@@ -80,7 +80,6 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
   }
 
   mem_desc->sn = 0;
-  ucs_list_head_init(&mem_desc->send_ops);
 
   *mem_desc_p = mem_desc;
 
@@ -97,9 +96,6 @@ err:
 
 void uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc)
 {
-  /* There must not be any outstanding operations when deleting the 
-   * Memory Descriptor. */
-  ucs_assert(ucs_list_is_empty(&mem_desc->send_ops));
 
   uct_bxi_wrap(PtlMDRelease(mem_desc->mdh));
 
