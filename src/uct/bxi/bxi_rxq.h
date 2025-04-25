@@ -19,23 +19,22 @@ typedef struct uct_bxi_recv_block_params {
 } uct_bxi_recv_block_params_t;
 
 typedef struct uct_bxi_recv_block {
-  void                    *start; /* Address of the receive block */
-  size_t                   size;  /* Size of the receive block */
-  uct_bxi_rxq_t           *rxq;   /* Back reference to the RX Queue */
-  ptl_handle_me_t          meh;   /* Memory Entry handle */
-  ucs_list_link_t          elem;  /* Element in the RX Queue */
-  ptl_list_t               list;  /* Portals list */
-  uct_tag_context_t       *ctx;   /* Tag context provided by upper layer */
-  uct_tag_t                tag;   /* Tag used for offloaded matchin */
-  uct_bxi_iface_send_op_t *op;    /* OP in case of GET protocol */
+  int                      is_exp; /* Boolean is block expected */
+  void                    *start;  /* Address of the receive block */
+  size_t                   size;   /* Size of the receive block */
+  uct_bxi_rxq_t           *rxq;    /* Back reference to the RX Queue */
+  ptl_handle_me_t          meh;    /* Memory Entry handle */
+  ucs_list_link_t          elem;   /* Element in the RX Queue */
+  ptl_list_t               list;   /* Portals list */
+  uct_tag_context_t       *ctx;    /* Tag context provided by upper layer */
+  uct_bxi_iface_send_op_t *op;     /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 typedef struct uct_bxi_rxq_param {
-  uct_iface_mpool_config_t mp;       /* RX Memory pool configuration */
-  ptl_size_t               min_free; /* Minimum size before block is unlinked */
-  ptl_list_t               list;     /* Portals priority list */
-  char                    *name;     /* Name used of memory pool */
-  uct_bxi_rxq_ev_handler   handler;  /* Event handler called when polling RX */
+  uct_iface_mpool_config_t mp;      /* RX Memory pool configuration */
+  ptl_list_t               list;    /* Portals priority list */
+  char                    *name;    /* Name used of memory pool */
+  uct_bxi_rxq_ev_handler   handler; /* Event handler called when polling RX */
   ptl_handle_ni_t          nih;
   ptl_handle_eq_t          eqh;
 } uct_bxi_rxq_param_t;

@@ -10,23 +10,25 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
   ptl_me_t       me;
   uct_bxi_rxq_t *rxq = block->rxq;
 
-  switch (block->list) {
-  case PTL_PRIORITY_LIST:
+  if (block->is_exp) {
     me = (ptl_me_t){
             .ct_handle   = params->cth,
             .match_bits  = params->match,
             .ignore_bits = params->ign,
+            .min_free    = 0,
             .match_id    = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
             .options     = params->options,
             .uid         = PTL_UID_ANY,
             .start       = params->start,
             .length      = params->size};
-    break;
-  case PTL_OVERFLOW_LIST:
+    block->start = params->start;
+    block->size  = params->size;
+  } else {
     me = (ptl_me_t){
             .ct_handle   = PTL_CT_NONE,
             .match_bits  = 0,
             .ignore_bits = ~0,
+            .min_free    = rxq->config.blk_min_free,
             .match_id    = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
             .options     = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
                        PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
@@ -34,10 +36,6 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .uid    = PTL_UID_ANY,
             .start  = block->start,
             .length = block->size};
-    break;
-  default:
-    ucs_fatal("BXI: block list unknown.");
-    break;
   }
 
   if (block->start == NULL) {
@@ -54,7 +52,7 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
 
   ret = PtlMEUnlink(block->meh);
   if (ret != PTL_OK) {
-    ucs_warn("PTL: block not unlinked. pti=%d, start=%p", block->rxq->pti,
+    ucs_warn("BXI: block not unlinked. pti=%d, start=%p", block->rxq->pti,
              block->start);
   }
 }
@@ -71,7 +69,7 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
 
     block = ucs_mpool_get(&rxq->mp);
     if (block == NULL) {
-      ucs_error("PTL: could not allocate eager block structure");
+      ucs_error("BXI: could not allocate eager block structure.");
       rc = UCS_ERR_NO_MEMORY;
       goto err;
     }
@@ -92,17 +90,11 @@ err:
 
 static ucs_status_t uct_bxi_rxq_recv_blocks_disable(uct_bxi_rxq_t *rxq)
 {
-  int                   ret;
   ucs_status_t          rc    = UCS_OK;
   uct_bxi_recv_block_t *block = NULL, *tmp = NULL;
 
   ucs_list_for_each_safe (block, tmp, &rxq->bhead, elem) {
-    ret = PtlMEUnlink(block->meh);
-    if (ret != PTL_OK) {
-      ucs_warn("PTL: block not unlinked. pti=%d, start=%p", rxq->pti,
-               block->start);
-    }
-
+    uct_bxi_recv_block_deactivate(block);
     ucs_mpool_put(block);
     ucs_list_del(&tmp->elem);
   }
@@ -110,16 +102,17 @@ err:
   return rc;
 }
 
-void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
+static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   uct_bxi_rxq_t        *rxq   = ucs_container_of(mp, uct_bxi_rxq_t, mp);
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
 
-  block->size  = rxq->config.blk_size;
-  block->start = block + 1;
-  block->rxq   = rxq;
-  block->meh   = PTL_INVALID_HANDLE;
-  block->list  = PTL_OVERFLOW_LIST;
+  block->is_exp = 0;
+  block->size   = rxq->config.blk_size;
+  block->start  = block + 1;
+  block->rxq    = rxq;
+  block->meh    = PTL_INVALID_HANDLE;
+  block->list   = rxq->list;
 }
 
 static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
@@ -146,8 +139,10 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
   rxq->nih                 = params->nih;
   rxq->eqh                 = params->eqh;
   rxq->list                = params->list;
-  rxq->config.blk_min_free = params->min_free;
+  rxq->handler             = params->handler;
   rxq->config.num_blk      = params->mp.max_bufs;
+  rxq->config.blk_size     = iface->config.rx.num_seg * iface->config.seg_size;
+  rxq->config.blk_min_free = iface->config.seg_size;
 
   status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
                                    PTL_PT_ANY, &rxq->pti));
@@ -157,7 +152,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
 
   //FIXME: we may question the use of a memory pool here since the number of
   //       buffer is fixed and everything should be posted to the NIC at init
-  //       time. In implement a dynamic behavior then block initialization
+  //       time. To implement a dynamic behavior then block initialization
   //       should be moved to the memory bool init callback.
 
   /* First, initialize memory pool of receive buffers. */
@@ -165,7 +160,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
   mp_block_params.max_chunk_size  = params->mp.max_chunk_size;
   mp_block_params.elems_per_chunk = params->mp.bufs_grow;
   mp_block_params.elem_size =
-          sizeof(uct_bxi_recv_block_t) + iface->config.seg_size;
+          sizeof(uct_bxi_recv_block_t) + rxq->config.blk_size;
   mp_block_params.max_elems   = params->mp.max_bufs;
   mp_block_params.alignment   = UCS_SYS_CACHE_LINE_SIZE;
   mp_block_params.ops         = &uct_bxi_rxq_mpool_ops;

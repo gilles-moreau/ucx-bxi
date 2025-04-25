@@ -11,6 +11,7 @@ enum {
   UCT_BXI_EP_CONN_CONNECTED     = UCS_BIT(0),
   UCT_BXI_EP_CONN_CLOSED        = UCS_BIT(1),
   UCT_BXI_EP_KEEP_ALIVE_PENDING = UCS_BIT(2),
+  UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
 };
 
 typedef struct uct_bxi_ep_config {
@@ -25,6 +26,7 @@ typedef struct uct_bxi_ep {
   uint8_t               conn_state; /* Connection state. */
   uint16_t              list_id;    /* ID in Portals PID list. */
   ucs_list_link_t       elem;       /* Element in Portals PID list. */
+  ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
 } uct_bxi_ep_t;
 
 typedef struct uct_bxi_ep_list {
@@ -32,6 +34,16 @@ typedef struct uct_bxi_ep_list {
   unsigned        num_ep;
   ptl_process_t   pid;
 } uct_bxi_ep_list_t;
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
+{
+  ep->flags |= UCT_BXI_EP_FLUSH_REMOTE;
+}
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_disable_flush(uct_bxi_ep_t *ep)
+{
+  ep->flags = ~UCT_BXI_EP_FLUSH_REMOTE;
+}
 
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
@@ -166,29 +178,43 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_mem_desc_add_send_op(uct_bxi_mem_desc_t      *mem_desc,
-                             uct_bxi_iface_send_op_t *op)
+uct_bxi_ep_add_flush_op_sn(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op,
+                           uint64_t sn)
 {
+  ucs_assert(op != NULL);
+  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
+  op->sn     = sn;
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+
+  //NOTE: Queue is used to complete flush operations.
+  ucs_list_add_tail(&ep->send_ops, &op->elem);
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
+{
+  uct_bxi_iface_t *iface =
+          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
+
   ucs_assert(op != NULL);
   ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
 
-  //FIXME: Since operations are completed through event handling, see TX poll,
-  //       there might not be reasons to keep track of outstanding operations.
-  ucs_list_add_tail(&mem_desc->send_ops, &op->elem);
-  /* Remove one available send credit from MD. */
-  uct_bxi_mem_desc_available_add(mem_desc, -1);
+  //NOTE: Queue is used to complete flush operations.
+  ucs_list_add_tail(&ep->send_ops, &op->elem);
+  /* Remove one available send credit from iface. */
+  uct_bxi_iface_available_add(iface, -1);
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_ep_add_send_op_sn(uct_bxi_mem_desc_t      *mem_desc,
-                          uct_bxi_iface_send_op_t *op, uint64_t sn)
+uct_bxi_ep_add_send_op_sn(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op,
+                          uint64_t sn)
 {
   op->sn = sn;
-  uct_bxi_mem_desc_add_send_op(mem_desc, op);
+  uct_bxi_ep_add_send_op(ep, op);
 
-  ucs_trace_poll("mem desc %p add send op %p sn %lu handler %s", mem_desc, op,
-                 op->sn, ucs_debug_get_symbol_name((void *)op->handler));
+  ucs_trace_poll("ep %p add send op %p sn %lu handler %s", ep, op, op->sn,
+                 ucs_debug_get_symbol_name((void *)op->handler));
 }
 
 UCS_CLASS_DECLARE(uct_bxi_ep_t, const uct_ep_params_t *);

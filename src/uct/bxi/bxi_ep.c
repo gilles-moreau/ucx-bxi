@@ -50,7 +50,7 @@ static void uct_bxi_send_rndv_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                               const void              *resp)
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
-  ucs_mpool_put_inline(&op->rndv.block->elem);
+  ucs_mpool_put_inline(op->rndv.block);
   ucs_mpool_put_inline(op);
 }
 
@@ -58,7 +58,14 @@ static void
 uct_bxi_send_rndv_op_handler_no_completion(uct_bxi_iface_send_op_t *op,
                                            const void              *resp)
 {
-  ucs_mpool_put_inline(&op->rndv.block->elem);
+  ucs_mpool_put_inline(op->rndv.block);
+  ucs_mpool_put_inline(op);
+}
+
+static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
+                                             const void              *resp)
+{
+  uct_invoke_completion(op->user_comp, UCS_OK);
   ucs_mpool_put_inline(op);
 }
 
@@ -85,11 +92,12 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   UCT_CHECK_AM_ID(id);
   UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
-  UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, pack,
-                                     arg, &size);
+  UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
+                                     pack, arg, &size);
   if (size < 0) {
     goto err;
   }
@@ -103,7 +111,8 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, length);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
@@ -131,8 +140,9 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   UCT_CHECK_LENGTH(length, 0, iface->config.max_inline, "put_short");
   UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
-  UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, length);
+  UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, length);
 
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
                                length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -143,8 +153,8 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
 
@@ -162,10 +172,11 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   ssize_t                  size = 0;
 
   UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
-  UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op,
+  UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                       pack_cb, arg, size);
   if (size < 0) {
     goto err;
@@ -180,8 +191,8 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -204,9 +215,10 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_put_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler,
                                uct_iov_total_length(iov, iovcnt));
 
@@ -228,8 +240,8 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY,
                     uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -248,14 +260,17 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
-  UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op,
+  UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                       unpack_cb, comp, arg, length);
 
   status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               remote_addr, NULL));
+                               remote_addr, op));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -263,8 +278,8 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   }
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, BCOPY, length);
   uct_bxi_log_put(iface);
@@ -287,9 +302,10 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler,
                                uct_iov_total_length(iov, iovcnt));
 
@@ -310,8 +326,8 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   }
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  uct_bxi_mem_desc_enable_flush(iface->tx.mem_desc);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, length);
   uct_bxi_log_put(iface);
@@ -338,10 +354,11 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
-  UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op,
+  UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                      pack_cb, arg, &size);
   if (size < 0) {
     goto err;
@@ -371,7 +388,8 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -397,9 +415,10 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler,
                                uct_iov_total_length(iov, iovcnt));
 
@@ -429,7 +448,8 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   }
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, length);
   uct_bxi_log_put(iface);
@@ -439,7 +459,7 @@ err:
 }
 
 static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
-                                       unsigned ep_list_id,
+                                       unsigned int pti, unsigned ep_list_id,
                                        uint64_t remote_addr, size_t length,
                                        const void *header,
                                        unsigned    header_length)
@@ -447,6 +467,7 @@ static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
   size_t              len = 0;
   uct_bxi_hdr_rndv_t *hdr = src;
 
+  hdr->pti            = pti;
   hdr->ep_list_id     = ep_list_id;
   hdr->remote_addr    = remote_addr;
   hdr->length         = length;
@@ -475,12 +496,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
                              "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES_PTR(iface);
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   /* First, allocate a TAG block from the memory pool. */
+  //TODO: rename macro
   UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err);
@@ -504,12 +527,15 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   }
 
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
-  UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, comp,
-                                    uct_iov_total_length(iov, iovcnt),
+  UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
+                                    comp, uct_iov_total_length(iov, iovcnt),
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 
-  op->length = uct_bxi_pack_rndv(iface, op + 1, ep->list_id,
+  /* Attach block to operation so it can be release on completion. */
+  op->rndv.block = block;
+
+  op->length = uct_bxi_pack_rndv(iface, op + 1, ep->iface_addr.tag, ep->list_id,
                                  (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len,
                                  header, header_length);
 
@@ -524,7 +550,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   return (ucs_status_ptr_t)op;
 
@@ -554,8 +581,10 @@ ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t tag,
           ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
 
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                uct_bxi_get_rndv_handler, block->size);
 
   /* Associate iface and the tag context of the receive block so that 
@@ -580,7 +609,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t tag,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
   return status;
 }
@@ -637,10 +667,12 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_LENGTH(header_length, 0, iface->config.seg_size,
                    "tag_rndv_request");
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
-  UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, NULL,
-                                    header_length, status = UCS_ERR_NO_RESOURCE;
+  UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
+                                    NULL, header_length,
+                                    status = UCS_ERR_NO_RESOURCE;
                                     goto err);
 
   memcpy(op + 1, header, header_length);
@@ -657,7 +689,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
 
 err:
   return status;
@@ -703,6 +735,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_remove_hash);
+
+  /* Attach upper layer context. */
+  block->ctx = ctx;
 
   params.start   = ptl_iov->iov_base;
   params.size    = ptl_iov->iov_len;
@@ -815,9 +850,10 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                uct_bxi_send_comp_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
@@ -834,7 +870,9 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
+
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -851,8 +889,11 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
 
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
@@ -872,7 +913,8 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -889,8 +931,11 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
 
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
@@ -911,7 +956,8 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
   return status;
@@ -976,7 +1022,46 @@ ucs_status_t uct_bxi_ep_atomic64_fetch(uct_ep_h tl_ep, uct_atomic_op_t opcode,
 ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
                               uct_completion_t *comp)
 {
-  return uct_bxi_iface_flush(tl_ep->iface, flags, comp);
+  uct_bxi_iface_send_op_t *op = NULL;
+  uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+
+  UCT_CHECK_PARAM(!ucs_test_all_flags(flags, UCT_FLUSH_FLAG_CANCEL |
+                                                     UCT_FLUSH_FLAG_REMOTE),
+                  "flush flags CANCEL and REMOTE are mutually exclusive");
+
+  //NOTE: Endpoint cannot be flushed if there are no resources since there
+  //      may be requests in the pending list. They must be processed before
+  //      this flush request.
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
+  if (ucs_list_is_empty(&ep->send_ops)) {
+    return UCS_OK;
+  }
+
+  if (flags & UCT_FLUSH_FLAG_REMOTE) {
+    if (!(ep->flags & UCT_BXI_EP_FLUSH_REMOTE)) {
+      return UCS_INPROGRESS;
+    }
+    uct_bxi_ep_disable_flush(ep);
+  }
+
+  if (comp != NULL) {
+    op = ucs_mpool_get(&iface->tx.flush_ops_mp);
+    if (op == NULL) {
+      return UCS_ERR_NO_MEMORY;
+    }
+    op->user_comp = comp;
+    op->handler   = uct_bxi_ep_flush_comp_op_handler;
+    op->flags     = UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH;
+
+    /* Append operation descriptor to completion queue. */
+    //NOTE: Do not increment the MD sequence number since we only need to know
+    //      when is the last operation completed.
+    uct_bxi_ep_add_flush_op_sn(ep, op, iface->tx.mem_desc->sn);
+  }
+
+  return UCS_INPROGRESS;
 }
 
 ucs_status_t uct_bxi_ep_fence(uct_ep_h tl_ep, unsigned flags)
@@ -1021,8 +1106,7 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
 {
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
-  if (!ucs_mpool_is_empty(&iface->tx.send_desc_mp) &&
-      !ucs_mpool_is_empty(&iface->tx.send_op_mp) &&
+  if (uct_bxi_iface_available(iface) > 0 &&
       !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) {
     return UCS_ERR_BUSY;
   }
@@ -1040,8 +1124,10 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
 
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
   // Send 0 length message, set length to 1 to pass IOV check.
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, comp,
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
                                uct_bxi_send_comp_op_handler, 1);
 
   /* Endpoint status is checked on the RMA PTE since we do not need 
@@ -1051,15 +1137,14 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
                                0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut ep check return %d", status);
-  } else {
-    /* For zcopy call, operation is always in progress. */
-    status = UCS_INPROGRESS;
   }
 
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(iface->tx.mem_desc, op, iface->tx.mem_desc->sn++);
-  UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY, 0);
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
+
+  UCT_TL_EP_STAT_OP(&ep->super.super, PUT, SHORT, 0);
   uct_bxi_log_put(iface);
 
   return status;
@@ -1082,7 +1167,7 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
 
   UCT_EP_KEEPALIVE_CHECK_PARAM(flags, comp);
 
-  ucs_assert(ep->flags & UCT_BXI_EP_CONN_CONNECTED);
+  ucs_assert(ep->conn_state == UCT_BXI_EP_CONN_CONNECTED);
 
   if (ep->flags & UCT_BXI_EP_KEEP_ALIVE_PENDING) {
     return UCS_OK;
@@ -1090,7 +1175,6 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
 
   status = uct_bxi_ep_check_send(tl_ep, comp);
   if (status != UCS_ERR_NO_RESOURCE) {
-    ucs_assert(status == UCS_INPROGRESS);
     return status;
   }
 
@@ -1141,6 +1225,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   self->iface_addr = *(uct_bxi_iface_addr_t *)params->iface_addr;
   self->conn_state = UCT_BXI_EP_CONN_CONNECTED;
 
+  ucs_list_head_init(&self->send_ops);
+  self->flags = 0;
+
   status = uct_bxi_iface_add_ep(iface, self);
   ucs_assert_always(status == UCS_OK);
 
@@ -1149,10 +1236,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
 {
+  uct_bxi_iface_t *iface =
+          ucs_derived_of(self->super.super.iface, uct_bxi_iface_t);
+
   uct_bxi_ep_pending_purge(&self->super.super,
                            ucs_empty_function_do_assert_void, NULL);
 
-  //TODO: finish all pending operations that are not on the pending list.
+  uct_bxi_iface_ep_remove(iface, self);
   return;
 }
 
