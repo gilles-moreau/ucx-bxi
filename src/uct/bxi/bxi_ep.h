@@ -99,10 +99,11 @@ ucs_status_ptr_t uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                            unsigned          flags,
                                            uct_completion_t *comp);
 
-ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t get_tag,
-                                           uct_tag_t send_tag, void *buffer,
-                                           size_t             length,
-                                           uct_tag_context_t *ctx);
+ucs_status_t
+uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
+                                 ptl_pt_index_t pti, uct_tag_t get_tag,
+                                 uct_tag_t send_tag, void *buffer,
+                                 size_t length, uct_tag_context_t *ctx);
 
 ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
 
