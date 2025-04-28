@@ -178,6 +178,102 @@ static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
   return status;
 }
 
+static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
+                                     const void              *resp)
+{
+  /* First, invoke tag-related callback. */
+  op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
+                             UCS_OK);
+
+  /* Then, we may push OP back to the memory pool. */
+  ucs_mpool_put_inline(op);
+}
+
+ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
+                                              uct_tag_t        get_tag,
+                                              uct_tag_t send_tag, void *buffer,
+                                              size_t             length,
+                                              uct_tag_context_t *ctx)
+{
+  ucs_status_t             status;
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
+  /* First, get OP while setting appropriate completion callback */
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL, NULL,
+                               uct_bxi_get_rndv_handler, length);
+
+  /* Associate iface and the tag context of the receive block so that 
+   * the completion callback may be called. This enables the block 
+   * to be released by caller. */
+  op->rndv.ctx   = ctx;
+  op->length     = length;
+  op->rndv.tag   = send_tag;
+  op->rndv.iface = iface;
+
+  //NOTE: remote address is the remote offset here since the operation
+  //      will match the specific GET ME posted by initiator.
+  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
+                               length, ep->dev_addr.pid, ep->iface_addr.tag,
+                               UCT_BXI_RNDV_GET_TAG(get_tag), 0, op));
+
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
+  }
+
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
+
+  return status;
+}
+
+static ucs_status_t uct_bxi_ep_tag_rndv_get_progress(uct_pending_req_t *uct_req)
+{
+  ucs_status_t           status;
+  uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
+
+  status = uct_bxi_ep_tag_rndv_zcopy_get(req->ep, req->get_tag, req->send_tag,
+                                         req->buffer, req->length, req->ctx);
+  if (status == UCS_OK) {
+    ucs_mpool_put(req);
+  } else {
+    ucs_assert(status == UCS_ERR_NO_RESOURCE);
+  }
+
+  return status;
+}
+
+ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t get_tag,
+                                        uct_tag_t             send_tag,
+                                        uct_bxi_recv_block_t *block)
+{
+  uct_bxi_iface_t *iface =
+          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
+  uct_bxi_pending_req_t *req;
+  ucs_status_t           status;
+
+  req = ucs_mpool_get(&iface->tx.pending_mp);
+  if (req == NULL) {
+    return UCS_ERR_NO_MEMORY;
+  }
+
+  req->ep         = ep;
+  req->get_tag    = get_tag;
+  req->send_tag   = send_tag;
+  req->length     = block->size;
+  req->ctx        = block->ctx;
+  req->buffer     = block->start;
+  req->super.func = uct_bxi_ep_tag_rndv_get_progress;
+  status          = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);
+
+  ucs_assert_always(status == UCS_OK);
+
+  return UCS_OK;
+}
+
 static UCS_F_ALWAYS_INLINE int
 uct_bxi_iface_is_unexpected(uct_bxi_recv_block_t *block)
 {
@@ -239,22 +335,18 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           if (status == UCS_ERR_NO_ELEM) {
           }
 
-          /* Do not forget to overwrite block size with initiator data: sender size
-           * may differ from receiver size! */
-          block->size = hdr->length;
-
           /* Then, perform the GET operation. Add to pending queue if no resource 
-           * are available. */
+           * are available. Use length from hdr since sender size may be different 
+           * from receiver sive. */
           status = uct_bxi_ep_tag_rndv_zcopy_get(
-                  reply_ep, UCT_BXI_HDR_GET_MATCH(ev->hdr_data), block);
+                  reply_ep, UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
+                  block->start, hdr->length, block->ctx);
           if (status == UCS_ERR_NO_RESOURCE) {
             status = uct_bxi_ep_pending_get_add(
                     reply_ep, UCT_BXI_HDR_GET_MATCH(ev->hdr_data), block);
             ucs_assert_always(status == UCS_OK);
           }
 
-          /* Receive block cannot be released since completion callback from tag 
-           * context will be called on GET completion. */
           break;
         case UCT_BXI_TAG_PROT_RNDV_SW:
           /* UCP will proceed with a normal software rendez-vous protocol. */
@@ -807,7 +899,8 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_get_rxq(
   return UCS_OK;
 }
 
-void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
+static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
+                                          void *chunk)
 {
   uct_bxi_iface_t *iface =
           ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
