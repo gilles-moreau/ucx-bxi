@@ -28,17 +28,6 @@ void uct_bxi_ep_get_bcopy_handler_no_completion(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put(op);
 }
 
-static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
-                                     const void              *resp)
-{
-  /* First, invoke tag-related callback. */
-  op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
-                             UCS_OK);
-
-  /* Then, we may push OP back to the memory pool. */
-  ucs_mpool_put_inline(op);
-}
-
 static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                          const void              *resp)
 {
@@ -569,87 +558,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
   uct_bxi_recv_block_deactivate(op->rndv.block);
 
   uct_bxi_send_rndv_op_handler_no_completion(op, NULL);
-
-  return UCS_OK;
-}
-
-ucs_status_t uct_bxi_ep_tag_rndv_zcopy_get(uct_bxi_ep_t *ep, uct_tag_t tag,
-                                           uct_bxi_recv_block_t *block)
-{
-  ucs_status_t     status;
-  uct_bxi_iface_t *iface =
-          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
-  uct_bxi_iface_send_op_t *op;
-
-  UCT_BXI_CHECK_IFACE_RES(iface);
-
-  /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                               uct_bxi_get_rndv_handler, block->size);
-
-  /* Associate iface and the tag context of the receive block so that 
-   * the completion callback may be called. This enables the block 
-   * to be released by caller. */
-  op->rndv.ctx   = block->ctx;
-  op->rndv.iface = iface;
-  op->length     = block->size;
-
-  //NOTE: block length should have been set by caller, during event
-  //      handling.
-  //NOTE: remote address is the remote offset here since the operation
-  //      will match the specific GET ME posted by initiator.
-  status =
-          uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)block->start,
-                              block->size, ep->dev_addr.pid, ep->iface_addr.tag,
-                              UCT_BXI_RNDV_GET_TAG(tag), 0, op));
-
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
-  }
-
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
-  uct_bxi_ep_enable_flush(ep);
-
-  return status;
-}
-
-static ucs_status_t uct_bxi_ep_tag_rndv_get_progress(uct_pending_req_t *uct_req)
-{
-  ucs_status_t           status;
-  uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
-
-  status = uct_bxi_ep_tag_rndv_zcopy_get(req->ep, req->tag, req->block);
-  if (status == UCS_OK) {
-    ucs_mpool_put(req);
-  } else {
-    ucs_assert(status == UCS_ERR_NO_RESOURCE);
-  }
-
-  return status;
-}
-
-ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t tag,
-                                        uct_bxi_recv_block_t *block)
-{
-  uct_bxi_iface_t *iface =
-          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
-  uct_bxi_pending_req_t *req;
-  ucs_status_t           status;
-
-  req = ucs_mpool_get(&iface->tx.pending_mp);
-  if (req == NULL) {
-    return UCS_ERR_NO_MEMORY;
-  }
-
-  req->ep         = ep;
-  req->tag        = tag;
-  req->block      = block;
-  req->super.func = uct_bxi_ep_tag_rndv_get_progress;
-  status          = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);
-
-  ucs_assert_always(status == UCS_OK);
 
   return UCS_OK;
 }
