@@ -18,43 +18,53 @@ void uct_bxi_ep_get_bcopy_handler(uct_bxi_iface_send_op_t *op, const void *resp)
   op->get.unpack_cb(op->get.unpack_arg, resp, op->length);
 
   uct_invoke_completion(op->user_comp, UCS_OK);
-  ucs_mpool_put(op);
+
+  ucs_list_del(&op->elem);
+  ucs_mpool_put_inline(op);
 }
 
 void uct_bxi_ep_get_bcopy_handler_no_completion(uct_bxi_iface_send_op_t *op,
                                                 const void              *resp)
 {
   op->get.unpack_cb(op->get.unpack_arg, resp, op->length);
-  ucs_mpool_put(op);
+
+  ucs_list_del(&op->elem);
+  ucs_mpool_put_inline(op);
+}
+
+static void uct_bxi_send_op_no_completion(uct_bxi_iface_send_op_t *op,
+                                          const void              *resp)
+{
+  ucs_list_del(&op->elem);
+  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                          const void              *resp)
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
+
+  ucs_list_del(&op->elem);
   ucs_mpool_put_inline(op);
 }
 
-static void uct_bxi_send_rndv_comp_op_handler(uct_bxi_iface_send_op_t *op,
-                                              const void              *resp)
+static void uct_bxi_send_rndv_ack_handler(uct_bxi_iface_send_op_t *op,
+                                          const void              *resp)
 {
-  uct_invoke_completion(op->user_comp, UCS_OK);
-  ucs_mpool_put_inline(op->rndv.block);
-  ucs_mpool_put_inline(op);
-}
-
-static void
-uct_bxi_send_rndv_op_handler_no_completion(uct_bxi_iface_send_op_t *op,
-                                           const void              *resp)
-{
-  ucs_mpool_put_inline(op->rndv.block);
-  ucs_mpool_put_inline(op);
+  //FIXME: INUSE flags to pass asserts.
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  /* During ACK, reset handler for next PTL_EVENT_GET. Operation has to 
+   * be released when the GET operation from target is completed. */
+  op->handler = op->user_comp == NULL ? uct_bxi_send_op_no_completion :
+                                        uct_bxi_send_comp_op_handler;
 }
 
 static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                              const void              *resp)
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
+
+  ucs_list_del(&op->elem);
   ucs_mpool_put_inline(op);
 }
 
@@ -521,7 +531,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 
-  /* Attach block to operation so it can be release on completion. */
+  /* Attach operation to block and vice versa so they can be both released, 
+   * either on completion or if the operation is canceled. */
+  block->op      = op;
   op->rndv.block = block;
 
   op->length = uct_bxi_pack_rndv(iface, op + 1, ep->iface_addr.tag, ep->list_id,
@@ -555,9 +567,11 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_bxi_iface_send_op_t *op = (uct_bxi_iface_send_op_t *)tl_op;
 
+  /* Deactivate block and release it to memory pool. */
   uct_bxi_recv_block_deactivate(op->rndv.block);
+  ucs_mpool_put_inline(op->rndv.block);
 
-  uct_bxi_send_rndv_op_handler_no_completion(op, NULL);
+  uct_bxi_send_op_no_completion(op, NULL);
 
   return UCS_OK;
 }
@@ -1062,7 +1076,7 @@ static ucs_status_t uct_bxi_ep_check_progress(uct_pending_req_t *uct_req)
 {
   uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
 
-  return uct_bxi_ep_check_send(&req->ep->super.super, req->comp);
+  return uct_bxi_ep_check_send(&req->init.ep->super.super, req->init.comp);
 }
 
 ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
@@ -1091,7 +1105,8 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
     return UCS_ERR_NO_MEMORY;
   }
 
-  req->ep          = ep;
+  req->init.ep     = ep;
+  req->init.comp   = comp;
   req->super.func  = uct_bxi_ep_check_progress;
   ep->flags       |= UCT_BXI_EP_KEEP_ALIVE_PENDING;
   status           = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);

@@ -122,8 +122,6 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
-  /* Remove operations from the list of outstandings. */
-  ucs_list_del(&op->elem);
   op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
                  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
   op->handler(op, op + 1);
@@ -189,11 +187,11 @@ static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
-ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
-                                              uct_tag_t        get_tag,
-                                              uct_tag_t send_tag, void *buffer,
-                                              size_t             length,
-                                              uct_tag_context_t *ctx)
+ucs_status_t
+uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
+                                 ptl_pt_index_t pti, uct_tag_t get_tag,
+                                 uct_tag_t send_tag, void *buffer,
+                                 size_t length, uct_tag_context_t *ctx)
 {
   ucs_status_t             status;
   uct_bxi_iface_send_op_t *op;
@@ -207,16 +205,20 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
   /* Associate iface and the tag context of the receive block so that 
    * the completion callback may be called. This enables the block 
    * to be released by caller. */
-  op->rndv.ctx   = ctx;
-  op->length     = length;
-  op->rndv.tag   = send_tag;
-  op->rndv.iface = iface;
+  op->length   = length;
+  op->rndv.ctx = ctx;
+  op->rndv.tag = send_tag;
+
+  /* GET operation needs to be handled particularly, they are not attached to 
+   * a endpoint. */
+  op->ep     = NULL;
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_GET;
 
   //NOTE: remote address is the remote offset here since the operation
   //      will match the specific GET ME posted by initiator.
   status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, ep->dev_addr.pid, ep->iface_addr.tag,
-                               UCT_BXI_RNDV_GET_TAG(get_tag), 0, op));
+                               length, pid, pti, UCT_BXI_RNDV_GET_TAG(get_tag),
+                               0, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
@@ -230,13 +232,15 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
   return status;
 }
 
-static ucs_status_t uct_bxi_ep_tag_rndv_get_progress(uct_pending_req_t *uct_req)
+static ucs_status_t
+uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
 {
   ucs_status_t           status;
   uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
 
-  status = uct_bxi_ep_tag_rndv_zcopy_get(req->ep, req->get_tag, req->send_tag,
-                                         req->buffer, req->length, req->ctx);
+  status = uct_bxi_iface_tag_rndv_zcopy_get(req->tgt.iface, req->tgt.get_tag,
+                                            req->tgt.send_tag, req->tgt.buffer,
+                                            req->tgt.length, req->tgt.ctx);
   if (status == UCS_OK) {
     ucs_mpool_put(req);
   } else {
@@ -246,12 +250,11 @@ static ucs_status_t uct_bxi_ep_tag_rndv_get_progress(uct_pending_req_t *uct_req)
   return status;
 }
 
-ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t get_tag,
-                                        uct_tag_t             send_tag,
-                                        uct_bxi_recv_block_t *block)
+ucs_status_t
+uct_bxi_iface_pending_get_add(uct_bxi_iface_t *iface, ptl_process_t pid,
+                              ptl_pt_index_t pti, uct_tag_t get_tag,
+                              uct_tag_t send_tag, uct_bxi_recv_block_t *block)
 {
-  uct_bxi_iface_t *iface =
-          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
   uct_bxi_pending_req_t *req;
   ucs_status_t           status;
 
@@ -260,14 +263,17 @@ ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t get_tag,
     return UCS_ERR_NO_MEMORY;
   }
 
-  req->ep         = ep;
-  req->get_tag    = get_tag;
-  req->send_tag   = send_tag;
-  req->length     = block->size;
-  req->ctx        = block->ctx;
-  req->buffer     = block->start;
-  req->super.func = uct_bxi_ep_tag_rndv_get_progress;
-  status          = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);
+  req->tgt.iface    = iface;
+  req->tgt.pid      = pid;
+  req->tgt.pti      = pti;
+  req->tgt.get_tag  = get_tag;
+  req->tgt.send_tag = send_tag;
+  req->tgt.length   = block->size;
+  req->tgt.ctx      = block->ctx;
+  req->tgt.buffer   = block->start;
+  req->super.func   = uct_bxi_iface_tag_rndv_get_progress;
+
+  uct_pending_req_queue_push(&iface->tx.pending_q, &req->super);
 
   ucs_assert_always(status == UCS_OK);
 
@@ -370,6 +376,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
     break;
   case PTL_EVENT_GET:
     uct_bxi_iface_completion_op(block->op);
+    /* Block for GET has been consumed, it can be safely released and reused. */
+    ucs_mpool_put(block);
     break;
   case PTL_EVENT_PT_DISABLED:
     ucs_error("PTL: event %s. Control flow not implemented.",
@@ -570,8 +578,7 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
 
   ucs_error("BXI: operation failed. op=%p, sn=%lu, ep=%p", op, op->sn, op->ep);
 
-  /* Remove operation from outstanding list. */
-  ucs_list_del(&op->elem);
+  /* Don't remove operation from outstanding list, it will be done later. */
 
   /* Close endpoint. */
   op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
