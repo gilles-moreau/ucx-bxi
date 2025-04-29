@@ -19,6 +19,7 @@ typedef struct uct_bxi_recv_block_params {
 } uct_bxi_recv_block_params_t;
 
 typedef struct uct_bxi_recv_block {
+  ucs_status_t             status; /* Either UCS_OK or UCS_ERR_CANCEL */
   int                      is_exp; /* Boolean is block expected */
   void                    *start;  /* Address of the receive block */
   size_t                   size;   /* Size of the receive block */
@@ -26,6 +27,7 @@ typedef struct uct_bxi_recv_block {
   ptl_handle_me_t          meh;    /* Memory Entry handle */
   ucs_list_link_t          elem;   /* Element in the RX Queue */
   ptl_list_t               list;   /* Portals list */
+  ptl_match_bits_t         tag;    /* Tag used to cancel operation */
   uct_tag_context_t       *ctx;    /* Tag context provided by upper layer */
   uct_bxi_iface_send_op_t *op;     /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;

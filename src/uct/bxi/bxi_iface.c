@@ -354,8 +354,9 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         }
       } else {
         /* Eager expected message completion. */
+        block->size = block->size == UCS_OK ? ev->mlength : block->size;
         block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
-                                 ev->mlength, NULL, UCS_OK);
+                                 block->size, NULL, block->status);
       }
 
       /* At this point, receive block may safely be released back to the memory 
@@ -872,6 +873,7 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
           ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
   uct_bxi_recv_block_t *block = obj;
 
+  block->status = UCS_OK;
   block->is_exp = 1;
   block->size   = 0;
   block->start  = NULL;

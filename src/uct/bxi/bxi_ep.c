@@ -653,7 +653,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
   /* First, allocate a TAG block from the memory pool. */
   UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
-                                    status = UCS_ERR_NO_RESOURCE;
+                                    status = UCS_ERR_EXCEEDS_LIMIT;
                                     goto err_remove_hash);
 
   /* Attach upper layer context. */
@@ -691,20 +691,26 @@ err:
 ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
                                            uct_tag_context_t *ctx, int force)
 {
-  uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
-  uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  //NOTE: there is no error checking here because the ME might have been
-  //unlinked already during the receive call.
-  //FIXME: actually no. Recheck
-  uct_bxi_recv_block_deactivate(block);
+  ucs_status_t          status = UCS_OK;
+  uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
+  uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
   if (force) {
+    uct_bxi_recv_block_deactivate(block);
     uct_bxi_iface_tag_del_from_hash(iface, block->start);
     ucs_mpool_put_inline(block);
+  } else {
+    block->status = UCS_ERR_CANCELED;
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, 0, 0, PTL_NO_ACK_REQ,
+                                 uct_bxi_iface_md(iface)->pid,
+                                 uct_bxi_rxq_get_addr(iface->rx.tag.queue),
+                                 block->tag, 0, NULL, 0));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: could not cancel block. block=%p", block);
+    }
   }
 
-  return UCS_OK;
+  return status;
 }
 
 void uct_bxi_iface_tag_recv_overflow(uct_iface_h tl_iface)

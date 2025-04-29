@@ -23,6 +23,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .length      = params->size};
     block->start = params->start;
     block->size  = params->size;
+    block->tag   = params->match;
   } else {
     me = (ptl_me_t){
             .ct_handle   = PTL_CT_NONE,
