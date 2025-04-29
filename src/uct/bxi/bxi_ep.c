@@ -458,16 +458,14 @@ err:
 }
 
 static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
-                                       unsigned int pti, unsigned ep_list_id,
-                                       uint64_t remote_addr, size_t length,
-                                       const void *header,
-                                       unsigned    header_length)
+                                       unsigned int pti, uint64_t remote_addr,
+                                       size_t length, const void *header,
+                                       unsigned header_length)
 {
   size_t              len = 0;
   uct_bxi_hdr_rndv_t *hdr = src;
 
   hdr->pti            = pti;
-  hdr->ep_list_id     = ep_list_id;
   hdr->remote_addr    = remote_addr;
   hdr->length         = length;
   hdr->header_length  = header_length;
@@ -536,9 +534,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   block->op      = op;
   op->rndv.block = block;
 
-  op->length = uct_bxi_pack_rndv(iface, op + 1, ep->iface_addr.tag, ep->list_id,
-                                 (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len,
-                                 header, header_length);
+  op->length = uct_bxi_pack_rndv(
+          iface, op + 1, uct_bxi_rxq_get_addr(iface->rx.tag.queue),
+          (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len, header, header_length);
 
   UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
   //TODO: implement triggered operation
@@ -571,6 +569,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
   uct_bxi_recv_block_deactivate(op->rndv.block);
   ucs_mpool_put_inline(op->rndv.block);
 
+  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
   uct_bxi_send_op_no_completion(op, NULL);
 
   return UCS_OK;
@@ -649,8 +648,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     cth    = op_ctx->cth;
     op_ctx->threshold++;
     ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
-    ucs_debug("BXI: recv oop. oop_ctx=%p, thresh=%ld", op_ctx,
-              op_ctx->threshold);
+    ucs_debug("BXI: recv op. op_ctx=%p, thresh=%ld", op_ctx, op_ctx->threshold);
   }
 
   /* First, allocate a TAG block from the memory pool. */
@@ -661,11 +659,12 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   /* Attach upper layer context. */
   block->ctx = ctx;
 
-  params.start   = ptl_iov->iov_base;
-  params.size    = ptl_iov->iov_len;
-  params.match   = tag;
-  params.cth     = cth;
-  params.ign     = 0;
+  params.start = ptl_iov->iov_base;
+  params.size  = ptl_iov->iov_len;
+  params.match = tag;
+  params.ign   = ~tag_mask;
+  params.cth   = cth;
+  //FIXME: Add explanation for OVER_DISABLE
   params.options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_OVER_DISABLE |
                    PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE |
                    ct_flags;

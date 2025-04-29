@@ -17,9 +17,6 @@ static uct_bxi_iface_ops_t uct_bxi_iface_ops;
 static ucs_status_t uct_bxi_iface_get_rxq(uct_bxi_iface_t *iface,
                                           ptl_pt_index_t   pti,
                                           uct_bxi_rxq_t  **rxq_p);
-static ucs_status_t uct_bxi_iface_get_ep(uct_bxi_iface_t *iface,
-                                         ptl_process_t pid, unsigned list_id,
-                                         uct_bxi_ep_t **ep_p);
 
 static char *uct_bxi_event_str[] = {
         [PTL_EVENT_GET]                   = "PTL_EVENT_GET",
@@ -102,7 +99,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_op_ctx",
                 ucs_offsetof(uct_bxi_iface_config_t, tm.op_ctx_mp), "\n"),
 
-        {"TM_LIST_SIZE", "4",
+        {"TM_LIST_SIZE", "32",
          "Limits the number of tags posted to the HW for matching. The actual "
          "limit is a minimum between this value and the maximum value "
          "supported by the HW. \n -1 means no limit.",
@@ -199,8 +196,10 @@ uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, NULL, NULL,
-                               uct_bxi_get_rndv_handler, length);
+  UCT_BXI_IFACE_GET_TX_DESC(iface, &iface->tx.send_op_mp, op);
+  op->handler = uct_bxi_get_rndv_handler;
+  op->flags   = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  UCT_SKIP_ZERO_LENGTH(length, op);
 
   /* Associate iface and the tag context of the receive block so that 
    * the completion callback may be called. This enables the block 
@@ -224,10 +223,8 @@ uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
     ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
-  uct_bxi_ep_enable_flush(ep);
+  //NOTE: These GET operation are not appended to any endpoint queue. As a
+  //      consequence, they wont be flushed.
 
   return status;
 }
@@ -238,9 +235,9 @@ uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
   ucs_status_t           status;
   uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
 
-  status = uct_bxi_iface_tag_rndv_zcopy_get(req->tgt.iface, req->tgt.get_tag,
-                                            req->tgt.send_tag, req->tgt.buffer,
-                                            req->tgt.length, req->tgt.ctx);
+  status = uct_bxi_iface_tag_rndv_zcopy_get(
+          req->tgt.iface, req->tgt.pid, req->tgt.pti, req->tgt.get_tag,
+          req->tgt.send_tag, req->tgt.buffer, req->tgt.length, req->tgt.ctx);
   if (status == UCS_OK) {
     ucs_mpool_put(req);
   } else {
@@ -256,7 +253,6 @@ uct_bxi_iface_pending_get_add(uct_bxi_iface_t *iface, ptl_process_t pid,
                               uct_tag_t send_tag, uct_bxi_recv_block_t *block)
 {
   uct_bxi_pending_req_t *req;
-  ucs_status_t           status;
 
   req = ucs_mpool_get(&iface->tx.pending_mp);
   if (req == NULL) {
@@ -275,8 +271,6 @@ uct_bxi_iface_pending_get_add(uct_bxi_iface_t *iface, ptl_process_t pid,
 
   uct_pending_req_queue_push(&iface->tx.pending_q, &req->super);
 
-  ucs_assert_always(status == UCS_OK);
-
   return UCS_OK;
 }
 
@@ -291,7 +285,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
 {
   ucs_status_t          status = UCS_OK;
   uct_bxi_hdr_rndv_t   *hdr;
-  uct_bxi_ep_t         *reply_ep;
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)ev->user_ptr;
 
   // TODO: check for truncated messages
@@ -335,21 +328,17 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         case UCT_BXI_TAG_PROT_RNDV_HW:
           hdr = ev->start;
 
-          /* First, get the initiator endpoint. NOTE: must not fail. */
-          status = uct_bxi_iface_get_ep(iface, ev->initiator, hdr->ep_list_id,
-                                        &reply_ep);
-          if (status == UCS_ERR_NO_ELEM) {
-          }
-
           /* Then, perform the GET operation. Add to pending queue if no resource 
            * are available. Use length from hdr since sender size may be different 
-           * from receiver sive. */
-          status = uct_bxi_ep_tag_rndv_zcopy_get(
-                  reply_ep, UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
+           * from receiver side. */
+          status = uct_bxi_iface_tag_rndv_zcopy_get(
+                  iface, ev->initiator, hdr->pti,
+                  UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
                   block->start, hdr->length, block->ctx);
           if (status == UCS_ERR_NO_RESOURCE) {
-            status = uct_bxi_ep_pending_get_add(
-                    reply_ep, UCT_BXI_HDR_GET_MATCH(ev->hdr_data), block);
+            status = uct_bxi_iface_pending_get_add(
+                    iface, ev->initiator, hdr->pti,
+                    UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits, block);
             ucs_assert_always(status == UCS_OK);
           }
 
@@ -545,8 +534,9 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. type=%s, size=%lu, start=%p, pti=%d",
-                uct_bxi_event_str[ev.type], ev.mlength, ev.start, ev.pt_index);
+      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d",
+                iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
+                ev.pt_index);
 
       /* Get RX Queue from Portals Table Index */
       uct_bxi_iface_get_rxq(iface, ev.pt_index, &rxq);
@@ -592,6 +582,12 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
 static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 {
   uct_bxi_iface_send_op_t *op, *tmp;
+
+  /* Endpoint may be NULL if previously completed operation was a GET 
+   * resulting from the TAG RNDV protocol. */
+  if (ep == NULL) {
+    return;
+  }
 
   /* Loop on operation queue and complete all flush operations: flush is 
    * completed when there are no send operation before. */
@@ -836,43 +832,6 @@ void uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
     ucs_free(list);
     kh_del(uct_bxi_eps, &iface->eps, iter);
   }
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-uct_bxi_iface_get_ep(uct_bxi_iface_t *iface, ptl_process_t ptl_pid,
-                     unsigned list_id, uct_bxi_ep_t **ep_p)
-{
-  khiter_t           iter;
-  uint64_t           pid;
-  uct_bxi_ep_list_t *list;
-  uct_bxi_ep_t      *ep;
-
-  /* Transform Portals pid to uint64_t. */
-  pid  = ptl_pid.phys.nid;
-  pid  = pid << 32;
-  pid |= ptl_pid.phys.pid;
-
-  /* First, get the BXI endpoint list. */
-  iter = kh_get(uct_bxi_eps, &iface->eps, pid);
-  if (iter == kh_end(&iface->eps)) {
-    return UCS_ERR_NO_ELEM;
-  }
-  list = kh_val(&iface->eps, iter);
-
-  /* Then find the endpoint with its list ID. */
-  *ep_p = NULL;
-  ucs_list_for_each (ep, &list->head, elem) {
-    if (ep->list_id == list_id) {
-      *ep_p = ep;
-      break;
-    }
-  }
-
-  if (*ep_p == NULL) {
-    return UCS_ERR_NO_ELEM;
-  }
-
-  return UCS_OK;
 }
 
 static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,

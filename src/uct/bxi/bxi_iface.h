@@ -58,7 +58,6 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint16_t     ep_list_id;
   unsigned int pti;
   uint64_t     remote_addr;
   size_t       length;
@@ -400,10 +399,9 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                                            _arg, _length)                      \
   ({                                                                           \
     UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                              \
-    (_desc)->handler =                                                         \
-            (uct_bxi_send_op_handler_t)uct_bxi_send_op_no_completion;          \
-    (_desc)->ep = _ep;                                                         \
-    *(_length)  = _pack_cb(_desc + 1, _arg);                                   \
+    (_desc)->handler = uct_bxi_send_op_no_completion;                          \
+    (_desc)->ep      = _ep;                                                    \
+    *(_length)       = _pack_cb(_desc + 1, _arg);                              \
   })
 
 #define UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb, \
@@ -438,9 +436,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
   (_desc)->ep = _ep;                                                           \
   (_desc)->handler =                                                           \
-          (_user_comp == NULL) ?                                               \
-                  (uct_bxi_send_op_handler_t)uct_bxi_send_op_no_completion :   \
-                  _handler;                                                    \
+          (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
