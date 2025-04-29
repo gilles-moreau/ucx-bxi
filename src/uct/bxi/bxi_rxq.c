@@ -32,7 +32,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .match_id    = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
             .options     = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
                        PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
-                       PTL_ME_IS_ACCESSIBLE,
+                       PTL_ME_IS_ACCESSIBLE | PTL_ME_UNEXPECTED_HDR_DISABLE,
             .uid    = PTL_UID_ANY,
             .start  = block->start,
             .length = block->size};
@@ -51,9 +51,15 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
   int ret;
 
   ret = PtlMEUnlink(block->meh);
-  if (ret != PTL_OK) {
-    ucs_warn("BXI: block not unlinked. pti=%d, start=%p", block->rxq->pti,
-             block->start);
+  if (ret == PTL_IN_USE && block->is_exp) {
+    ucs_warn("BXI: block have ongoing operations. pti=%d, start=%p",
+             block->rxq->pti, block->start);
+  } else if (ret == PTL_IN_USE && !block->is_exp) {
+    ucs_info("BXI: block have unexpected headers still. pti=%d, start=%p",
+             block->rxq->pti, block->start);
+  } else if (ret != PTL_OK) {
+    ucs_error("BXI: error unlinking block. pti=%d, start=%p", block->rxq->pti,
+              block->start);
   }
 }
 
