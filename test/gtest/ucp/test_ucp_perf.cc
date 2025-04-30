@@ -378,6 +378,10 @@ UCS_TEST_P(test_ucp_loopback, envelope)
 {
     test_spec test = tests[get_variant_value(VARIANT_TEST_TYPE)];
 
+    if (has_any_transport({"bxi"}) && test.wait_mode == UCX_PERF_WAIT_MODE_SLEEP) {
+        UCS_TEST_SKIP_R("Sleep wait mode not support with bxi");
+    }
+
     test.send_mem_type = UCS_MEMORY_TYPE_HOST;
     test.recv_mem_type = UCS_MEMORY_TYPE_HOST;
 

@@ -311,6 +311,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
+        ucs_debug("BXI: unexpected message. block=%p, tag=%lu", block->start,
+                  block->tag);
         status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                           ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
                                           ev->match_bits, ev->hdr_data, NULL);
@@ -353,6 +355,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
+        ucs_debug("BXI: expected message. block=%p, tag=%lu", block->start,
+                  block->tag);
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
                                  ev->mlength, NULL, UCS_OK);
@@ -488,7 +492,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
   attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
-  attr->cap.tag.eager.max_zcopy = iface->config.max_msg_size;
+  attr->cap.tag.eager.max_zcopy = iface->config.tm.max_zcopy;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = 128;
   attr->cap.tag.rndv.max_iov    = 1;
@@ -940,6 +944,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   /* First, initialize interface configuration. */
   iface->config.tm.max_tags   = config->tm.list_size;
   iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
+  iface->config.tm.max_zcopy  = config->seg_size;
 
   iface->config.rx.tag_mp = config->rx.tag_mp;
   //FIXME: Memory pool max elements is reset here, thus overwriting initial
@@ -1064,6 +1069,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   //       usage.
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
+  //TODO: implement support for scatter buffer.
   iface->config.max_iovecs   = ucs_min(md->config.limits.max_iovecs, 1);
   iface->config.max_msg_size = md->config.limits.max_msg_size;
   iface->config.max_inline =

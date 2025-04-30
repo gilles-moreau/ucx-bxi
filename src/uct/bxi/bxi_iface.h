@@ -187,7 +187,6 @@ KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_list_t *, 1, uct_bxi_eps_hash,
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
   struct {
-    int seg_size;
     struct {
       int max_events;              /*NOTE: non configurable */
       int max_queue_len;           /* Maximum outstanding operations */
@@ -204,11 +203,13 @@ typedef struct uct_bxi_iface {
     size_t max_events;   /* Maximum number of event in EQ */
     int    max_iovecs;   /* Maximum number of iovec */
     int    max_inline;   /* Maximum short message size */
+    int    seg_size;     /* Segment size for eager bcopy/zcopy */
     size_t max_msg_size; /* Maximum message size */
     size_t max_atomic_size;
     struct {
       unsigned int max_op_ctx;
       unsigned int max_tags;
+      int          max_zcopy; /* Maximum payload size for zcopy */
     } tm;
 
     size_t iface_addr_size;
@@ -374,6 +375,11 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   if (uct_bxi_iface_available(_iface) <= 0) {                                  \
     return UCS_ERR_NO_RESOURCE;                                                \
   }
+
+#define UCT_BXI_CHECK_ZCOPY_DATA(_iovcnt, _max_iov, _func_name, _length,       \
+                                 _seg_size)                                    \
+  UCT_CHECK_IOV_SIZE(_iovcnt, _max_iov, _func_name);                           \
+  UCT_CHECK_LENGTH(_length, 0, _seg_size, "zcopy payload");
 
 #define UCT_BXI_CHECK_IFACE_RES_PTR(_iface)                                    \
   if (uct_bxi_iface_available(_iface) <= 0) {                                  \

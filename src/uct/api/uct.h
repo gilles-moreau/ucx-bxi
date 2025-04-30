@@ -574,6 +574,17 @@ enum uct_msg_flags {
                                                 be detected.  */
 };
 
+/**
+ * @ingroup UCT_TAG
+ * @brief Flags for operation offload.
+ */
+enum uct_tag_flags {
+    UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
+                                                 generate an operation handle that can 
+                                                 be used to enfore dependency with 
+                                                 another operation. */
+};
+
 
 /**
  * @ingroup UCT_RESOURCE
@@ -1754,17 +1765,6 @@ struct uct_pending_req {
     char                      priv[UCT_PENDING_REQ_PRIV_LEN]; /**< Used internally by UCT */
 };
 
-
-/**
- * @ingroup UCT_TAG
- * @brief Flags for operation offload.
- */
-enum uct_tag_op_flags {
-    UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
-                                                 generate an operation handle that can 
-                                                 be used to enfore dependency with 
-                                                 another operation. */
-};
 
 /**
  * @ingroup UCT_TAG

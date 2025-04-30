@@ -63,7 +63,7 @@ enum {
     UCP_REQUEST_DEBUG_FLAG_EXTERNAL        = 0,
     UCP_REQUEST_FLAG_SUPER_VALID           = 0
 #endif
-    UCP_REQUEST_FLAG_TRIGGERED             = UCS_BIT(24),
+    UCP_REQUEST_FLAG_OFFLOAD_OPERATION     = UCS_BIT(24),
 };
 
 
@@ -361,7 +361,6 @@ struct ucp_request {
                     void              *rndv_op;  /* Handler of issued rndv send. Need to cancel
                                                     the operation if it is completed by SW. */
                     ucp_offload_context_h ctx;   /* Offload context for triggered operation. */
-                    unsigned flags;
                 } tag_offload;
 
                 struct {
