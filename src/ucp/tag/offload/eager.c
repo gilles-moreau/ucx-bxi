@@ -97,7 +97,7 @@ static size_t ucp_eager_tag_offload_pack(void *dest, void *arg)
 
     ucs_assert(req->send.state.dt_iter.offset == 0);
 
-    if (req->send.tag_offload.flags & UCT_TAG_OFFLOAD_OPERATION) {
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
         //FIXME: right now the only way to pass the offloading operation
         //       context without modifying the API is to pack it in the 
         //       buffer...
@@ -116,12 +116,14 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
                                          uint64_t imm_data)
 {
     ssize_t packed_len;
+    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ?
+        UCT_TAG_OFFLOAD_OPERATION : 0;
 
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
                                         ucp_eager_tag_offload_pack, req, 
-                                        req->send.tag_offload.flags);
+                                        offload_flag);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }
@@ -288,11 +290,12 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
                                       const ucp_proto_single_priv_t *spriv,
                                       uct_iov_t *iov)
 {
+    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ?
+        UCT_TAG_OFFLOAD_OPERATION : 0;
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                        spriv->super.lane),
                                   req->send.msg_proto.tag, 0ul, iov, 1, 
-                                  req->send.tag_offload.flags,
-                                  &req->send.state.uct_comp);
+                                  offload_flag, &req->send.state.uct_comp);
 }
 
 static ucs_status_t
