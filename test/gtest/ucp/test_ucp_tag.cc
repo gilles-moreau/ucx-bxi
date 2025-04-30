@@ -56,6 +56,7 @@ void test_ucp_tag::init()
 
 void test_ucp_tag::enable_tag_mp_offload()
 {
+    m_env.push_back(new ucs::scoped_setenv("UCX_BXI_TM_ENABLE", "y"));
     m_env.push_back(new ucs::scoped_setenv("UCX_RC_TM_ENABLE", "y"));
     m_env.push_back(new ucs::scoped_setenv("UCX_RC_TM_MP_SRQ_ENABLE", "try"));
     m_env.push_back(new ucs::scoped_setenv("UCX_RC_TM_MP_NUM_STRIDES", "8"));

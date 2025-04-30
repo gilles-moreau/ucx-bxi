@@ -10,7 +10,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
   ptl_me_t       me;
   uct_bxi_rxq_t *rxq = block->rxq;
 
-  if (block->is_exp) {
+  if (!block->unexp) {
     me = (ptl_me_t){
             .ct_handle   = params->cth,
             .match_bits  = params->match,
@@ -52,11 +52,13 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
   int ret;
 
   ret = PtlMEUnlink(block->meh);
-  if (ret == PTL_IN_USE && block->is_exp) {
+  if (ret == PTL_IN_USE && !block->unexp) {
     ucs_warn("BXI: block have ongoing operations. pti=%d, start=%p",
              block->rxq->pti, block->start);
-  } else if (ret == PTL_IN_USE && !block->is_exp) {
-    ucs_info("BXI: block have unexpected headers still. pti=%d, start=%p",
+  } else if (ret == PTL_IN_USE && block->unexp) {
+    //FIXME: this should never happen since unexpected headers have been
+    //       disabled in the OVERFLOW list.
+    ucs_warn("BXI: block have unexpected headers still. pti=%d, start=%p",
              block->rxq->pti, block->start);
   } else if (ret != PTL_OK) {
     ucs_error("BXI: error unlinking block. pti=%d, start=%p", block->rxq->pti,
@@ -114,12 +116,12 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   uct_bxi_rxq_t        *rxq   = ucs_container_of(mp, uct_bxi_rxq_t, mp);
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
 
-  block->is_exp = 0;
-  block->size   = rxq->config.blk_size;
-  block->start  = block + 1;
-  block->rxq    = rxq;
-  block->meh    = PTL_INVALID_HANDLE;
-  block->list   = rxq->list;
+  block->unexp = 1;
+  block->size  = rxq->config.blk_size;
+  block->start = block + 1;
+  block->rxq   = rxq;
+  block->meh   = PTL_INVALID_HANDLE;
+  block->list  = rxq->list;
 }
 
 static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
