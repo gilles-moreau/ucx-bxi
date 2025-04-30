@@ -354,9 +354,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         }
       } else {
         /* Eager expected message completion. */
-        block->size = block->size == UCS_OK ? ev->mlength : block->size;
         block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
-                                 block->size, NULL, block->status);
+                                 ev->mlength, NULL, UCS_OK);
       }
 
       /* At this point, receive block may safely be released back to the memory 
@@ -414,15 +413,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.am.max_bcopy = iface->config.seg_size;
   attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
-
-  attr->cap.tag.recv.min_recv   = 0;
-  attr->cap.tag.eager.max_short = iface->config.max_inline;
-  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
-  attr->cap.tag.eager.max_zcopy = iface->config.max_msg_size;
-  attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
-  attr->cap.tag.rndv.max_hdr    = 128;
-  attr->cap.tag.rndv.max_iov    = 1;
-  attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
   attr->cap.put.max_short       = iface->config.max_inline;
   attr->cap.put.max_bcopy       = iface->config.seg_size;
@@ -491,6 +481,19 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
     return UCS_OK;
   }
 
+  attr->cap.tag.recv.max_outstanding = iface->config.tm.max_tags;
+  attr->cap.tag.recv.max_zcopy       = iface->config.max_msg_size;
+  attr->cap.tag.recv.max_iov         = 1;
+  attr->cap.tag.recv.min_recv        = 0;
+
+  attr->cap.tag.eager.max_short = iface->config.max_inline;
+  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
+  attr->cap.tag.eager.max_zcopy = iface->config.max_msg_size;
+  attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
+  attr->cap.tag.rndv.max_hdr    = 128;
+  attr->cap.tag.rndv.max_iov    = 1;
+  attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
+
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
           UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
@@ -505,9 +508,9 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
   addr->rma = iface->rx.rma.pti;
-  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.queue);
+  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.q);
   addr->tag = !iface->tm.enabled ? UCT_BXI_PT_NULL :
-                                   uct_bxi_rxq_get_addr(iface->rx.tag.queue);
+                                   uct_bxi_rxq_get_addr(iface->rx.tag.q);
 
   return UCS_OK;
 }
@@ -521,6 +524,24 @@ ucs_status_t uct_bxi_iface_get_device_address(uct_iface_h        tl_iface,
   addr->pid = uct_bxi_iface_md(iface)->pid;
 
   return UCS_OK;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_tag_flush_cancel(uct_bxi_iface_t *iface)
+{
+  uct_bxi_recv_block_t *block;
+
+  /* Flush list of cancelled blocks. */
+  while (!ucs_list_is_empty(&iface->rx.tag.cancel)) {
+    block = ucs_list_extract_head(&iface->rx.tag.cancel, uct_bxi_recv_block_t,
+                                  c_elem);
+
+    uct_bxi_iface_tag_del_from_hash(iface, block->start);
+    block->ctx->completed_cb(block->ctx, block->tag, 0, block->size, NULL,
+                             UCS_ERR_CANCELED);
+
+    ucs_mpool_put_inline(block);
+  }
 }
 
 static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
@@ -559,6 +580,11 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
   }
 
 out:
+  if (iface->tm.enabled) {
+    /* Check if blocks need to be flushed. */
+    uct_bxi_iface_tag_flush_cancel(iface);
+  }
+
   return progressed;
 }
 
@@ -873,13 +899,12 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
           ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
   uct_bxi_recv_block_t *block = obj;
 
-  block->status = UCS_OK;
-  block->is_exp = 1;
-  block->size   = 0;
-  block->start  = NULL;
-  block->rxq    = iface->rx.tag.queue;
-  block->list   = PTL_PRIORITY_LIST;
-  block->meh    = PTL_INVALID_HANDLE;
+  block->unexp = 0;
+  block->size  = 0;
+  block->start = NULL;
+  block->rxq   = iface->rx.tag.q;
+  block->list  = PTL_PRIORITY_LIST;
+  block->meh   = PTL_INVALID_HANDLE;
 }
 
 static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
@@ -940,13 +965,16 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           .name    = "rxq-tag",
           .handler = uct_bxi_iface_handle_tag_events,
   };
-  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.queue);
+  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.q);
   if (status != UCS_OK) {
     goto out;
   }
 
   /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(iface, iface->rx.tag.queue);
+  uct_bxi_iface_add_rxq(iface, iface->rx.tag.q);
+
+  /* Initialize list of cancelled blocks. */
+  ucs_list_head_init(&iface->rx.tag.cancel);
 
   /* Work pool of operation. */
   ucs_mpool_params_reset(&mp_param);
@@ -984,7 +1012,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 err_release_blockrecvmp:
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 0);
 err_release_rxq:
-  uct_bxi_rxq_fini(iface->rx.tag.queue);
+  uct_bxi_rxq_fini(iface->rx.tag.q);
 out:
   return status;
 }
@@ -1005,7 +1033,7 @@ static void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
   kh_destroy_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
   /* Release TAG RX queue. */
-  uct_bxi_rxq_fini(iface->rx.tag.queue);
+  uct_bxi_rxq_fini(iface->rx.tag.q);
 
   /* And receive block memory pool.*/
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
@@ -1176,13 +1204,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   rxq_param.handler = uct_bxi_iface_handle_am_events;
   rxq_param.name    = "rxq-am";
 
-  status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.queue);
+  status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.q);
   if (status != UCS_OK) {
     goto err_clean_rxevq;
   }
 
   /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(self, self->rx.am.queue);
+  uct_bxi_iface_add_rxq(self, self->rx.am.q);
 
   /* Initialize TAG resources if enabled. */
   status = uct_bxi_iface_tag_init(self, params, config);
@@ -1303,7 +1331,7 @@ err_clean_txevq:
 err_clean_tag:
   uct_bxi_iface_tag_fini(self);
 err_clean_rxq:
-  uct_bxi_rxq_fini(self->rx.am.queue);
+  uct_bxi_rxq_fini(self->rx.am.q);
 err_clean_rxevq:
   uct_bxi_wrap(PtlEQFree(self->rx.eqh));
 err:
@@ -1333,7 +1361,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
                                   UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
 
   /* Clean AM resources */
-  uct_bxi_rxq_fini(self->rx.am.queue);
+  uct_bxi_rxq_fini(self->rx.am.q);
   PtlEQFree(self->rx.eqh);
 
   /* Clean endpoint hash table. */

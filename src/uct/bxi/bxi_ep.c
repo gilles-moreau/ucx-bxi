@@ -525,7 +525,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
-                                    comp, uct_iov_total_length(iov, iovcnt),
+                                    comp, uct_bxi_send_rndv_ack_handler,
+                                    uct_iov_total_length(iov, iovcnt),
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 
@@ -535,7 +536,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->rndv.block = block;
 
   op->length = uct_bxi_pack_rndv(
-          iface, op + 1, uct_bxi_rxq_get_addr(iface->rx.tag.queue),
+          iface, op + 1, uct_bxi_rxq_get_addr(iface->rx.tag.q),
           (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len, header, header_length);
 
   UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
@@ -592,8 +593,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
-                                    NULL, header_length,
-                                    status = UCS_ERR_NO_RESOURCE;
+                                    NULL, uct_bxi_send_op_no_completion,
+                                    header_length, status = UCS_ERR_NO_RESOURCE;
                                     goto err);
 
   memcpy(op + 1, header, header_length);
@@ -611,6 +612,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
 
 err:
   return status;
@@ -695,19 +697,17 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
+  /* Unlink block. */
+  uct_bxi_recv_block_deactivate(block);
+
   if (force) {
-    uct_bxi_recv_block_deactivate(block);
     uct_bxi_iface_tag_del_from_hash(iface, block->start);
     ucs_mpool_put_inline(block);
   } else {
-    block->status = UCS_ERR_CANCELED;
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, 0, 0, PTL_NO_ACK_REQ,
-                                 uct_bxi_iface_md(iface)->pid,
-                                 uct_bxi_rxq_get_addr(iface->rx.tag.queue),
-                                 block->tag, 0, NULL, 0));
-    if (status != UCS_OK) {
-      ucs_fatal("BXI: could not cancel block. block=%p", block);
-    }
+    //FIXME: due to noforce UCT tests, block need to be cancelled
+    //       during polling. Since Unlink does not generate any event, we
+    //       are required to maintain a list of cancelled blocks.
+    ucs_list_add_head(&iface->rx.tag.cancel, &block->c_elem);
   }
 
   return status;

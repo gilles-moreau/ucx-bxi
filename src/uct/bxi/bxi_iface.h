@@ -246,16 +246,17 @@ typedef struct uct_bxi_iface {
   struct {
     ptl_handle_eq_t eqh;
     struct {
-      uct_bxi_rxq_t *queue;
+      uct_bxi_rxq_t *q;
     } am;
     struct {
-      uct_bxi_rxq_t *queue;
+      uct_bxi_rxq_t  *q;
+      ucs_list_link_t cancel; /* List of cancelled block */
     } tag;
     struct {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;
     } rma;
-    khash_t(uct_bxi_rxq) queues;
+    khash_t(uct_bxi_rxq) queues; /* Hash table of RX Queues */
   } rx;
 
   khash_t(uct_bxi_eps) eps;
@@ -441,10 +442,10 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
 #define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _ep, _user_comp, \
-                                          _length, _err)                       \
+                                          _handler, _length, _err)             \
   UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
   (_desc)->ep        = _ep;                                                    \
-  (_desc)->handler   = uct_bxi_send_rndv_ack_handler;                          \
+  (_desc)->handler   = _handler;                                               \
   (_desc)->user_comp = _user_comp;                                             \
   UCT_BXI_SKIP_ZERO_LENGTH_ERR(_length, _err, _desc);
 
