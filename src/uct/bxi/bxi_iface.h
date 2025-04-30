@@ -322,7 +322,7 @@ static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
     if (ptl_iov[ptl_it].iov_len > 0) {
       ptl_iov[ptl_it].iov_base = (void *)(iov[iov_it].buffer);
     } else {
-      continue; /* to avoid zero length elements in sge */
+      continue; /* to avoid zero length elements in iov */
     }
     ++ptl_it;
   }
