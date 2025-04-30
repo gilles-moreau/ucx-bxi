@@ -635,14 +635,15 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_iface_tag_recv_zcopy");
 
-  status = uct_bxi_iface_tag_add_to_hash(iface, iov[0].buffer);
+  //TODO: sometimes, implement support for PTL_IOVEC for MD.
+  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
+  memset(ptl_iov, 0, iovcnt * sizeof(ptl_iovec_t));
+  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+
+  status = uct_bxi_iface_tag_add_to_hash(iface, ptl_iov->iov_base);
   if (status != UCS_OK) {
     goto err;
   }
-
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   if (ctx->oop_ctx != NULL && ctx->flags == UCT_TAG_OFFLOAD_OPERATION) {
     /* User specified a context to offload operations. */

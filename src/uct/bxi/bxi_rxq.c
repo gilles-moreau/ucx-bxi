@@ -39,10 +39,6 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .length = block->size};
   }
 
-  if (block->start == NULL) {
-    return UCS_ERR_IO_ERROR;
-  }
-
   return uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
                                   &block->meh));
 }
