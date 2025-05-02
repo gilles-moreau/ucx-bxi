@@ -311,8 +311,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
-        ucs_debug("BXI: unexpected message. block=%p, tag=%lu", block->start,
-                  block->tag);
         status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                           ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
                                           ev->match_bits, ev->hdr_data, NULL);
@@ -355,8 +353,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
-        ucs_debug("BXI: expected message. block=%p, tag=%lu", block->start,
-                  block->tag);
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
                                  ev->mlength, NULL, UCS_OK);
@@ -364,6 +360,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
 
       /* At this point, receive block may safely be released back to the memory 
        * pool. */
+      block->meh = PTL_INVALID_HANDLE;
       ucs_mpool_put(block);
     }
     break;
@@ -379,6 +376,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
     goto err;
     break;
   case PTL_EVENT_AUTO_UNLINK:
+    break;
+  case PTL_EVENT_AUTO_FREE:
     /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
      * Link it back, all included data has been processed already. */
     status = uct_bxi_recv_block_activate(block, NULL);
@@ -387,7 +386,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
   case PTL_EVENT_REPLY:
   case PTL_EVENT_PUT_OVERFLOW:
   case PTL_EVENT_GET_OVERFLOW:
-  case PTL_EVENT_AUTO_FREE:
   case PTL_EVENT_ATOMIC:
   case PTL_EVENT_FETCH_ATOMIC:
   case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:

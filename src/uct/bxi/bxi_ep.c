@@ -120,9 +120,6 @@ err:
   return size;
 }
 
-//TODO: am zcopy are useful only when sending scattered data which size is lower
-//      than seg_size so that it can be received in bounce buffers. As a consequence,
-//      using PTL_IOVEC MD can be used to support these on BXI.
 ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                                  unsigned header_length, const uct_iov_t *iov,
                                  size_t iovcnt, unsigned flags,
@@ -415,10 +412,8 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_ZCOPY_DATA(iovcnt, (size_t)iface->config.max_iovecs,
-                           "uct_bxi_ep_tag_eager_zcopy",
-                           uct_iov_total_length(iov, iovcnt),
-                           iface->config.tm.max_zcopy);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_get_zcopy");
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
@@ -656,7 +651,6 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     cth    = op_ctx->cth;
     op_ctx->threshold++;
     ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
-    ucs_debug("BXI: recv op. op_ctx=%p, thresh=%ld", op_ctx, op_ctx->threshold);
   }
 
   /* First, allocate a TAG block from the memory pool. */
@@ -684,9 +678,6 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     goto err_release_block;
   }
 
-  ucs_debug("BXI: post message. b=%p, block=%p, tag=%lu", block, block->start,
-            block->tag);
-
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
   return status;
@@ -705,9 +696,6 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   ucs_status_t          status = UCS_OK;
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  ucs_debug("BXI: cancel message. b=%p, block=%p, list=%d, tag=%lu, force=%d",
-            block, block->start, block->list, block->tag, force);
 
   /* Unlink block. */
   uct_bxi_recv_block_deactivate(block);
