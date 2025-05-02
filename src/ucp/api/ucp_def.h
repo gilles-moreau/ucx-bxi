@@ -281,9 +281,9 @@ typedef uint64_t                         ucp_datatype_t;
  * @ingroup UCP_COMM
  * @brief UCP Offload Context 
  *
- * UCP offload context is a communication context for offloading operations.
+ * UCP offload scheduler is a communication context for offloading operations.
  */
-typedef struct ucp_offload_context       *ucp_offload_context_h;
+typedef struct ucp_offload_sched       *ucp_offload_sched_h;
 
 
 /**

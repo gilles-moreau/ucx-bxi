@@ -127,7 +127,7 @@ typedef struct uct_bxi_iface_send_op {
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_op_ctx {
-  uct_oop_ctx_t   super;
+  uct_op_ctx_t    super;
   ptl_handle_ct_t cth;
   ptl_size_t      threshold;
 } uct_bxi_op_ctx_t;
@@ -386,11 +386,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
     return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE);                                \
   }
 
-#define UCT_BXI_CHECK_IFACE_RES_ERR(_iface, _err)                              \
-  if (uct_bxi_iface_available(_iface) <= 0) {                                  \
-    _err;                                                                      \
-  }
-
+//FIXME: rework all these macros...
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
                            return UCS_ERR_NO_RESOURCE);
@@ -447,13 +443,20 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
+#define UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
+                                         _handler, _length)                    \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  (_desc)->ep = _ep;                                                           \
+  (_desc)->handler =                                                           \
+          (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
+  (_desc)->user_comp = _user_comp;
+
 #define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _ep, _user_comp, \
-                                          _handler, _length, _err)             \
+                                          _handler, _err)                      \
   UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
   (_desc)->ep        = _ep;                                                    \
   (_desc)->handler   = _handler;                                               \
-  (_desc)->user_comp = _user_comp;                                             \
-  UCT_BXI_SKIP_ZERO_LENGTH_ERR(_length, _err, _desc);
+  (_desc)->user_comp = _user_comp;
 
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc)                      \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \

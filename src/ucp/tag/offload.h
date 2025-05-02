@@ -12,7 +12,7 @@
 #include <ucp/core/ucp_request.h>
 #include <ucs/datastruct/queue.h>
 
-#include "offload/operation.h"
+#include "offload/sched.h"
 
 
 enum {

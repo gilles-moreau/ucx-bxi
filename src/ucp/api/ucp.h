@@ -1827,13 +1827,12 @@ typedef struct {
     ucp_mem_h memh;
 
     /**
-     * Offload handle.
+     * Scheduler handle.
      * If the handle is provided, dependencies with other previous offloaded 
      * operations will be checked to get the operation offload context necessary 
-     * to trigger the operation upon subsequent events. Has to be used in conjonction
-     * with 
+     * to trigger the operation upon subsequent events.
      */
-    ucp_offload_context_h offh;
+    ucp_offload_sched_h schedh;
 
 } ucp_request_param_t;
 
@@ -3528,11 +3527,11 @@ ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
 
 /**
  * @ingroup UCP_COMM
- * @brief Operation Offloading context.
+ * @brief Operation Offloading scheduler.
  *
- * An offloading context is a communication context for offloading operations.
- * When an offloading context is passed to a communication primitive, see 
- * @ref ??, a lookup will be performed to determined dependency through 
+ * An offloading scheduler is a communication context for offloading operations.
+ * When an offloading scheduler is passed to a communication primitive, see 
+ * @ref ??, a lookup will be performed to determine dependency through 
  * implicit data dependency checking (memory overlap of already offloaded 
  * memory ranges, see tcache.c).
  *
@@ -3541,10 +3540,10 @@ ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
  *
  * @return error code if resources might not be available for example 
  */
-ucs_status_t ucp_offload_context_create(ucp_worker_h           worker,
-                                        ucp_offload_context_h  *ctx);
+ucs_status_t ucp_offload_sched_create(ucp_worker_h          worker,
+                                      ucp_offload_sched_h  *ctx);
 
-void ucp_offload_context_fini(ucp_offload_context_h ctx);
+void ucp_offload_sched_fini(ucp_offload_sched_h ctx);
 
 /**
  * @ingroup UCP_COMM

@@ -107,7 +107,7 @@ typedef struct uct_listener_attr     uct_listener_attr_t;
 typedef struct uct_listener          *uct_listener_h;
 typedef struct uct_listener_params   uct_listener_params_t;
 typedef struct uct_tag_context       uct_tag_context_t;
-typedef struct uct_oop_ctx           *uct_oop_ctx_h; /**< @brief Offload Operation Context */
+typedef struct uct_op_ctx           *uct_op_ctx_h; /**< @brief Offload Operation Context */
 typedef uint64_t                     uct_tag_t;  /* tag type - 64 bit */
 typedef int                          uct_worker_cb_id_t;
 typedef void*                        uct_conn_request_h;

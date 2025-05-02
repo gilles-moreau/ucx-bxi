@@ -194,10 +194,10 @@ typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
 
 typedef void (*uct_iface_tag_recv_overflow_func_t)(uct_iface_h iface);
 
-typedef ucs_status_t (*uct_iface_tag_create_oop_ctx_func_t)(uct_iface_h iface,
-                                                            uct_oop_ctx_h *oop_ctx_p);
-typedef void (*uct_iface_tag_delete_oop_ctx_func_t)(uct_iface_h iface,
-                                                            uct_oop_ctx_h oop_ctx);
+typedef ucs_status_t (*uct_iface_tag_op_ctx_create_func_t)(uct_iface_h iface,
+                                                           uct_op_ctx_h *op_ctx_p);
+typedef void (*uct_iface_tag_op_ctx_delete_func_t)(uct_iface_h iface,
+                                                            uct_op_ctx_h op_ctx);
 
 /* endpoint - pending queue */
 
@@ -337,8 +337,8 @@ typedef struct uct_iface_ops {
     uct_iface_tag_recv_zcopy_func_t     iface_tag_recv_zcopy;
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
     uct_iface_tag_recv_overflow_func_t  iface_tag_recv_overflow;
-    uct_iface_tag_create_oop_ctx_func_t iface_tag_create_oop;
-    uct_iface_tag_delete_oop_ctx_func_t iface_tag_delete_oop;
+    uct_iface_tag_op_ctx_create_func_t  iface_tag_op_create;
+    uct_iface_tag_op_ctx_delete_func_t  iface_tag_op_delete;
 
     /* endpoint - pending queue */
     uct_ep_pending_add_func_t           ep_pending_add;

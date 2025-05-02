@@ -489,8 +489,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.recv.min_recv        = 0;
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
-  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
-  attr->cap.tag.eager.max_zcopy = iface->config.tm.max_zcopy;
+  attr->cap.tag.eager.max_bcopy = 1168;
+  attr->cap.tag.eager.max_zcopy = 1168;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = 128;
   attr->cap.tag.rndv.max_iov    = 1;
@@ -1422,8 +1422,8 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
         .iface_tag_recv_overflow  = uct_bxi_iface_tag_recv_overflow,
-        .iface_tag_create_oop     = uct_bxi_iface_tag_create_op_ctx,
-        .iface_tag_delete_oop     = uct_bxi_iface_tag_delete_op_ctx,
+        .iface_tag_op_create      = uct_bxi_iface_tag_create_op_ctx,
+        .iface_tag_op_delete      = uct_bxi_iface_tag_delete_op_ctx,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {

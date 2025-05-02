@@ -77,7 +77,6 @@ struct ucp_tcache_params {
   int              ucm_events;         /**< UCM events to register. */
   void            *context;            /**< User-defined context that will
                                   be passed to mem_reg/mem_dereg */
-  int              ucm_event_priority; /**< Priority of memory events */
   size_t           max_regions;
   size_t           max_size;
   ucp_tcache_ops_t ops; /**< Memory operations functions */
@@ -87,7 +86,6 @@ struct ucp_tcache_params {
  * Registration cache configuration parameters.
  */
 struct ucp_tcache_config {
-  unsigned      event_prio;  /**< Memory events priority */
   unsigned long max_regions; /**< Maximal number of tcache regions */
   size_t        max_size;    /**< Maximal size of mapped memory */
 };
