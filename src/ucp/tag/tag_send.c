@@ -75,6 +75,11 @@ ucp_tag_send_req(ucp_request_t *req, size_t dt_count,
         zcopy_thresh = rndv_thresh;
     }
 
+    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH)) {
+        req->send.tag_offload.sched = param->schedh;
+        req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+    }
+
     ucs_trace_req("select tag request(%p) progress algorithm datatype=0x%"PRIx64
                   " buffer=%p length=%zu mem_type:%s max_short=%zd rndv_thresh=%zu "
                   "zcopy_thresh=%zu zcopy_enabled=%d",
@@ -288,19 +293,6 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
         ret = UCS_STATUS_PTR(UCS_ERR_NO_MEMORY);
         goto out;
     });
-
-    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH)) {
-        ucs_assert(param->offh != NULL);
-        status = ucp_offload_get_context(param->offh, (void *)buffer, contig_length, 
-                                         0, &req->send.state.uct_comp.oop_ctx);
-        if (status != UCS_OK) { 
-            ret = UCS_STATUS_PTR(status);
-            goto out;
-        } else if (req->send.state.uct_comp.oop_ctx != NULL) {
-            req->send.tag_offload.ctx = param->offh;
-            req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-        }
-    }
 
     if (worker->context->config.ext.proto_enable) {
         req->send.msg_proto.tag = tag;

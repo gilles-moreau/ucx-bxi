@@ -17,7 +17,7 @@
 #include <ucp/core/ucp_request.h>
 #include <ucp/core/ucp_mm.h>
 #include <ucp/tag/tag_match.inl>
-#include <ucp/tag/offload/operation.h>
+#include <ucp/tag/offload/sched.h>
 #include <ucs/sys/sys.h>
 
 
@@ -339,16 +339,12 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
-    req->recv.uct_ctx.oop_ctx         = NULL;
-    req->recv.uct_ctx.flags           = 0;
-    if (req->recv.op_attr & UCP_OP_ATTR_FIELD_OFFH) {
-        status = ucp_offload_get_context(req->recv.offh, iov.buffer, iov.length, 
-                                         UCP_OFFLOAD_CTX_FLAG_CREATE_IF_NOT_FOUND,
-                                         &req->recv.uct_ctx.oop_ctx);
+    req->recv.uct_ctx.op_ctx          = NULL;
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        status = ucp_offload_sched_region_add(req->recv.schedh, iov.buffer, iov.length);
         if (status != UCS_OK) {
             return status;
         }
-        req->recv.uct_ctx.flags = UCT_TAG_OFFLOAD_OPERATION;
     }
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,

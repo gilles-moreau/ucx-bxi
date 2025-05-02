@@ -82,7 +82,7 @@ public:
         s.tag              = t;
         s.imm_data         = i;
         s.uct_comp.count   = 1;
-        s.uct_comp.oop_ctx = NULL;
+        ucs_list_head_init(&s.uct_comp.op_head);
         s.uct_comp.status  = UCS_OK;
         s.uct_comp.func    = send_completion;
         s.sw_rndv          = s.comp = false;
@@ -96,7 +96,7 @@ public:
         r.mbuf                    = b;
         r.tag                     = t;
         r.tmask                   = m;
-        r.uct_ctx.oop_ctx         = NULL;
+        r.uct_ctx.op_ctx          = NULL;
         r.uct_ctx.completed_cb    = completed;
         r.uct_ctx.tag_consumed_cb = tag_consumed;
         r.uct_ctx.rndv_cb         = sw_rndv_completed;
@@ -128,7 +128,8 @@ public:
 
     ucs_status_t tag_eager_zcopy(entity &e, send_ctx &ctx)
     {
-        unsigned offload = ctx.uct_comp.oop_ctx != NULL ? UCT_TAG_OFFLOAD_OPERATION : 0;
+        unsigned offload = ucs_list_is_empty(&ctx.uct_comp.op_head) ? 
+            0:UCT_TAG_OFFLOAD_OPERATION;
 
         UCS_TEST_GET_BUFFER_IOV(iov, iovcnt, ctx.mbuf->ptr(),
                                 ctx.mbuf->length(), ctx.mbuf->memh(),
@@ -295,7 +296,7 @@ public:
                                              bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
-        uct_oop_ctx_h oop_ctx;
+        uct_op_ctx_h op_ctx;
 
         if (RUNNING_ON_VALGRIND) {
             length = ucs_min(length, 128U);
@@ -305,19 +306,18 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_created_oop_ctx(receiver().iface(), &oop_ctx));
+        ASSERT_UCS_OK(uct_iface_tag_op_ctx_create(receiver().iface(), &op_ctx));
 
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.oop_ctx = oop_ctx;
-        r_ctx.uct_ctx.flags = UCT_TAG_OFFLOAD_OPERATION;
+        r_ctx.uct_ctx.op_ctx = op_ctx;
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        rt_ctx.uct_comp.oop_ctx = oop_ctx;
+        ucs_list_add_head(&rt_ctx.uct_comp.op_head, &op_ctx->elem);
         ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
 
         recv_ctx st_ctx;
@@ -332,7 +332,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_delete_oop_ctx(receiver().iface(), oop_ctx);
+        uct_iface_tag_op_ctx_delete(receiver().iface(), op_ctx);
         flush();
     }
 
@@ -340,7 +340,7 @@ public:
                                                bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
-        uct_oop_ctx_h oop_ctx;
+        uct_op_ctx_h op_ctx;
 
         if (RUNNING_ON_VALGRIND) {
             length = ucs_min(length, 128U);
@@ -350,18 +350,18 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_created_oop_ctx(receiver().iface(), &oop_ctx));
+        ASSERT_UCS_OK(uct_iface_tag_op_ctx_create(receiver().iface(), &op_ctx));
 
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.oop_ctx = oop_ctx;
+        r_ctx.uct_ctx.op_ctx = op_ctx;
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        rt_ctx.uct_comp.oop_ctx = oop_ctx;
+        ucs_list_add_head(&rt_ctx.uct_comp.op_head, &op_ctx->elem);
         ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
 
         recv_ctx st_ctx;
@@ -376,7 +376,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_delete_oop_ctx(receiver().iface(), oop_ctx);
+        uct_iface_tag_op_ctx_delete(receiver().iface(), op_ctx);
         flush();
     }
 

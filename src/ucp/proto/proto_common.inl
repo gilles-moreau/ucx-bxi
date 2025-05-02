@@ -247,6 +247,12 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_proto_request_send_op_common(
         return UCS_STATUS_PTR(status);
     }
 
+    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH)) {
+        req->send.tag_offload.sched = param->schedh;
+        req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+        ucs_list_head_init(&req->send.state.uct_comp.op_head);
+    }
+
     UCS_PROFILE_CALL_VOID(ucp_request_send, req);
     if (req->flags & UCP_REQUEST_FLAG_COMPLETED) {
         /* coverity[offset_free] */

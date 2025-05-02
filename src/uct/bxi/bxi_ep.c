@@ -341,6 +341,33 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
   return UCS_ERR_NOT_IMPLEMENTED;
 }
 
+static ucs_status_t uct_bxi_ep_op_ctx_multiple(uct_iface_h        tl_iface,
+                                               ucs_list_link_t   *op_head,
+                                               uct_bxi_op_ctx_t **op_ctx_p)
+{
+  ucs_status_t      status;
+  uct_bxi_op_ctx_t *op_ctx;
+  uct_bxi_op_ctx_t *tmp;
+
+  status = uct_bxi_iface_tag_create_op_ctx(tl_iface, (uct_op_ctx_h *)&op_ctx);
+  if (status != UCS_OK) {
+    return status;
+  }
+
+  ucs_list_for_each (tmp, op_head, super.elem) {
+    status = uct_bxi_wrap(PtlTriggeredCTInc(op_ctx->cth, (ptl_ct_event_t){1, 0},
+                                            tmp->cth, tmp->threshold));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: failed setting trig inc.");
+    }
+    op_ctx->threshold++;
+  }
+
+  *op_ctx_p = op_ctx;
+
+  return status;
+}
+
 ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
                                    uct_pack_callback_t pack_cb, void *arg,
                                    unsigned flags)
@@ -349,6 +376,7 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   ssize_t           size  = 0;
+  ucs_list_link_t  *op_head;
   uct_bxi_op_ctx_t *op_ctx;
   uct_bxi_iface_send_op_t *op;
 
@@ -367,12 +395,20 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     //FIXME: There are currently no easy way to pass the operation context
     //       through the API. It is copied in the buffer during the
     //       packing callback. Data is located after the OP context.
-    op_ctx = (uct_bxi_op_ctx_t *)(op + 1);
+    op_head = *(ucs_list_link_t **)(op + 1);
+    if (ucs_list_length(op_head) > 1) {
+      status = uct_bxi_ep_op_ctx_multiple(tl_ep->iface, op_head, &op_ctx);
+      if (status != UCS_OK) {
+        goto err;
+      }
+    } else {
+      op_ctx = ucs_list_extract_head(op_head, uct_bxi_op_ctx_t, super.elem);
+    }
     ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh,
-            (ptl_size_t)UCS_PTR_BYTE_OFFSET(op + 1, sizeof(uct_oop_ctx_h)),
+            (ptl_size_t)UCS_PTR_BYTE_OFFSET(op + 1, sizeof(ucs_list_link_t)),
             size, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op,
             imm, op_ctx->cth, op_ctx->threshold));
   } else {
@@ -404,7 +440,6 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 {
 
   ucs_status_t      status;
-  size_t            iov_size;
   ptl_iovec_t      *ptl_iov;
   uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
@@ -417,17 +452,25 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
-                               uct_bxi_send_comp_op_handler,
-                               uct_iov_total_length(iov, iovcnt));
+  UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
+                                   uct_bxi_send_comp_op_handler,
+                                   uct_iov_total_length(iov, iovcnt));
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
-  UCT_SKIP_ZERO_LENGTH(iov_size);
+  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
+  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    op_ctx = ucs_derived_of(comp->oop_ctx, uct_bxi_op_ctx_t);
+    if (ucs_list_length(&comp->op_head) > 1) {
+      status =
+              uct_bxi_ep_op_ctx_multiple(tl_ep->iface, &comp->op_head, &op_ctx);
+      if (status != UCS_OK) {
+        goto err;
+      }
+    } else {
+      op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t,
+                                     super.elem);
+    }
     ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
@@ -526,7 +569,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
                                     comp, uct_bxi_send_rndv_ack_handler,
-                                    uct_iov_total_length(iov, iovcnt),
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 
@@ -594,7 +636,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   /* Allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
                                     NULL, uct_bxi_send_op_no_completion,
-                                    header_length, status = UCS_ERR_NO_RESOURCE;
+                                    status = UCS_ERR_NO_RESOURCE;
                                     goto err);
 
   memcpy(op + 1, header, header_length);
@@ -645,9 +687,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     goto err;
   }
 
-  if (ctx->oop_ctx != NULL && ctx->flags == UCT_TAG_OFFLOAD_OPERATION) {
+  if (ctx->op_ctx != NULL) {
     /* User specified a context to offload operations. */
-    op_ctx = ucs_derived_of(ctx->oop_ctx, uct_bxi_op_ctx_t);
+    op_ctx = ucs_derived_of(ctx->op_ctx, uct_bxi_op_ctx_t);
     cth    = op_ctx->cth;
     op_ctx->threshold++;
     ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
@@ -720,8 +762,8 @@ void uct_bxi_iface_tag_recv_overflow(uct_iface_h tl_iface)
   iface->tm.recv_tried_offload++;
 }
 
-ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h    tl_iface,
-                                             uct_oop_ctx_h *op_ctx_p)
+ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h   tl_iface,
+                                             uct_op_ctx_h *op_ctx_p)
 {
   ucs_status_t      status;
   uct_bxi_op_ctx_t *op_ctx;
@@ -733,15 +775,14 @@ ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h    tl_iface,
     goto err;
   }
 
-  op_ctx->threshold     = 0;
-  op_ctx->super.ref_cnt = 0;
+  op_ctx->threshold = 0;
 
   status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &op_ctx->cth));
   if (status != UCS_OK) {
     goto err_free_op_ctx;
   }
 
-  *op_ctx_p = (uct_oop_ctx_h)op_ctx;
+  *op_ctx_p = (uct_op_ctx_h)op_ctx;
 
   return status;
 
@@ -751,19 +792,16 @@ err:
   return status;
 }
 
-void uct_bxi_iface_tag_delete_op_ctx(uct_iface_h   tl_iface,
-                                     uct_oop_ctx_h tl_oop_ctx)
+void uct_bxi_iface_tag_delete_op_ctx(uct_iface_h  tl_iface,
+                                     uct_op_ctx_h tl_op_ctx)
 {
-  uct_bxi_op_ctx_t *op_ctx = (uct_bxi_op_ctx_t *)tl_oop_ctx;
+  uct_bxi_op_ctx_t *op_ctx = (uct_bxi_op_ctx_t *)tl_op_ctx;
 
-  ucs_assert(op_ctx->super.ref_cnt >= 0);
   ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
-  if (--op_ctx->super.ref_cnt <= 0) {
-    uct_bxi_wrap(PtlCTFree(op_ctx->cth));
+  uct_bxi_wrap(PtlCTFree(op_ctx->cth));
 
-    ucs_mpool_put(op_ctx);
-  }
+  ucs_mpool_put(op_ctx);
 }
 
 static ucs_status_t

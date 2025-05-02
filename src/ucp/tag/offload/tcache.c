@@ -269,7 +269,6 @@ void ucp_tcache_set_default_params(ucp_tcache_params_t *tcache_params)
 {
   tcache_params->region_struct_size = sizeof(ucp_tcache_region_t);
   tcache_params->ucm_events         = 0;
-  tcache_params->ucm_event_priority = 1000;
   tcache_params->max_regions        = UCS_MEMUNITS_INF;
   tcache_params->max_size           = UCS_MEMUNITS_INF;
 }
@@ -279,9 +278,8 @@ void ucp_tcache_set_params(ucp_tcache_params_t       *tcache_params,
 {
   ucp_tcache_set_default_params(tcache_params);
 
-  tcache_params->ucm_event_priority = tcache_config->event_prio;
-  tcache_params->max_regions        = tcache_config->max_regions;
-  tcache_params->max_size           = tcache_config->max_size;
+  tcache_params->max_regions = tcache_config->max_regions;
+  tcache_params->max_size    = tcache_config->max_size;
 }
 
 static ucs_pgt_dir_t *ucp_tcache_pgt_dir_alloc(const ucs_pgtable_t *pgtable)
@@ -410,24 +408,6 @@ ucs_status_t ucp_tcache_create(const ucp_tcache_params_t *params,
   status                    = ucs_mpool_init(&mp_params, &tcache->mp);
   if (status != UCS_OK) {
     goto err_cleanup_pgtable;
-  }
-
-  status = ucm_set_event_handler(UCM_EVENT_MEM_TYPE_ALLOC,
-                                 params->ucm_event_priority,
-                                 ucp_tcache_alloc_callback, tcache);
-  if (status != UCS_OK) {
-    ucs_diag("tcache failed to install UCM alloc event handler: %s",
-             ucs_status_string(status));
-    goto err_destroy_mp;
-  }
-
-  status = ucm_set_event_handler(UCM_EVENT_MEM_TYPE_FREE,
-                                 params->ucm_event_priority,
-                                 ucp_tcache_free_callback, tcache);
-  if (status != UCS_OK) {
-    ucs_diag("tcache failed to install UCM free event handler: %s",
-             ucs_status_string(status));
-    goto err_destroy_mp;
   }
 
   *tcache_p = tcache;

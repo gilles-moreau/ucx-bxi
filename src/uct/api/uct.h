@@ -1747,9 +1747,7 @@ struct uct_completion {
     ucs_status_t              status;  /**< Completion status, this field must
                                             be initialized with UCS_OK before
                                             first operation is started. */
-    uct_oop_ctx_h             oop_ctx; /**< Operation handle pointing to the 
-                                            operation on which the completion 
-                                            depends. */
+    ucs_list_link_t           op_head; /**< List of parent operation handles. */
 };
 
 
@@ -1821,12 +1819,18 @@ struct uct_tag_context {
 
      /** Offload Operation Context to setup operation dependencies. If not null, then
       *  it will be used by the corresponding operation. */ 
-    uct_oop_ctx_h oop_ctx;
-    unsigned      flags;
+    uct_op_ctx_h op_ctx;
 
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];
 };
+
+/**
+ * Operation Context structure for storing offload information.
+ */
+typedef struct uct_op_ctx {
+    ucs_list_link_t elem;
+} uct_op_ctx_t;
 
 
 /**
@@ -3596,16 +3600,16 @@ UCT_INLINE_API void uct_iface_tag_recv_overflow(uct_iface_h tl_iface)
  * able to create dependencies between communication primitives.
  *
  * @param [in]    iface     Interface to post the tag on.
- * @param [out]   oop_ctx   Context created.
+ * @param [out]   op_ctx   Context created.
  *
  * @return UCS_OK                - The context is created to the transport.
  * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
  *                                 resources.
  */
-UCT_INLINE_API ucs_status_t uct_iface_tag_created_oop_ctx(uct_iface_h iface,
-                                                          uct_oop_ctx_h *oop_ctx_p)
+UCT_INLINE_API ucs_status_t uct_iface_tag_op_ctx_create(uct_iface_h iface,
+                                                        uct_op_ctx_h *op_ctx_p)
 {
-    return iface->ops.iface_tag_create_oop(iface, oop_ctx_p);
+    return iface->ops.iface_tag_op_create(iface, op_ctx_p);
 }
 
 /**
@@ -3613,16 +3617,16 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_created_oop_ctx(uct_iface_h iface,
  * @brief Delete an Offload Operation Context to a transport interface.
  *
  * @param [in]    iface     Interface to post the tag on.
- * @param [out]   oop_ctx   Context.
+ * @param [out]   op_ctx   Context.
  *
  * @return UCS_OK                - The context is created to the transport.
  * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
  *                                 resources.
  */
-UCT_INLINE_API void uct_iface_tag_delete_oop_ctx(uct_iface_h iface,
-                                                         uct_oop_ctx_h oop_ctx)
+UCT_INLINE_API void uct_iface_tag_op_ctx_delete(uct_iface_h iface,
+                                                uct_op_ctx_h op_ctx)
 {
-    iface->ops.iface_tag_delete_oop(iface, oop_ctx);
+    iface->ops.iface_tag_op_delete(iface, op_ctx);
 }
 
 /**

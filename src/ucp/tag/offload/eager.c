@@ -101,8 +101,8 @@ static size_t ucp_eager_tag_offload_pack(void *dest, void *arg)
         //FIXME: right now the only way to pass the offloading operation
         //       context without modifying the API is to pack it in the 
         //       buffer...
-       *(uct_oop_ctx_h *)p = req->send.state.uct_comp.oop_ctx;
-        p = UCS_PTR_BYTE_OFFSET(p, sizeof(uct_oop_ctx_h));
+       *(ucs_list_link_t **)p = &req->send.state.uct_comp.op_head;
+        p = UCS_PTR_BYTE_OFFSET(p, sizeof(ucs_list_link_t));
     }
 
     return ucp_datatype_iter_next_pack(&req->send.state.dt_iter,
@@ -115,15 +115,24 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
                                          const ucp_proto_single_priv_t *spriv,
                                          uint64_t imm_data)
 {
+    unsigned flags = 0;
     ssize_t packed_len;
-    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ?
-        UCT_TAG_OFFLOAD_OPERATION : 0;
+
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
+                                         req->send.state.dt_iter.type.contig.buffer, 
+                                         req->send.state.dt_iter.length, 
+                                         &req->send.state.uct_comp.op_head, 
+                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+        flags = UCT_TAG_OFFLOAD_OPERATION; 
+    }
 
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
                                         ucp_eager_tag_offload_pack, req, 
-                                        offload_flag);
+                                        flags);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }
@@ -290,12 +299,21 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
                                       const ucp_proto_single_priv_t *spriv,
                                       uct_iov_t *iov)
 {
-    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ?
-        UCT_TAG_OFFLOAD_OPERATION : 0;
+    unsigned flags = 0;
+
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        ucs_assert(iov->count == 1);
+        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
+                                         iov->buffer, iov->length, 
+                                         &req->send.state.uct_comp.op_head, 
+                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+        flags = UCT_TAG_OFFLOAD_OPERATION; 
+    }
+
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                        spriv->super.lane),
                                   req->send.msg_proto.tag, 0ul, iov, 1, 
-                                  offload_flag, &req->send.state.uct_comp);
+                                  flags, &req->send.state.uct_comp);
 }
 
 static ucs_status_t
