@@ -341,7 +341,8 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
     req->recv.uct_ctx.op_ctx          = NULL;
     if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        status = ucp_offload_sched_region_add(req->recv.schedh, iov.buffer, iov.length);
+        status = ucp_offload_sched_region_add(req->recv.schedh, iov.buffer, 
+                                              iov.length, &req->recv.uct_ctx.op_ctx);
         if (status != UCS_OK) {
             return status;
         }
@@ -521,8 +522,6 @@ ucp_do_tag_offload_bcopy(uct_pending_req_t *self, uint64_t imm_data)
 {
     ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
     ucp_ep_t *ep       = req->send.ep;
-    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ? 
-        UCT_TAG_OFFLOAD_OPERATION : 0;
     ssize_t packed_len;
 
     req->send.lane = ucp_ep_get_tag_lane(ep);
@@ -530,7 +529,7 @@ ucp_do_tag_offload_bcopy(uct_pending_req_t *self, uint64_t imm_data)
                                                                  req->send.lane),
                                             req->send.msg_proto.tag, imm_data,
                                             ucp_tag_offload_pack_eager, req, 
-                                            offload_flag);
+                                            0);
     if (packed_len < 0) {
         return (ucs_status_t)packed_len;
     }
@@ -547,8 +546,6 @@ ucp_do_tag_offload_zcopy(uct_pending_req_t *self, uint64_t imm_data,
     size_t         max_iov  = ucp_ep_config(ep)->tag.eager.max_iov;
     uct_iov_t      *iov     = ucs_alloca(max_iov * sizeof(uct_iov_t));
     size_t         iovcnt   = 0;
-    unsigned offload_flag = req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ? 
-        UCT_TAG_OFFLOAD_OPERATION : 0;
     ucs_status_t status;
 
     req->send.lane = ucp_ep_get_tag_lane(ep);
@@ -559,7 +556,7 @@ ucp_do_tag_offload_zcopy(uct_pending_req_t *self, uint64_t imm_data,
 
     status = uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(ep, req->send.lane),
                                     req->send.msg_proto.tag, imm_data, iov,
-                                    iovcnt, offload_flag,
+                                    iovcnt, 0,
                                     &req->send.state.uct_comp);
 
     return ucp_am_zcopy_single_handle_status(req, &dt_state, status, complete);

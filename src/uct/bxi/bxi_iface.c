@@ -489,6 +489,14 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.recv.min_recv        = 0;
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
+  //FIXME: UCP layer uses ucs_alloca to allocate the receive descriptor
+  //       which is limited in size (1200). This is only used in the sync
+  //       path. In order to increase this threshold, we need to support the
+  //       UCT_CB_PARAM_FLAG_DESC flags so that the descriptor may be
+  //       kept by UCP to save protocol information in it. Indeed, the ack needs
+  //       to be sent only when the match happened. One requirement
+  //       is to leave a headroom in the receive descriptors and support
+  //       UCS_INPROGRESS return call from invoke_am_callback.
   attr->cap.tag.eager.max_bcopy = 1168;
   attr->cap.tag.eager.max_zcopy = 1168;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;

@@ -102,7 +102,7 @@ static size_t ucp_eager_tag_offload_pack(void *dest, void *arg)
         //       context without modifying the API is to pack it in the 
         //       buffer...
        *(ucs_list_link_t **)p = &req->send.state.uct_comp.op_head;
-        p = UCS_PTR_BYTE_OFFSET(p, sizeof(ucs_list_link_t));
+        p = UCS_PTR_BYTE_OFFSET(p, sizeof(ucs_list_link_t *));
     }
 
     return ucp_datatype_iter_next_pack(&req->send.state.dt_iter,
