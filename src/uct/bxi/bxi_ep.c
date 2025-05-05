@@ -372,12 +372,10 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
                                    uct_pack_callback_t pack_cb, void *arg,
                                    unsigned flags)
 {
-  ucs_status_t      status;
-  uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  ssize_t           size  = 0;
-  ucs_list_link_t  *op_head;
-  uct_bxi_op_ctx_t *op_ctx;
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  ssize_t          size  = 0;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -391,26 +389,9 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     goto err;
   }
 
-  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    //FIXME: There are currently no easy way to pass the operation context
-    //       through the API. It is copied in the buffer during the
-    //       packing callback. Data is located after the OP context.
-    op_head = *(ucs_list_link_t **)(op + 1);
-    if (ucs_list_length(op_head) > 1) {
-      status = uct_bxi_ep_op_ctx_multiple(tl_ep->iface, op_head, &op_ctx);
-      if (status != UCS_OK) {
-        goto err;
-      }
-    } else {
-      op_ctx = ucs_list_extract_head(op_head, uct_bxi_op_ctx_t, super.elem);
-    }
-    ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
-
-    status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mem_desc->mdh,
-            (ptl_size_t)UCS_PTR_BYTE_OFFSET(op + 1, sizeof(ucs_list_link_t)),
-            size, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op,
-            imm, op_ctx->cth, op_ctx->threshold));
+  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+    ucs_error("BXI: triggered operation with bcopy not implemented.");
+    return UCS_ERR_NOT_IMPLEMENTED;
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  size, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -460,7 +441,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
-  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
+  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     if (ucs_list_length(&comp->op_head) > 1) {
       status =
               uct_bxi_ep_op_ctx_multiple(tl_ep->iface, &comp->op_head, &op_ctx);

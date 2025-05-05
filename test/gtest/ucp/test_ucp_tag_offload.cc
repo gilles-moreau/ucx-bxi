@@ -513,7 +513,6 @@ UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp_trig)
     }
 
     // Prepare the triggered send operation of the receiver 
-    param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .schedh = sched};
     req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                              recvbuf.size(), btag, &param);
     if (UCS_PTR_IS_PTR(req)) {

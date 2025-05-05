@@ -19,7 +19,8 @@
  * selection decision.
  */
 #define UCP_PROTO_SELECT_OP_ATTR_BASE   UCP_OP_ATTR_FLAG_NO_IMM_CMPL
-#define UCP_PROTO_SELECT_OP_ATTR_MASK   (UCP_OP_ATTR_FLAG_FAST_CMPL | \
+#define UCP_PROTO_SELECT_OP_ATTR_MASK   (UCP_OP_ATTR_FLAG_FAST_CMPL  | \
+                                         UCP_OP_ATTR_FLAG_OP_OFFLOAD | \
                                          UCP_OP_ATTR_FLAG_MULTI_SEND)
 
 /* Operation flags start bit */

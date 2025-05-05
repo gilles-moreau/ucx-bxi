@@ -741,12 +741,15 @@ typedef enum {
                                                         operation, fail if the
                                                         operation cannot be
                                                         completed immediately */
-    UCP_OP_ATTR_FLAG_MULTI_SEND     = UCS_BIT(19)  /**< optimize for bandwidth of
+    UCP_OP_ATTR_FLAG_MULTI_SEND     = UCS_BIT(19), /**< optimize for bandwidth of
                                                         multiple in-flight operations,
                                                         rather than for the latency
                                                         of a single operation.
                                                         This flag and UCP_OP_ATTR_FLAG_FAST_CMPL
                                                         are mutually exclusive. */
+    UCP_OP_ATTR_FLAG_OP_OFFLOAD     = UCS_BIT(20)  /**< allow to offload the operation
+                                                        so it can be triggered later based 
+                                                        on buffer dependencies. */
 } ucp_op_attr_t;
 
 
