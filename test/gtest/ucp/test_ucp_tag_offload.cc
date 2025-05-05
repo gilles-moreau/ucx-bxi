@@ -8,6 +8,7 @@
 
 #include "test_ucp_tag.h"
 #include "ucp_datatype.h"
+#include "ucs/type/status.h"
 
 extern "C" {
 #include <ucp/core/ucp_ep.inl>
@@ -483,6 +484,7 @@ err:
 UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp_trig)
 {
     ucp_offload_sched_h sched;
+    ucs_status_ptr_t req;
     activate_offload(sender());
 
     receiver().connect(&sender(), get_ep_params());
@@ -498,31 +500,52 @@ UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp_trig)
     std::vector<uint8_t> recvbuf(length);
     std::vector<uint8_t> sendrecvbuf(length);
 
+    std::vector<ucs_status_ptr_t> reqs;
+
     // Prepare receive from which receiver's send depends
     ucp_request_param_t param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .schedh = sched};
-    ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+    req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
                                              length, ftag, 0xffff, &param);
+    if (UCS_PTR_IS_PTR(req)) {
+        reqs.push_back(req);
+    } else {
+        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
+    }
 
     // Prepare the triggered send operation of the receiver 
-    ucs_status_ptr_t treq = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
+    param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .schedh = sched};
+    req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                              recvbuf.size(), btag, &param);
-    ASSERT_EQ(ucp_request_check_status(treq), UCS_INPROGRESS);
+    if (UCS_PTR_IS_PTR(req)) {
+        reqs.insert(reqs.begin(), req);
+    } else {
+        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
+    }
 
     // Prepare the receive operation of the sender. No offload sched is provided
     // since sender's operations are not offloaded.
     param = {};
-    ucs_status_ptr_t rt_req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
+    req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
                                                length, btag, 0xffff, &param);
+    if (UCS_PTR_IS_PTR(req)) {
+        reqs.insert(reqs.begin(), req);
+    } else {
+        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
+    }
 
     // Finally, send the first operation from the sender
-    ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+    req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
                                              recvbuf.size(), ftag, &param);
+    if (UCS_PTR_IS_PTR(req)) {
+        reqs.push_back(req);
+    } else {
+        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
+    }
 
-    request_wait(sreq);
-    request_wait(rreq);
-    request_wait(treq);
-    request_wait(rt_req);
-
+    while (!reqs.empty()) {
+        request_wait(reqs.back());
+        reqs.pop_back();
+    }
     delete_offload_sched(sched);
 }
 

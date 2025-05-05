@@ -41,7 +41,8 @@ static ucs_status_t ucp_offload_sched_ensure_capacity(ucp_offload_sched_h sched)
 
 // Add a region to the sched
 ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
-                                          void *buffer, size_t size)
+                                          void *buffer, size_t size,
+                                          uct_op_ctx_h *op_p)
 {
   ucs_status_t status;
 
@@ -59,6 +60,7 @@ ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
     return status;
   }
 
+  *op_p = sched->regions[sched->count].op;
   sched->count++;
 
   return status;

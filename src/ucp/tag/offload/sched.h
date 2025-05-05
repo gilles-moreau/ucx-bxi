@@ -11,7 +11,8 @@
 typedef struct ucp_offload_region ucp_offload_region_t;
 
 ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
-                                          void *buffer, size_t size);
+                                          void *buffer, size_t size,
+                                          uct_op_ctx_h *op_p);
 
 size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
                                              void *buffer, size_t size,
