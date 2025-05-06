@@ -395,6 +395,7 @@ struct ucp_request {
             ucp_datatype_iter_t   dt_iter;
             ucp_worker_t          *worker;
             ucp_offload_sched_h   schedh;
+            ucp_ep_h              reply_ep;
             uct_tag_context_t     uct_ctx;  /* Transport offload context */
 
             union {

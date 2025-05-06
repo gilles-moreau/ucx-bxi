@@ -210,8 +210,7 @@ uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
 
   /* GET operation needs to be handled particularly, they are not attached to 
    * a endpoint. */
-  op->ep     = NULL;
-  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_GET;
+  op->ep = NULL;
 
   //NOTE: remote address is the remote offset here since the operation
   //      will match the specific GET ME posted by initiator.

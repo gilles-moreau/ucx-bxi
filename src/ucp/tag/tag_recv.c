@@ -156,9 +156,15 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
 
         /* If offload supported, post this tag to transport as well.
          * TODO: need to distinguish the cases when posting is not needed. */
-        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH) {
+        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
             req->flags         |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
             req->recv.schedh = param->schedh;
+        }
+
+        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_EPH) {
+            req->recv.reply_ep = param->reply_ep;
+        } else {
+            req->recv.reply_ep = NULL;
         }
 
         ucp_tag_offload_try_post(worker, req, req_queue);
@@ -191,6 +197,7 @@ out_request_put:
 }
 
 UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_recv_nbr,
+
                  (worker, buffer, count, datatype, tag, tag_mask, request),
                  ucp_worker_h worker, void *buffer, size_t count,
                  ucp_datatype_t datatype, ucp_tag_t tag, ucp_tag_t tag_mask,
