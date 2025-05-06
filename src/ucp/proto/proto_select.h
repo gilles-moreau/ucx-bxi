@@ -24,7 +24,7 @@
                                          UCP_OP_ATTR_FLAG_MULTI_SEND)
 
 /* Operation flags start bit */
-#define UCP_PROTO_SELECT_OP_FLAGS_BASE UCS_BIT(4)
+#define UCP_PROTO_SELECT_OP_FLAGS_BASE UCS_BIT(5)
 
 /* Select protocol which supports resume request after reset. */
 #define UCP_PROTO_SELECT_OP_FLAG_RESUME (UCP_PROTO_SELECT_OP_FLAGS_BASE << 0)

@@ -36,7 +36,6 @@ enum {
 enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_GET   = UCS_BIT(2),
 };
 
 typedef enum uct_bxi_tag_prot {
