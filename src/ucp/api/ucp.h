@@ -719,7 +719,8 @@ typedef enum {
     UCP_OP_ATTR_FIELD_MEMORY_TYPE   = UCS_BIT(6),  /**< memory type field */
     UCP_OP_ATTR_FIELD_RECV_INFO     = UCS_BIT(7),  /**< recv_info field */
     UCP_OP_ATTR_FIELD_MEMH          = UCS_BIT(8),  /**< memory handle field */
-    UCP_OP_ATTR_FIELD_OFFH          = UCS_BIT(9),  /**< offload handle field */
+    UCP_OP_ATTR_FIELD_SCHEDH        = UCS_BIT(9),  /**< schedule handle field */
+    UCP_OP_ATTR_FIELD_EPH           = UCS_BIT(10), /**< endpoint handle field */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -1836,6 +1837,17 @@ typedef struct {
      * to trigger the operation upon subsequent events.
      */
     ucp_offload_sched_h schedh;
+
+    /**
+     * Endpoint handle.
+     * Endpoint is required by the receive operation in case the size of the 
+     * message exceeds rendez-vous threshold. It is used to set up the GET 
+     * operation. Note that this can be used only actual message size matches 
+     * the receive size which thus prevents the use during usual MPI P2P 
+     * communication. However, it is suited for collectives since they guarranty 
+     * same message size.
+     */
+    ucp_ep_h reply_ep;
 
 } ucp_request_param_t;
 

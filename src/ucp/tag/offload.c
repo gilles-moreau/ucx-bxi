@@ -77,6 +77,14 @@ ucp_tag_offload_release_buf(ucp_request_t *req)
     }
 }
 
+static UCS_F_ALWAYS_INLINE void 
+ucp_tag_offload_setup_rndv_reply(ucp_worker_iface_t *wiface, ucp_request_t *req) 
+{
+    if (req->recv.op_attr & UCP_OP_ATTR_FIELD_EPH) {
+
+    }
+}
+
 /* Tag consumed by the transport - need to remove it from expected queue */
 UCS_PROFILE_FUNC_VOID(ucp_tag_offload_tag_consumed, (self),
                       uct_tag_context_t *self)

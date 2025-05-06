@@ -1819,7 +1819,8 @@ struct uct_tag_context {
 
      /** Offload Operation Context to setup operation dependencies. If not null, then
       *  it will be used by the corresponding operation. */ 
-    uct_op_ctx_h op_ctx;
+     uct_op_ctx_h op_ctx;
+     uct_ep_h     reply_ep_h;
 
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];
