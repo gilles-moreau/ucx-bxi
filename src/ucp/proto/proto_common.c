@@ -472,6 +472,7 @@ ucp_proto_common_find_lanes(const ucp_proto_init_params_t *params,
     ucp_lane_map_t lane_map;
     char lane_desc[64];
     size_t max_iov;
+    uint32_t op_attr_mask;
 
     if (max_lanes == 0) {
         return 0;
@@ -493,6 +494,14 @@ ucp_proto_common_find_lanes(const ucp_proto_init_params_t *params,
         /* Generic/IOV datatype cannot be used with zero-copy send */
         ucs_trace("datatype %s cannot be used with zcopy",
                   ucp_datatype_class_names[select_param->dt_class]);
+        goto out;
+    }
+
+    op_attr_mask = ucp_proto_select_op_attr_unpack(select_param->op_attr);
+    if ((op_attr_mask & UCP_OP_ATTR_FLAG_OP_OFFLOAD) && 
+        (!(flags & UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD))) {
+        ucs_trace("Operation offload requested which can be used only "
+                  "with zcopy.");
         goto out;
     }
 

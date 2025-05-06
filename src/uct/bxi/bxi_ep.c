@@ -505,10 +505,11 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           unsigned header_length, const uct_iov_t *iov,
                           size_t iovcnt, unsigned flags, uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  ptl_iovec_t     *ptl_iov;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  ucs_status_t      status;
+  ptl_iovec_t      *ptl_iov;
+  uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_op_ctx_t *op_ctx;
   uct_bxi_iface_send_op_t    *op;
   uct_bxi_recv_block_params_t params;
   uct_bxi_recv_block_t       *block;
@@ -563,10 +564,30 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
           (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len, header, header_length);
 
   UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
-  //TODO: implement triggered operation
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, hdr));
+
+  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+    if (ucs_list_length(&comp->op_head) > 1) {
+      status =
+              uct_bxi_ep_op_ctx_multiple(tl_ep->iface, &comp->op_head, &op_ctx);
+      if (status != UCS_OK) {
+        goto err;
+      }
+    } else {
+      op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t,
+                                     super.elem);
+    }
+    ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+
+    status = uct_bxi_wrap(PtlTriggeredPut(
+            iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+            ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
+            tag, 0, op, 0, op_ctx->cth, op_ctx->threshold));
+  } else {
+
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
+  }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
   }
