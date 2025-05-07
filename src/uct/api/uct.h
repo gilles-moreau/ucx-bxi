@@ -434,10 +434,11 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_EAGER_BCOPY UCS_BIT(51) /**< Hardware tag matching bcopy eager support */
 #define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
-#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(54) /**< Hardware tag matching operation offload support */
+#define UCT_IFACE_FLAG_TAG_GET_ZCOPY   UCS_BIT(54) /**< Hardware tag matching get support */
+#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(55) /**< Hardware tag matching operation offload support */
 
         /* Interface capability */
-#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(55) /**< Interface is inter-node capable */
+#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(56) /**< Interface is inter-node capable */
 /**
  * @}
  */
@@ -3405,6 +3406,54 @@ UCT_INLINE_API ucs_status_t uct_ep_tag_eager_zcopy(uct_ep_h ep, uct_tag_t tag,
                                              comp);
 }
 
+/**
+ * @ingroup UCT_TAG
+ * @brief Get zcopy tagged-send operation.
+ *
+ * This routine reads data using @ref uct_zcopy_protocol_desc "zcopy"
+ * tag protocol. Tag means that data is matched remotely using hardware 
+ * capabilities.
+ * The input data (which has to be previously registered) in @a iov array of
+ * @ref uct_iov_t structures sent to remote side ("gather output"). Buffers in
+ * @a iov are processed in array order, so the function complete @a iov[0]
+ * before proceeding to @a iov[1], and so on.
+ *
+ * @note The resulted data length must not be larger than the corresponding
+ *       @a max_zcopy value in @ref uct_iface_attr.
+ *
+ * @param [in]  ep             Destination endpoint handle.
+ * @param [in]  tag            Tag to use for the eager message.
+ * @param [in]  imm            Immediate value which will be available to the
+ *                             receiver.
+ * @param [in]  iov            Points to an array of @ref uct_iov_t structures.
+ *                             A particular structure pointer must be a valid address.
+ *                             A NULL terminated array is not required.
+ * @param [in]  iovcnt         Size of the @a iov array. If @a iovcnt is zero, the
+ *                             data is considered empty. Note that @a iovcnt is
+ *                             limited by the corresponding @a max_iov value in
+ *                             @ref uct_iface_attr.
+ * @param [in]  remote_offset  Offset wihtin the remote memory descriptor.
+ * @param [in]  flags          Tag message flags, see @ref uct_msg_flags.
+ * @param [in]  comp           Completion callback which will be called when the data
+ *                             is reliably received by the peer, and the buffer
+ *                             can be reused or invalidated.
+ *
+ * @return UCS_OK              - operation completed successfully.
+ * @return UCS_ERR_NO_RESOURCE - could not start the operation due to lack of
+ *                               send resources.
+ * @return UCS_INPROGRESS      - operation started, and @a comp will be used to
+ *                               notify when it's completed.
+ */
+UCT_INLINE_API ucs_status_t uct_ep_tag_get_zcopy(uct_ep_h ep, uct_tag_t tag,
+                                                 const uct_iov_t *iov,
+                                                 size_t iovcnt,
+                                                 uint64_t remote_offset,
+                                                 unsigned flags,
+                                                 uct_completion_t *comp)
+{
+    return ep->iface->ops.ep_tag_get_zcopy(ep, tag, iov, iovcnt, 
+                                           remote_offset, flags, comp);
+}
 
 /**
  * @ingroup UCT_TAG

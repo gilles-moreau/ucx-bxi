@@ -173,3 +173,21 @@ ucp_proto_t ucp_tag_rndv_proto = {
     .abort    = ucp_proto_rndv_rts_abort,
     .reset    = ucp_proto_rndv_rts_reset
 };
+
+ucs_status_t 
+ucp_tag_offload_rndv_get(ucp_worker_t *worker, ucp_request_t *recv_req) 
+{
+    ucp_rndv_rts_hdr_t rts;
+
+    ucs_assert(recv_req->recv.reply_ep != NULL);
+
+    rts.size = recv_req->recv.dt_iter.length;
+    rts.sreq.ep_id = ucp_ep_local_id(recv_req->recv.reply_ep);
+    rts.sreq.req_id = 0;
+    rts.address = 0;
+
+    ucp_proto_rndv_receive_start(worker, recv_req, &rts, NULL, 0);
+
+    return UCS_OK;
+}
+

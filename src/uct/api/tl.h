@@ -162,6 +162,13 @@ typedef ucs_status_t (*uct_ep_tag_eager_zcopy_func_t)(uct_ep_h ep,
                                                       unsigned flags,
                                                       uct_completion_t *comp);
 
+typedef ucs_status_t (*uct_ep_tag_get_zcopy_func_t)(uct_ep_h ep, uct_tag_t tag,
+                                                    const uct_iov_t *iov,
+                                                    size_t iovcnt,
+                                                    uint64_t remote_offset,
+                                                    unsigned flags,
+                                                    uct_completion_t *comp);
+
 typedef ucs_status_ptr_t (*uct_ep_tag_rndv_zcopy_func_t)(uct_ep_h ep,
                                                          uct_tag_t tag,
                                                          const void *header,
@@ -329,6 +336,7 @@ typedef struct uct_iface_ops {
     uct_ep_tag_eager_short_func_t       ep_tag_eager_short;
     uct_ep_tag_eager_bcopy_func_t       ep_tag_eager_bcopy;
     uct_ep_tag_eager_zcopy_func_t       ep_tag_eager_zcopy;
+    uct_ep_tag_get_zcopy_func_t         ep_tag_get_zcopy;
     uct_ep_tag_rndv_zcopy_func_t        ep_tag_rndv_zcopy;
     uct_ep_tag_rndv_cancel_func_t       ep_tag_rndv_cancel;
     uct_ep_tag_rndv_request_func_t      ep_tag_rndv_request;

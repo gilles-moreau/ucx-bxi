@@ -35,21 +35,22 @@ BEGIN_C_DECLS
  * This enumeration defines all available UCT operations.
  */
 typedef enum uct_ep_operation {
-    UCT_EP_OP_AM_SHORT,     /**< Short active message */
-    UCT_EP_OP_AM_BCOPY,     /**< Buffered active message */
-    UCT_EP_OP_AM_ZCOPY,     /**< Zero-copy active message */
-    UCT_EP_OP_PUT_SHORT,    /**< Short put */
-    UCT_EP_OP_PUT_BCOPY,    /**< Buffered put */
-    UCT_EP_OP_PUT_ZCOPY,    /**< Zero-copy put */
-    UCT_EP_OP_GET_SHORT,    /**< Short get */
-    UCT_EP_OP_GET_BCOPY,    /**< Buffered get */
-    UCT_EP_OP_GET_ZCOPY,    /**< Zero-copy get */
-    UCT_EP_OP_EAGER_SHORT,  /**< Tag matching short eager */
-    UCT_EP_OP_EAGER_BCOPY,  /**< Tag matching bcopy eager */
-    UCT_EP_OP_EAGER_ZCOPY,  /**< Tag matching zcopy eager */
-    UCT_EP_OP_RNDV_ZCOPY,   /**< Tag matching rendezvous */
-    UCT_EP_OP_ATOMIC_POST,  /**< Atomic post */
-    UCT_EP_OP_ATOMIC_FETCH, /**< Atomic fetch */
+    UCT_EP_OP_AM_SHORT,      /**< Short active message */
+    UCT_EP_OP_AM_BCOPY,      /**< Buffered active message */
+    UCT_EP_OP_AM_ZCOPY,      /**< Zero-copy active message */
+    UCT_EP_OP_PUT_SHORT,     /**< Short put */
+    UCT_EP_OP_PUT_BCOPY,     /**< Buffered put */
+    UCT_EP_OP_PUT_ZCOPY,     /**< Zero-copy put */
+    UCT_EP_OP_GET_SHORT,     /**< Short get */
+    UCT_EP_OP_GET_BCOPY,     /**< Buffered get */
+    UCT_EP_OP_GET_ZCOPY,     /**< Zero-copy get */
+    UCT_EP_OP_EAGER_SHORT,   /**< Tag matching short eager */
+    UCT_EP_OP_EAGER_BCOPY,   /**< Tag matching bcopy eager */
+    UCT_EP_OP_EAGER_ZCOPY,   /**< Tag matching zcopy eager */
+    UCT_EP_OP_RNDV_GET,      /**< Tag matching get zcopy */
+    UCT_EP_OP_RNDV_ZCOPY,    /**< Tag matching rendezvous */
+    UCT_EP_OP_ATOMIC_POST,   /**< Atomic post */
+    UCT_EP_OP_ATOMIC_FETCH,  /**< Atomic fetch */
     UCT_EP_OP_LAST
 } uct_ep_operation_t;
 

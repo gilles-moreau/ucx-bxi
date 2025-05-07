@@ -23,6 +23,7 @@ typedef struct uct_bxi_mem_desc_param {
   ptl_handle_eq_t eqh;
   void           *start;
   ptl_size_t      length;
+  ptl_handle_ct_t cth;
 } uct_bxi_mem_desc_param_t;
 
 typedef struct uct_bxi_mem_desc {

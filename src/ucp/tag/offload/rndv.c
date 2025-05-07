@@ -238,3 +238,136 @@ ucp_proto_t ucp_tag_rndv_offload_sw_proto = {
     .abort    = ucp_proto_rndv_rts_abort,
     .reset    = ucp_proto_rndv_rts_reset
 };
+
+static void
+ucp_tag_rndv_offload_get_proto_probe(const ucp_proto_init_params_t *init_params)
+{
+    ucp_worker_h worker                      = init_params->worker;
+    ucp_context_h context                    = worker->context;
+    ucp_proto_single_init_params_t params = {
+       .super.super         = *init_params,
+       .super.latency       = 0,
+       .super.overhead      = context->config.ext.proto_overhead_rndv_offload_get,
+       .super.cfg_thresh    = ucp_proto_rndv_thresh(init_params),
+       .super.cfg_priority  = 60,
+       .super.min_length    = 0,
+       .super.max_length    = SIZE_MAX,
+       .super.min_iov       = 0,
+       .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
+       .super.max_frag_offs = ucs_offsetof(uct_iface_attr_t,
+                                           cap.tag.rndv.max_zcopy),
+       .super.max_iov_offs  = ucs_offsetof(uct_iface_attr_t,
+                                           cap.tag.rndv.max_iov),
+       .super.hdr_size      = 0,
+       .super.send_op       = UCT_EP_OP_RNDV_GET,
+       .super.memtype_op    = UCT_EP_OP_LAST,
+       .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SEND_ZCOPY |
+                              UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
+                              UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
+                              UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
+       .super.exclude_map   = 0,
+       .super.reg_mem_info  = ucp_proto_common_select_param_mem_info(
+                                                     init_params->select_param),
+       .lane_type           = UCP_LANE_TYPE_TAG,
+       .tl_cap_flags        = UCT_IFACE_FLAG_TAG_GET_ZCOPY
+    };
+
+    if (!ucp_tag_rndv_check_op_id(init_params) ||
+        !ucp_ep_config_key_has_tag_lane(init_params->ep_config_key)) {
+        return;
+    }
+
+    ucp_proto_single_probe(&params);
+}
+
+static void
+ucp_tag_rndv_offload_get_completion(uct_completion_t *uct_comp)
+{
+    ucp_request_t *req = ucs_container_of(uct_comp, ucp_request_t,
+                                          send.state.uct_comp);
+
+    ucp_send_request_id_release(req);
+    ucp_proto_request_zcopy_complete(req, uct_comp->status);
+}
+
+static ucs_status_t
+ucp_tag_rndv_offload_get_request_init(ucp_request_t *req, ucp_md_map_t md_map,
+                                      uct_completion_callback_t comp_func,
+                                      unsigned uct_reg_flags, unsigned dt_mask)
+{
+    const ucp_proto_single_priv_t *spriv = req->send.proto_config->priv;
+    ucs_status_t status;
+
+    status = ucp_ep_resolve_remote_id(req->send.ep, spriv->super.lane);
+    if (status != UCS_OK) {
+        return status;
+    }
+
+    ucs_assertv(dt_mask == UCS_BIT(UCP_DATATYPE_CONTIG), "dt_mask=0x%x",
+                dt_mask);
+
+    status = ucp_proto_request_zcopy_init(req, md_map, comp_func, uct_reg_flags,
+                                          dt_mask);
+    if (status != UCS_OK) {
+        return status;
+    }
+
+    ucp_send_request_id_alloc(req);
+
+    return UCS_OK;
+}
+
+static ucs_status_t
+ucp_tag_rndv_offload_get_send_func(ucp_request_t *req,
+                                   const ucp_proto_single_priv_t *spriv,
+                                   uct_iov_t *iov)
+{
+    ucs_status_t status;
+    unsigned flags = 0;
+
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        flags = UCT_TAG_OFFLOAD_OPERATION;
+        ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
+                                         req->send.state.dt_iter.type.contig.buffer, 
+                                         req->send.state.dt_iter.length, 
+                                         &req->send.state.uct_comp.op_head, 
+                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+    }
+
+    status = uct_ep_tag_get_zcopy(ucp_ep_get_fast_lane(req->send.ep,
+                                                         spriv->super.lane),
+                                  req->send.msg_proto.tag,
+                                  iov, 1, 0, flags,
+                                  &req->send.state.uct_comp);
+    if (status != UCS_INPROGRESS) {
+        goto err;
+    }
+
+    req->flags |= UCP_REQUEST_FLAG_OFFLOADED;
+
+err:
+    return status;
+}
+
+UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_rndv_offload_get_proto_progress, (self),
+                 uct_pending_req_t *self)
+{
+    ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
+
+    return ucp_proto_zcopy_single_progress(
+            req, UCT_MD_MEM_ACCESS_RMA | UCT_MD_MEM_FLAG_HIDE_ERRORS,
+            ucp_tag_rndv_offload_get_send_func, NULL,
+            ucp_tag_rndv_offload_get_completion, ucp_tag_rndv_offload_get_request_init);
+}
+
+ucp_proto_t ucp_tag_rndv_offload_get_proto = {
+    .name     = "tag/rndv/offload_get",
+    .desc     = "rndv offload get reply",
+    .flags    = 0,
+    .probe    = ucp_tag_rndv_offload_get_proto_probe,
+    .query    = ucp_proto_single_query,
+    .progress = {ucp_tag_rndv_offload_get_proto_progress},
+    .abort    = ucp_proto_request_zcopy_abort,
+    .reset    = ucp_proto_request_zcopy_id_reset 
+};

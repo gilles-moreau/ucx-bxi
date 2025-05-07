@@ -37,6 +37,7 @@ const char *uct_ep_operation_names[] = {
     [UCT_EP_OP_EAGER_BCOPY]  = "eager_bcopy",
     [UCT_EP_OP_EAGER_ZCOPY]  = "eager_zcopy",
     [UCT_EP_OP_RNDV_ZCOPY]   = "rndv_zcopy",
+    [UCT_EP_OP_RNDV_GET]     = "rndv_get",
     [UCT_EP_OP_ATOMIC_POST]  = "atomic_post",
     [UCT_EP_OP_ATOMIC_FETCH] = "atomic_fetch",
     [UCT_EP_OP_LAST]         = NULL

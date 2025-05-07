@@ -55,6 +55,7 @@
     _macro(ucp_rndv_rkey_ptr_mtype_proto) \
     _macro(ucp_tag_rndv_offload_proto) \
     _macro(ucp_tag_rndv_offload_sw_proto) \
+    _macro(ucp_tag_rndv_offload_get_proto) \
     _macro(ucp_tag_offload_eager_bcopy_single_proto) \
     _macro(ucp_am_eager_short_proto) \
     _macro(ucp_am_eager_single_bcopy_proto) \
@@ -94,6 +95,7 @@ const char *ucp_operation_names[] = {
     [UCP_OP_ID_AMO_CSWAP]      = "amo_cswap",
     [UCP_OP_ID_RNDV_SEND]      = "rndv_send",
     [UCP_OP_ID_RNDV_RECV]      = "rndv_recv",
+    [UCP_OP_ID_RNDV_GET]       = "rndv_get",
     [UCP_OP_ID_RNDV_RECV_DROP] = "rndv_recv_drop",
     [UCP_OP_ID_LAST]           = NULL
 };
@@ -111,6 +113,7 @@ const char *ucp_operation_descs[] = {
     [UCP_OP_ID_AMO_CSWAP]      = "atomic compare-and-swap by ucp_atomic_op*",
     [UCP_OP_ID_RNDV_SEND]      = "rendezvous data send",
     [UCP_OP_ID_RNDV_RECV]      = "rendezvous data fetch",
+    [UCP_OP_ID_RNDV_GET]       = "rendezvous data get",
     [UCP_OP_ID_RNDV_RECV_DROP] = "rendezvous data drop",
     [UCP_OP_ID_LAST]           = NULL
 };
