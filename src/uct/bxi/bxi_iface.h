@@ -34,8 +34,9 @@ enum {
 
 /* Operation flags */
 enum {
-  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
-  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE   = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH   = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD = UCS_BIT(2), /* Send OP used its own MD */
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -113,6 +114,8 @@ typedef struct uct_bxi_iface_send_op {
       uct_unpack_callback_t unpack_cb;  /* Unpack callback for GET OP */
       void                 *unpack_arg; /* Unpack user arg for GET OP */
     } get;
+    struct {
+    } rndv_get;
     struct {
       uct_bxi_recv_block_t *block; /* Necessary in case of OP cancel */
       uct_tag_context_t    *ctx;   /* Tag context attached from target ME. */

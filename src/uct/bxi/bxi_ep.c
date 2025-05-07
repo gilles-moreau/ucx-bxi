@@ -583,7 +583,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
             tag, 0, op, 0, op_ctx->cth, op_ctx->threshold));
   } else {
-
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, hdr));
@@ -635,6 +634,11 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
                    "tag_rndv_request");
   UCT_BXI_CHECK_IFACE_RES(iface);
 
+  //NOTE: rndv_request cannot be offloaded since the rest of the protocol has
+  //      to be done in software. This is the case with generic datatype or
+  //      multiple iov since current hardwares do not support it.
+  ucs_assert(!(flags & UCT_TAG_OFFLOAD_OPERATION));
+
   /* Allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
                                     NULL, uct_bxi_send_op_no_completion,
@@ -643,7 +647,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   memcpy(op + 1, header, header_length);
 
-  //TODO: implement triggered operation
   UCT_BXI_HDR_SET(hdr, 0, UCT_BXI_TAG_PROT_RNDV_SW);
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                header_length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -657,6 +660,109 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
+
+err:
+  return status;
+}
+
+static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
+        uct_bxi_ep_t *ep, uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op,
+        uct_tag_t tag, ptl_iovec_t *iov, size_t iovcnt, uint64_t remote_offset,
+        uct_completion_t *comp)
+
+{
+  ucs_status_t             status;
+  uct_bxi_op_ctx_t        *op_ctx;
+  uct_bxi_mem_desc_param_t mem_desc_param;
+
+  //NOTE: for now, get tag is only supported to perform the get
+  //      operation within the rendez-vous protocol. As a consequence,
+  //      it will only depend on the operation context from the associated
+  //      receive.
+  ucs_assert(ucs_list_length(&comp->op_head) == 1);
+  op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t, super.elem);
+  ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+
+  /* Create MD and associate operation context counter for it to be incremented 
+   * on operation completion. */
+  mem_desc_param.eqh     = iface->tx.eqh;
+  mem_desc_param.start   = iov->iov_base;
+  mem_desc_param.length  = iov->iov_len;
+  mem_desc_param.options = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
+  mem_desc_param.flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
+  mem_desc_param.cth     = op_ctx->cth;
+  status = uct_bxi_md_mem_desc_create(uct_bxi_iface_md(iface), &mem_desc_param,
+                                      &op->mem_desc);
+  if (status != UCS_OK) {
+    return status;
+  }
+
+  status = uct_bxi_wrap(
+          PtlTriggeredGet(iface->tx.mem_desc->mdh, (ptl_size_t)iov->iov_base,
+                          iov->iov_len, ep->dev_addr.pid, ep->iface_addr.tag,
+                          tag, 0, op, op_ctx->cth, op_ctx->threshold));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
+  }
+
+  /* Increase operation counter threshold. There will be two increments:
+   * - one for the RTS operation that will match the ME;
+   * - one for the completion of the GET operation. */
+  op_ctx->threshold++;
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
+
+  return status;
+}
+
+ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
+                                      const uct_iov_t *iov, size_t iovcnt,
+                                      uint64_t remote_offset, unsigned flags,
+                                      uct_completion_t *comp)
+{
+  ucs_status_t     status;
+  size_t           iov_size;
+  ptl_iovec_t     *ptl_iov;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_BXI_CHECK_EP(ep);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface);
+
+  /* First, get OP while setting appropriate completion callback */
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
+                               uct_bxi_send_comp_op_handler,
+                               uct_iov_total_length(iov, iovcnt));
+
+  //TODO: sometimes, implement support for PTL_IOVEC for MD.
+  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_size_t));
+  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+  UCT_SKIP_ZERO_LENGTH(iov_size);
+
+  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+    status = uct_bxi_offload_tag_get(ep, iface, op, tag, ptl_iov, iov_size,
+                                     remote_offset, comp);
+  } else {
+    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
+                                 (ptl_size_t)ptl_iov->iov_base,
+                                 ptl_iov->iov_len, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, remote_offset, op));
+  }
+
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlGet bcopy return %d", status);
+  } else {
+    status = UCS_INPROGRESS;
+  }
+  /* Append operation descriptor to completion queue and increment 
+   * memory descriptor sequence number. */
+  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  uct_bxi_ep_enable_flush(ep);
+
+  UCT_TL_EP_STAT_OP(&ep->super, TAG, GET_ZCOPY, length);
+  uct_bxi_log_put(iface);
 
 err:
   return status;

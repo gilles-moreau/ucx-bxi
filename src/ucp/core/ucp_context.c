@@ -509,8 +509,8 @@ static ucs_config_field_t ucp_context_config_table[] = {
    " 'n' : Select RMA/AMO lanes according to performance charasteristics",
    ucs_offsetof(ucp_context_config_t, prefer_offload), UCS_CONFIG_TYPE_BOOL},
 
-  {"PROTO_OVERHEAD", "single:5ns,multi:10ns,rndv_offload:40ns,rndv_rtr:40ns,"
-                     "rndv_rts:275ns,sw:40ns,rkey_ptr:0",
+  {"PROTO_OVERHEAD", "single:5ns,multi:10ns,rndv_offload:40ns,rndv_offload_get:70ns"
+                     ",rndv_rtr:40ns,rndv_rts:275ns,sw:40ns,rkey_ptr:0",
    "Protocol overhead", 0,
     UCS_CONFIG_TYPE_KEY_VALUE(UCS_CONFIG_TYPE_TIME,
         {"single", "overhead of single-lane protocol",
@@ -519,6 +519,8 @@ static ucs_config_field_t ucp_context_config_table[] = {
          ucs_offsetof(ucp_context_config_t, proto_overhead_multi)},
         {"rndv_offload", "overhead of rendezvous offload protocol",
          ucs_offsetof(ucp_context_config_t, proto_overhead_rndv_offload)},
+        {"rndv_offload_get", "overhead of rendezvous offload get protocol",
+         ucs_offsetof(ucp_context_config_t, proto_overhead_rndv_offload_get)},
         {"rndv_rtr", "overhead of rendezvous RTR protocol",
          ucs_offsetof(ucp_context_config_t, proto_overhead_rndv_rtr)},
         {"rndv_rts", "overhead of rendezvous RTS protocol",

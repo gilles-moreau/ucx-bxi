@@ -80,9 +80,11 @@ ucp_tag_offload_release_buf(ucp_request_t *req)
 static UCS_F_ALWAYS_INLINE void 
 ucp_tag_offload_setup_rndv_reply(ucp_worker_iface_t *wiface, ucp_request_t *req) 
 {
-    if (req->recv.op_attr & UCP_OP_ATTR_FIELD_EPH) {
-
+    if (!(req->recv.op_attr & UCP_OP_ATTR_FIELD_EPH)) {
+       return;
     }
+
+
 }
 
 /* Tag consumed by the transport - need to remove it from expected queue */
@@ -368,6 +370,13 @@ ucp_tag_offload_do_post(ucp_request_t *req)
         ucp_tag_offload_release_buf(req);
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_TAG_EXCEED);
         return status;
+    }
+
+    if (req->recv.reply_ep != NULL) {
+        status = ucp_tag_offload_rndv_get(worker, req);
+        if (status != UCS_OK) {
+            return status;
+        }
     }
 
     UCP_WORKER_STAT_TAG_OFFLOAD(worker, POSTED);

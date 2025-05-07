@@ -475,126 +475,168 @@ err:
         return status;
     }
 
-    void delete_offload_sched(ucp_offload_sched_h ctx) {
-        ucp_offload_sched_fini(ctx);
+    void delete_offload_sched(ucp_offload_sched_h sched) {
+        ucp_offload_sched_fini(sched);
     }
 
+    ucs_status_t offload_send_exp(size_t length, int is_rndv) {
+        ucp_offload_sched_h sched;
+        ucs_status_ptr_t req;
+        ucp_request_param_t param = {};
+        std::vector<ucs_status_ptr_t> reqs;
+
+        activate_offload(sender());
+
+        receiver().connect(&sender(), get_ep_params());
+
+        ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
+
+        // Get eager length
+        const ucp_tag_t ftag = 0x11, btag = 0x22;
+        std::vector<uint8_t> sendbuf(length);
+        std::vector<uint8_t> recvbuf(length);
+        std::vector<uint8_t> sendrecvbuf(length);
+
+        // Prepare receive from which receiver's send depends
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
+        param.schedh   = sched;
+        param.reply_ep = !is_rndv ? NULL : sender().ep();
+        req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                               length, ftag, 0xffff, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        // Schedule triggered send operation of the receiver 
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.schedh       = sched;
+        req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
+                               recvbuf.size(), btag, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Prepare the receive operation of the sender. No offload sched is provided
+        // since sender's operations are not offloaded.
+        param = {};
+        req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
+                               length, btag, 0xffff, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Finally, send the first operation from the sender
+        req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+                               recvbuf.size(), ftag, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        while (!reqs.empty()) {
+            request_wait(reqs.back());
+            reqs.pop_back();
+        }
+        delete_offload_sched(sched);
+
+        return UCS_OK;
+    }
+
+    ucs_status_t offload_send_unexp(size_t length, int is_rndv) {
+        ucp_offload_sched_h sched;
+        ucs_status_ptr_t req;
+        ucp_request_param_t param = {};
+        std::vector<ucs_status_ptr_t> reqs;
+
+        activate_offload(sender());
+
+        receiver().connect(&sender(), get_ep_params());
+
+        ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
+
+        // Get eager length
+        const ucp_tag_t ftag = 0x11, btag = 0x22;
+        std::vector<uint8_t> sendbuf(length);
+        std::vector<uint8_t> recvbuf(length);
+        std::vector<uint8_t> sendrecvbuf(length);
+
+        // First, send the first operation from the sender
+        req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+                               recvbuf.size(), ftag, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+
+        // Progress only the sender so that message is not inserted into the 
+        // matching lists of the receiver, but received by transport.
+        request_wait(req, {&sender()});
+
+        // Prepare receive from which receiver's send depends
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | !is_rndv ? : UCP_OP_ATTR_FIELD_EPH;
+        param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
+        param.schedh   = sched;
+        param.reply_ep = !is_rndv ? NULL : sender().ep();
+        req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                               length, ftag, 0xffff, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Prepare the triggered send operation of the receiver 
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh       = sched;
+        req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
+                               recvbuf.size(), btag, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        // Prepare the receive operation of the sender. No offload sched is provided
+        // since sender's operations are not offloaded.
+        param = {};
+        req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
+                               length, btag, 0xffff, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        while (!reqs.empty()) {
+            request_wait(reqs.back());
+            reqs.pop_back();
+        }
+
+        delete_offload_sched(sched);
+
+        return UCS_OK;
+    }
 };
 
-UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp_trig)
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_exp)
 {
-    ucp_offload_sched_h sched;
-    ucs_status_ptr_t req;
-    activate_offload(sender());
-
-    receiver().connect(&sender(), get_ep_params());
-
-    // Must create offload sched before memory is allocated so calls can be 
-    // intercepted.
-    ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
-
-    // Get eager length
-    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 10;
-    const ucp_tag_t ftag = 0x11, btag = 0x22;
-    std::vector<uint8_t> sendbuf(length);
-    std::vector<uint8_t> recvbuf(length);
-    std::vector<uint8_t> sendrecvbuf(length);
-
-    std::vector<ucs_status_ptr_t> reqs;
-
-    // Prepare receive from which receiver's send depends
-    ucp_request_param_t param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .schedh = sched};
-    req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
-                                             length, ftag, 0xffff, &param);
-    if (UCS_PTR_IS_PTR(req)) {
-        reqs.push_back(req);
-    } else {
-        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
-    }
-
-    // Prepare the triggered send operation of the receiver 
-    req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
-                                             recvbuf.size(), btag, &param);
-    if (UCS_PTR_IS_PTR(req)) {
-        reqs.insert(reqs.begin(), req);
-    } else {
-        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
-    }
-
-    // Prepare the receive operation of the sender. No offload sched is provided
-    // since sender's operations are not offloaded.
-    param = {};
-    req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
-                                               length, btag, 0xffff, &param);
-    if (UCS_PTR_IS_PTR(req)) {
-        reqs.insert(reqs.begin(), req);
-    } else {
-        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
-    }
-
-    // Finally, send the first operation from the sender
-    req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
-                                             recvbuf.size(), ftag, &param);
-    if (UCS_PTR_IS_PTR(req)) {
-        reqs.push_back(req);
-    } else {
-        ASSERT_EQ(UCS_PTR_RAW_STATUS(req), UCS_OK);
-    }
-
-    while (!reqs.empty()) {
-        request_wait(reqs.back());
-        reqs.pop_back();
-    }
-    delete_offload_sched(sched);
+    //FIXME: Get correct size. The size depends on the UCS_ALLOCA_MAX stuff
+    ASSERT_UCS_OK(offload_send_exp(ucp_ep_config(sender().ep())->tag.eager.max_zcopy - 10, 0));
 }
 
-UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_unexp_trig)
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_unexp)
 {
-    ucp_offload_sched_h sched;
-    activate_offload(sender());
+   ASSERT_UCS_OK(offload_send_unexp(ucp_ep_config(sender().ep())->tag.eager.max_zcopy - 10, 0));
+}
 
-    receiver().connect(&sender(), get_ep_params());
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_rndv_exp, "RNDV_THRESH=1000")
+{
+   ASSERT_UCS_OK(offload_send_exp(2048, 1));
+}
 
-    // Must create offload sched before memory is allocated so calls can be 
-    // intercepted.
-    ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
-
-    // Get eager length
-    size_t length = ucp_ep_config(sender().ep())->tag.rndv.am_thresh.remote - 10;
-    const ucp_tag_t ftag = 0x11, btag = 0x22;
-    std::vector<uint8_t> sendbuf(length);
-    std::vector<uint8_t> recvbuf(length);
-    std::vector<uint8_t> sendrecvbuf(length);
-
-    // First, send the first operation from the sender
-    ucp_request_param_t param = {};
-    ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
-                                             recvbuf.size(), ftag, &param);
-
-    // Progress only the sender so that message is not inserted into the 
-    // matching lists of the receiver, but received by transport.
-    request_wait(sreq, {&sender()});
-
-    // Prepare receive from which receiver's send depends
-    param = {.op_attr_mask = UCP_OP_ATTR_FIELD_OFFH, .schedh = sched};
-    ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
-                                             length, ftag, 0xffff, &param);
-
-    // Prepare the triggered send operation of the receiver 
-    ucs_status_ptr_t treq = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
-                                             recvbuf.size(), btag, &param);
-
-    // Prepare the receive operation of the sender. No offload sched is provided
-    // since sender's operations are not offloaded.
-    param = {};
-    ucs_status_ptr_t rt_req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
-                                               length, btag, 0xffff, &param);
-
-    request_wait(rreq);
-    request_wait(treq);
-    request_wait(rt_req);
-
-    delete_offload_sched(sched);
+UCS_TEST_P(test_ucp_tag_offload_triggered, send_rndv_unexp, "RNDV_THRESH=1000")
+{
+   ASSERT_UCS_OK(offload_send_unexp(2048, 1));
 }
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload_triggered)

@@ -119,7 +119,13 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
+    uct_bxi_md_mem_desc_fini(op->mem_desc);
+  }
+
+  /* Reset operation flags. */
   op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
+                 UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
                  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
   op->handler(op, op + 1);
 }
@@ -505,7 +511,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_GET_ZCOPY |
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   return UCS_OK;
 }
@@ -1397,6 +1404,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_tag_eager_zcopy       = uct_bxi_ep_tag_eager_zcopy,
         .ep_tag_eager_bcopy       = uct_bxi_ep_tag_eager_bcopy,
         .ep_tag_eager_short       = ucs_empty_function_return_unsupported,
+        .ep_tag_get_zcopy         = uct_bxi_ep_tag_get_zcopy,
         .ep_tag_rndv_cancel       = uct_bxi_ep_tag_rndv_cancel,
         .ep_tag_rndv_request      = uct_bxi_ep_tag_rndv_request,
         .ep_atomic_cswap64        = uct_bxi_ep_atomic_cswap64,

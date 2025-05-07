@@ -197,6 +197,7 @@ typedef struct ucp_context_config {
     double                                 proto_overhead_single;
     double                                 proto_overhead_multi;
     double                                 proto_overhead_rndv_offload;
+    double                                 proto_overhead_rndv_offload_get;
     double                                 proto_overhead_rndv_rts;
     double                                 proto_overhead_rndv_rtr;
     double                                 proto_overhead_sw;

@@ -75,7 +75,7 @@ ucp_tag_send_req(ucp_request_t *req, size_t dt_count,
         zcopy_thresh = rndv_thresh;
     }
 
-    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_OFFH)) {
+    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
         req->send.tag_offload.sched = param->schedh;
         req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
     }
