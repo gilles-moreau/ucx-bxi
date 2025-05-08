@@ -1818,10 +1818,11 @@ struct uct_tag_context {
      void (*rndv_cb)(uct_tag_context_t *self, uct_tag_t stag, const void *header,
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
-     /** Offload Operation Context to setup operation dependencies. If not null, then
-      *  it will be used by the corresponding operation. */ 
+     /** 
+      *  Offload Operation Context to setup operation dependencies. If not null, then
+      *  it will be used by the corresponding operation. 
+      */ 
      uct_op_ctx_h op_ctx;
-     uct_ep_h     reply_ep_h;
 
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];

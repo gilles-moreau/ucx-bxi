@@ -501,7 +501,7 @@ err:
         param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
         param.schedh   = sched;
-        param.reply_ep = !is_rndv ? NULL : sender().ep();
+        param.reply_ep = !is_rndv ? NULL : receiver().ep();
         req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
                                length, ftag, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -576,7 +576,7 @@ err:
         request_wait(req, {&sender()});
 
         // Prepare receive from which receiver's send depends
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | !is_rndv ? : UCP_OP_ATTR_FIELD_EPH;
+        param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
         param.schedh   = sched;
         param.reply_ep = !is_rndv ? NULL : sender().ep();
@@ -588,7 +588,7 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Prepare the triggered send operation of the receiver 
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.schedh       = sched;
         req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                recvbuf.size(), btag, &param);

@@ -255,7 +255,7 @@ ucp_tag_rndv_offload_get_proto_probe(const ucp_proto_init_params_t *init_params)
        .super.min_iov       = 0,
        .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
        .super.max_frag_offs = ucs_offsetof(uct_iface_attr_t,
-                                           cap.tag.rndv.max_zcopy),
+                                           cap.tag.recv.max_zcopy),
        .super.max_iov_offs  = ucs_offsetof(uct_iface_attr_t,
                                            cap.tag.rndv.max_iov),
        .super.hdr_size      = 0,
@@ -264,6 +264,7 @@ ucp_tag_rndv_offload_get_proto_probe(const ucp_proto_init_params_t *init_params)
        .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SEND_ZCOPY |
                               UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
                               UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
+                              UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
                               UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
        .super.exclude_map   = 0,
        .super.reg_mem_info  = ucp_proto_common_select_param_mem_info(
