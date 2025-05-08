@@ -824,9 +824,7 @@ UCS_PROFILE_FUNC_VOID(ucp_proto_rndv_receive_start,
 
     if (ucs_likely(rts->size <= recv_req->recv.dt_iter.length)) {
         ucp_proto_rndv_check_rkey_length(rts->address, rkey_length, "rts");
-        //FIXME: find other to chose operation id.
-        op_id            = recv_req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION ?
-                           UCP_OP_ID_RNDV_GET : UCP_OP_ID_RNDV_RECV;
+        op_id            = UCP_OP_ID_RNDV_RECV;
         recv_req->status = UCS_OK;
         UCS_PROFILE_CALL_VOID(ucp_datatype_iter_move, &req->send.state.dt_iter,
                               &recv_req->recv.dt_iter, rts->size, &sg_count);

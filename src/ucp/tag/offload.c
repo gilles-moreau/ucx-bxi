@@ -362,10 +362,11 @@ ucp_tag_offload_do_post(ucp_request_t *req)
         return status;
     }
 
-    if (req->recv.reply_ep != NULL) {
-        ucs_assert(wiface->attr.cap.flags & UCT_IFACE_FLAG_TAG_GET_ZCOPY);
-        status = ucp_tag_offload_rndv_get(worker, req);
+    if ((req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) && 
+        (req->recv.reply_ep != NULL)) {
+        status = ucp_tag_offload_try_rndv_get(wiface, req);
         if (status != UCS_OK) {
+            ucp_tag_offload_release_buf(req);
             return status;
         }
     }

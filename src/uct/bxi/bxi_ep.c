@@ -685,9 +685,20 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   //      operation within the rendez-vous protocol. As a consequence,
   //      it will only depend on the operation context from the associated
   //      receive.
-  ucs_assert(ucs_list_length(&comp->op_head) == 1);
+  ucs_assert((ucs_list_length(&comp->op_head) == 1));
+
+  /* Retrieve operation context. */
   op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t, super.elem);
-  ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+
+  /* Counter must have been allocated and block attached to the 
+   * operation handle. */
+  ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE) &&
+             (op_ctx->block != NULL));
+
+  /* Buffer and size of the get operation should be the same as the receive 
+   * block since they correspond to the same protocol. */
+  ucs_assert((op_ctx->block->size == iov->iov_len) &&
+             (op_ctx->block->start == iov->iov_base));
 
   /* Create MD and associate operation context counter for it to be incremented 
    * on operation completion. */
@@ -716,6 +727,9 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
    * - one for the completion of the GET operation. */
   op_ctx->threshold++;
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
+
+  /* Also, attach operation to the block. */
+  op_ctx->block->op = op;
 
   return status;
 }
@@ -834,7 +848,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     goto err_release_block;
   }
 
-  /* Link the receive block in case of rendez-vous protocol. */
+  /* Link the receive block which will be used in case of rendez-vous protocol. */
   if (op_ctx != NULL) {
     op_ctx->block = block;
   }
@@ -895,6 +909,7 @@ ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h   tl_iface,
   }
 
   op_ctx->threshold = 0;
+  op_ctx->block     = NULL;
 
   status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &op_ctx->cth));
   if (status != UCS_OK) {
