@@ -108,11 +108,22 @@ ucp_tag_rndv_offload_send_func(ucp_request_t *req,
         .md_index = spriv->super.md_index
     };
     void *rndv_op;
+    unsigned flags = 0;
+
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        flags = UCT_TAG_OFFLOAD_OPERATION;
+        ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
+                                         req->send.state.dt_iter.type.contig.buffer, 
+                                         req->send.state.dt_iter.length, 
+                                         &req->send.state.uct_comp.op_head, 
+                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+    }
 
     rndv_op = uct_ep_tag_rndv_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                          spriv->super.lane),
                                     req->send.msg_proto.tag,
-                                    &rndv_hdr, sizeof(rndv_hdr), iov, 1, 0,
+                                    &rndv_hdr, sizeof(rndv_hdr), iov, 1, flags,
                                     &req->send.state.uct_comp);
 
     if (ucs_unlikely(UCS_PTR_IS_ERR(rndv_op))) {
@@ -249,8 +260,9 @@ ucp_tag_rndv_offload_get_proto_probe(const ucp_proto_init_params_t *init_params)
        .super.latency       = 0,
        .super.overhead      = context->config.ext.proto_overhead_rndv_offload_get,
        .super.cfg_thresh    = ucp_proto_rndv_thresh(init_params),
-       .super.cfg_priority  = 60,
-       .super.min_length    = 0,
+       .super.cfg_priority  = 100,
+       .super.min_length    = ucs_offsetof(uct_iface_attr_t,
+                                           cap.tag.eager.max_zcopy),
        .super.max_length    = SIZE_MAX,
        .super.min_iov       = 0,
        .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
@@ -264,7 +276,6 @@ ucp_tag_rndv_offload_get_proto_probe(const ucp_proto_init_params_t *init_params)
        .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SEND_ZCOPY |
                               UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
                               UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
-                              UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
                               UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
        .super.exclude_map   = 0,
        .super.reg_mem_info  = ucp_proto_common_select_param_mem_info(

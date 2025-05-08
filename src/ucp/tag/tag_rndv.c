@@ -91,6 +91,11 @@ ucp_tag_send_start_rndv(ucp_request_t *sreq, const ucp_request_param_t *param)
     ucp_ep_h ep = sreq->send.ep;
     ucs_status_t status;
 
+    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+        ucs_error("Offloaded operation not yet supported with old protocol.");
+        return UCS_ERR_NOT_IMPLEMENTED;
+    }
+
     ucp_trace_req(sreq, "start_rndv to %s buffer %p length %zu mem_type:%s",
                   ucp_ep_peer_name(ep), sreq->send.buffer,
                   sreq->send.length, ucs_memory_type_names[sreq->send.mem_type]);
@@ -175,18 +180,63 @@ ucp_proto_t ucp_tag_rndv_proto = {
 };
 
 ucs_status_t 
-ucp_tag_offload_rndv_get(ucp_worker_t *worker, ucp_request_t *recv_req) 
+ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface, 
+                             ucp_request_t *recv_req) 
 {
-    ucp_rndv_rts_hdr_t rts;
+    uint8_t sg_count;
+    size_t length = recv_req->recv.dt_iter.length;
+    ucp_request_t *req;
+    const ucp_proto_threshold_elem_t *thresh_elem;
+    ucp_worker_t *worker = wiface->worker;
+    ucp_ep_h ep = recv_req->recv.reply_ep;
+    ucp_ep_config_t *ep_config = ucp_ep_config(recv_req->recv.reply_ep);
+    ucp_proto_select_param_t sel_param;
 
-    ucs_assert(recv_req->recv.reply_ep != NULL);
+    ucs_assert((ep != NULL) && 
+               (wiface->attr.cap.flags & UCT_IFACE_FLAG_TAG_GET_ZCOPY));
 
-    rts.size = recv_req->recv.dt_iter.length;
-    rts.sreq.ep_id = ucp_ep_local_id(recv_req->recv.reply_ep);
-    rts.sreq.req_id = 0;
-    rts.address = 0;
+    ucp_proto_select_param_init(&sel_param, UCP_OP_ID_RNDV_GET, 
+                                recv_req->recv.op_attr, 0,
+                                recv_req->recv.dt_iter.dt_class,
+                                &recv_req->recv.dt_iter.mem_info, 1);
 
-    ucp_proto_rndv_receive_start(worker, recv_req, &rts, NULL, 0);
+    thresh_elem = ucp_proto_select_lookup(worker, &ep_config->proto_select, 
+                                          ep->cfg_index,
+                                          UCP_WORKER_CFG_INDEX_NULL, &sel_param, 
+                                          length);
+
+    if (UCS_ENABLE_ASSERT && (thresh_elem == NULL)) {
+        /* There should be not rendez-vous since the message length does not 
+        *  exceed GET min frag size. */
+        return UCS_OK;
+    }
+
+    req = ucp_request_get(worker);
+    if (req == NULL) {
+        ucs_error("failed to allocate rendezvous reply");
+        return UCS_ERR_NO_MEMORY;
+    }
+
+    /* Initialize send request */
+    ucp_proto_request_send_init(req, ep, 0);
+    req->send.tag_offload.ssend_tag = recv_req->recv.tag.tag;
+    req->send.rndv.offset           = 0;
+    ucp_request_set_super(req, recv_req);
+
+    UCS_PROFILE_CALL_VOID(ucp_datatype_iter_move, &req->send.state.dt_iter,
+                          &recv_req->recv.dt_iter, length, &sg_count);
+
+    /* Set pointer to request's protocol configuration */
+    ucs_assert(thresh_elem->proto_config.ep_cfg_index == ep->cfg_index);
+    ucs_assert(thresh_elem->proto_config.rkey_cfg_index == UCP_WORKER_CFG_INDEX_NULL);
+    ucp_proto_request_set_proto(req, &thresh_elem->proto_config, length);
+
+#if ENABLE_DEBUG_DATA
+    recv_req->recv.proto_rndv_config  = req->send.proto_config;
+    recv_req->recv.proto_rndv_request = req;
+#endif
+
+    UCS_PROFILE_CALL_VOID(ucp_request_send, req);
 
     return UCS_OK;
 }

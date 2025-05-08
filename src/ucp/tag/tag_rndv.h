@@ -37,7 +37,7 @@ ucs_status_t ucp_proto_progress_tag_rndv_rts(uct_pending_req_t *self);
 size_t ucp_tag_rndv_proto_rts_pack(void *dest, void *arg);
 
 ucs_status_t 
-ucp_tag_offload_rndv_get(ucp_worker_t *worker, ucp_request_t *recv_req);
+ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface, ucp_request_t *recv_req);
 
 
 static UCS_F_ALWAYS_INLINE ucp_rndv_rts_hdr_t *
