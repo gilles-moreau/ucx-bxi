@@ -497,11 +497,12 @@ ucp_proto_common_find_lanes(const ucp_proto_init_params_t *params,
         goto out;
     }
 
+    //FIXME: There might be a better place to check this.
     op_attr_mask = ucp_proto_select_op_attr_unpack(select_param->op_attr);
     if ((op_attr_mask & UCP_OP_ATTR_FLAG_OP_OFFLOAD) && 
         (!(flags & UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD))) {
         ucs_trace("Operation offload requested which can be used only "
-                  "with zcopy.");
+                  "with zcopy and get.");
         goto out;
     }
 

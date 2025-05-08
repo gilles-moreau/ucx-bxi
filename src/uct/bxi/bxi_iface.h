@@ -129,9 +129,10 @@ typedef struct uct_bxi_iface_send_op {
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_op_ctx {
-  uct_op_ctx_t    super;
-  ptl_handle_ct_t cth;
-  ptl_size_t      threshold;
+  uct_op_ctx_t          super;
+  ptl_handle_ct_t       cth;       /* Handle to the OP counter */
+  ptl_size_t            threshold; /* Threshold at which OP is triggered */
+  uct_bxi_recv_block_t *block;     /* Receive block from rndv protocol */
 } uct_bxi_op_ctx_t;
 
 typedef struct uct_bxi_device_addr {

@@ -120,6 +120,9 @@ err:
   return size;
 }
 
+//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
+//      eager, its size is limited by the seg_size that can be used in receiver's
+//      bounce buffer.
 ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                                  unsigned header_length, const uct_iov_t *iov,
                                  size_t iovcnt, unsigned flags,
@@ -414,6 +417,9 @@ err:
   return size;
 }
 
+//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
+//      eager, its size is limited by the seg_size that can be used in receiver's
+//      bounce buffer.
 ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                         uint64_t imm, const uct_iov_t *iov,
                                         size_t iovcnt, unsigned flags,
@@ -635,8 +641,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   //NOTE: rndv_request cannot be offloaded since the rest of the protocol has
-  //      to be done in software. This is the case with generic datatype or
-  //      multiple iov since current hardwares do not support it.
+  //      to be done in software. This is the case with generic datatype, very
+  //      large message or multiple iov since current hardwares do not support it.
   ucs_assert(!(flags & UCT_TAG_OFFLOAD_OPERATION));
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
@@ -778,7 +784,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   uct_bxi_iface_t            *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
   ptl_handle_ct_t             cth   = PTL_CT_NONE;
   unsigned                    ct_flags = 0;
-  uct_bxi_op_ctx_t           *op_ctx;
+  uct_bxi_op_ctx_t           *op_ctx   = NULL;
   uct_bxi_recv_block_t       *block;
   uct_bxi_recv_block_params_t params;
 
@@ -826,6 +832,11 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
     goto err_release_block;
+  }
+
+  /* Link the receive block in case of rendez-vous protocol. */
+  if (op_ctx != NULL) {
+    op_ctx->block = block;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
