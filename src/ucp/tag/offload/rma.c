@@ -42,7 +42,7 @@ ucp_rma_tag_offload_get_probe(const ucp_proto_init_params_t *init_params)
            .lane_type    = UCP_LANE_TYPE_TAG,
            .tl_cap_flags = UCT_IFACE_FLAG_TAG_GET_ZCOPY};
 
-  if (!ucp_tag_eager_check_op_id(init_params, UCP_OP_ID_TAG_SEND, 1)) {
+  if (!ucp_tag_eager_check_op_id(init_params, UCP_OP_ID_GET_TAG, 1)) {
     return;
   }
 
@@ -54,8 +54,7 @@ ucp_rma_tag_offload_get_send_func(ucp_request_t                 *req,
                                   const ucp_proto_single_priv_t *spriv,
                                   uct_iov_t                     *iov)
 {
-  ucs_status_t status;
-  unsigned     flags = 0;
+  unsigned flags = 0;
 
   if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
     ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
@@ -66,17 +65,9 @@ ucp_rma_tag_offload_get_send_func(ucp_request_t                 *req,
     flags = UCT_TAG_OFFLOAD_OPERATION;
   }
 
-  status = uct_ep_tag_get_zcopy(
+  return uct_ep_tag_get_zcopy(
           ucp_ep_get_fast_lane(req->send.ep, spriv->super.lane),
           req->send.msg_proto.tag, iov, 1, 0, flags, &req->send.state.uct_comp);
-  if (status != UCS_INPROGRESS) {
-    goto err;
-  }
-
-  req->flags |= UCP_REQUEST_FLAG_OFFLOADED;
-
-err:
-  return status;
 }
 
 UCS_PROFILE_FUNC(ucs_status_t, ucp_rma_tag_offload_get_progress, (self),
@@ -93,7 +84,7 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_rma_tag_offload_get_progress, (self),
 
 ucp_proto_t ucp_rma_tag_offload_get_proto = {
         .name     = "tag/rma/offload_get",
-        .desc     = "rma offload get reply",
+        .desc     = "rma offload get",
         .flags    = 0,
         .probe    = ucp_rma_tag_offload_get_probe,
         .query    = ucp_proto_single_query,
