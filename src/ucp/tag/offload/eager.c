@@ -97,14 +97,6 @@ static size_t ucp_eager_tag_offload_pack(void *dest, void *arg)
 
     ucs_assert(req->send.state.dt_iter.offset == 0);
 
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        //FIXME: right now the only way to pass the offloading operation
-        //       context without modifying the API is to pack it in the 
-        //       buffer...
-       *(ucs_list_link_t **)p = &req->send.state.uct_comp.op_head;
-        p = UCS_PTR_BYTE_OFFSET(p, sizeof(ucs_list_link_t *));
-    }
-
     return ucp_datatype_iter_next_pack(&req->send.state.dt_iter,
                                        req->send.ep->worker, SIZE_MAX,
                                        &next_iter, p);
@@ -115,24 +107,13 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
                                          const ucp_proto_single_priv_t *spriv,
                                          uint64_t imm_data)
 {
-    unsigned flags = 0;
     ssize_t packed_len;
-
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
-                                         req->send.state.dt_iter.type.contig.buffer, 
-                                         req->send.state.dt_iter.length, 
-                                         &req->send.state.uct_comp.op_head, 
-                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
-        flags = UCT_TAG_OFFLOAD_OPERATION; 
-    }
 
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
                                         ucp_eager_tag_offload_pack, req, 
-                                        flags);
+                                        0);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }

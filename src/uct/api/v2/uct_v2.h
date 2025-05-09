@@ -44,10 +44,10 @@ typedef enum uct_ep_operation {
     UCT_EP_OP_GET_SHORT,     /**< Short get */
     UCT_EP_OP_GET_BCOPY,     /**< Buffered get */
     UCT_EP_OP_GET_ZCOPY,     /**< Zero-copy get */
+    UCT_EP_OP_GET_TAG_ZCOPY, /**< Tag matching get zcopy */
     UCT_EP_OP_EAGER_SHORT,   /**< Tag matching short eager */
     UCT_EP_OP_EAGER_BCOPY,   /**< Tag matching bcopy eager */
     UCT_EP_OP_EAGER_ZCOPY,   /**< Tag matching zcopy eager */
-    UCT_EP_OP_RNDV_GET,      /**< Tag matching get zcopy */
     UCT_EP_OP_RNDV_ZCOPY,    /**< Tag matching rendezvous */
     UCT_EP_OP_ATOMIC_POST,   /**< Atomic post */
     UCT_EP_OP_ATOMIC_FETCH,  /**< Atomic fetch */

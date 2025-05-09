@@ -53,8 +53,7 @@ ucp_tag_rndv_check_op_id(const ucp_proto_init_params_t *init_params)
 {
     return ucp_proto_init_check_op(init_params,
                                    UCS_BIT(UCP_OP_ID_TAG_SEND) |
-                                   UCS_BIT(UCP_OP_ID_TAG_SEND_SYNC) |
-                                   UCS_BIT(UCP_OP_ID_RNDV_GET));
+                                   UCS_BIT(UCP_OP_ID_TAG_SEND_SYNC));
 }
 
 #endif

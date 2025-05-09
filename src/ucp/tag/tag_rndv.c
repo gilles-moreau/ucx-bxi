@@ -195,7 +195,7 @@ ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface,
     ucs_assert((ep != NULL) && 
                (wiface->attr.cap.flags & UCT_IFACE_FLAG_TAG_GET_ZCOPY));
 
-    ucp_proto_select_param_init(&sel_param, UCP_OP_ID_RNDV_GET, 
+    ucp_proto_select_param_init(&sel_param, UCP_OP_ID_GET_TAG, 
                                 recv_req->recv.op_attr, 0,
                                 recv_req->recv.dt_iter.dt_class,
                                 &recv_req->recv.dt_iter.mem_info, 1);
@@ -240,4 +240,3 @@ ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface,
 
     return UCS_OK;
 }
-
