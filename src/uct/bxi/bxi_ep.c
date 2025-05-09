@@ -68,6 +68,17 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
+static void uct_bxi_get_tag_handler(uct_bxi_iface_send_op_t *op,
+                                    const void              *resp)
+{
+  /* First, invoke tag-related callback. */
+  op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
+                             UCS_OK);
+
+  /* Then, we may push OP back to the memory pool. */
+  ucs_mpool_put_inline(op);
+}
+
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
@@ -540,7 +551,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   params.size  = ptl_iov->iov_len;
   /* ME match bits is the operation sequence number prefixed with a specific 
    * rendez-vous bit sequence. */
-  params.match   = UCT_BXI_RNDV_GET_TAG(iface->tx.mem_desc->sn + 1);
+  params.match   = flags & UCT_TAG_OFFLOAD_OPERATION ?
+                           tag :
+                           UCT_BXI_RNDV_GET_TAG(iface->tx.mem_desc->sn + 1);
   params.cth     = PTL_INVALID_HANDLE;
   params.ign     = 0;
   params.options = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
@@ -585,9 +598,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
     ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-            ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-            tag, 0, op, 0, op_ctx->cth, op_ctx->threshold));
+            iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
+            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
+            op_ctx->cth, op_ctx->threshold));
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -606,7 +619,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
 err_release_block:
   uct_bxi_recv_block_deactivate(block);
-  ucs_mpool_put_inline(block);
+  uct_bxi_recv_block_release(block);
 err:
   return UCS_STATUS_PTR(status);
 }
@@ -617,7 +630,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 
   /* Deactivate block and release it to memory pool. */
   uct_bxi_recv_block_deactivate(op->rndv.block);
-  ucs_mpool_put_inline(op->rndv.block);
+  uct_bxi_recv_block_release(op->rndv.block);
 
   op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
   uct_bxi_send_op_no_completion(op, NULL);
@@ -714,10 +727,10 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
     return status;
   }
 
-  status = uct_bxi_wrap(
-          PtlTriggeredGet(iface->tx.mem_desc->mdh, (ptl_size_t)iov->iov_base,
-                          iov->iov_len, ep->dev_addr.pid, ep->iface_addr.tag,
-                          tag, 0, op, op_ctx->cth, op_ctx->threshold));
+  //NOTE: MD has been created using the base address, so the remote offset is 0.
+  status = uct_bxi_wrap(PtlTriggeredGet(
+          op->mem_desc->mdh, 0, iov->iov_len, ep->dev_addr.pid,
+          ep->iface_addr.tag, tag, 0, op, op_ctx->cth, op_ctx->threshold));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -726,10 +739,15 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
    * - one for the RTS operation that will match the ME;
    * - one for the completion of the GET operation. */
   op_ctx->threshold++;
-  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
+  op->flags    |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
+  op->length    = op_ctx->block->size;
+  op->rndv.ctx  = op_ctx->block->ctx;
+  op->rndv.tag  = op_ctx->block->tag;
+  op->handler   = uct_bxi_get_tag_handler; // Reset handler.
 
   /* Also, attach operation to the block. */
-  op_ctx->block->op = op;
+  op_ctx->block->op     = op;
+  op_ctx->block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP;
 
   return status;
 }
@@ -858,7 +876,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   return status;
 
 err_release_block:
-  ucs_mpool_put_inline(block);
+  uct_bxi_recv_block_release(block);
 err_remove_hash:
   uct_bxi_iface_tag_del_from_hash(iface, ptl_iov->iov_base);
 err:
@@ -872,12 +890,24 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
+  /* In case of offloaded rendez-vous, a GET operation has been attached. 
+   * Remove all triggered operations attached to this ME. */
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP) {
+    ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
+    status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
+    if (status != UCS_OK) {
+      ucs_warn("BXI: tried to cancel triggered operation attached to block. "
+               "block=%p",
+               block);
+    }
+  }
+
   /* Unlink block. */
   uct_bxi_recv_block_deactivate(block);
 
   if (force) {
     uct_bxi_iface_tag_del_from_hash(iface, block->start);
-    ucs_mpool_put_inline(block);
+    uct_bxi_recv_block_release(block);
   } else {
     //FIXME: due to noforce UCT tests, block need to be cancelled
     //       during polling. Since Unlink does not generate any event, we

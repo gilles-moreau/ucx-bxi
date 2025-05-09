@@ -219,9 +219,13 @@ ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface,
 
     /* Initialize send request */
     ucp_proto_request_send_init(req, ep, 0);
-    req->send.tag_offload.ssend_tag = recv_req->recv.tag.tag;
-    req->send.rndv.offset           = 0;
+    req->send.msg_proto.tag = recv_req->recv.tag.tag;
     ucp_request_set_super(req, recv_req);
+
+    if (recv_req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
+        req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+        req->send.tag_offload.sched = recv_req->recv.schedh;
+    }
 
     UCS_PROFILE_CALL_VOID(ucp_datatype_iter_move, &req->send.state.dt_iter,
                           &recv_req->recv.dt_iter, length, &sg_count);

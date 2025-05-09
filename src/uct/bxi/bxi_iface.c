@@ -214,8 +214,8 @@ uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
   op->rndv.ctx = ctx;
   op->rndv.tag = send_tag;
 
-  /* GET operation needs to be handled particularly, they are not attached to 
-   * a endpoint. */
+  /* Internal GET operation needs to be handled particularly, they 
+   * are not attached to a endpoint. */
   op->ep = NULL;
 
   //NOTE: remote address is the remote offset here since the operation
@@ -331,20 +331,26 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
       if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
         switch (ev->hdr_data & 0xful) {
         case UCT_BXI_TAG_PROT_RNDV_HW:
-          hdr = ev->start;
+          /* BXI internal get protocol is initiated when no triggered get has 
+           * been set up already. This would be the case when the protocol 
+           * has been offloaded. */
+          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP)) {
+            hdr = ev->start;
 
-          /* Then, perform the GET operation. Add to pending queue if no resource 
+            /* Then, perform the GET operation. Add to pending queue if no resource 
            * are available. Use length from hdr since sender size may be different 
            * from receiver side. */
-          status = uct_bxi_iface_tag_rndv_zcopy_get(
-                  iface, ev->initiator, hdr->pti,
-                  UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
-                  block->start, hdr->length, block->ctx);
-          if (status == UCS_ERR_NO_RESOURCE) {
-            status = uct_bxi_iface_pending_get_add(
+            status = uct_bxi_iface_tag_rndv_zcopy_get(
                     iface, ev->initiator, hdr->pti,
-                    UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits, block);
-            ucs_assert_always(status == UCS_OK);
+                    UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
+                    block->start, hdr->length, block->ctx);
+            if (status == UCS_ERR_NO_RESOURCE) {
+              status = uct_bxi_iface_pending_get_add(
+                      iface, ev->initiator, hdr->pti,
+                      UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
+                      block);
+              ucs_assert_always(status == UCS_OK);
+            }
           }
 
           break;
@@ -365,14 +371,13 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
 
       /* At this point, receive block may safely be released back to the memory 
        * pool. */
-      block->meh = PTL_INVALID_HANDLE;
-      ucs_mpool_put(block);
+      uct_bxi_recv_block_release(block);
     }
     break;
   case PTL_EVENT_GET:
     uct_bxi_iface_completion_op(block->op);
     /* Block for GET has been consumed, it can be safely released and reused. */
-    ucs_mpool_put(block);
+    uct_bxi_recv_block_release(block);
     break;
   case PTL_EVENT_PT_DISABLED:
     ucs_error("PTL: event %s. Control flow not implemented.",
@@ -556,7 +561,7 @@ uct_bxi_iface_tag_flush_cancel(uct_bxi_iface_t *iface)
     block->ctx->completed_cb(block->ctx, block->tag, 0, block->size, NULL,
                              UCS_ERR_CANCELED);
 
-    ucs_mpool_put_inline(block);
+    uct_bxi_recv_block_release(block);
   }
 }
 
@@ -915,12 +920,14 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
           ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
   uct_bxi_recv_block_t *block = obj;
 
+  block->flags = 0;
   block->unexp = 0;
   block->size  = 0;
   block->start = NULL;
   block->rxq   = iface->rx.tag.q;
   block->list  = PTL_PRIORITY_LIST;
   block->meh   = PTL_INVALID_HANDLE;
+  block->cth   = PTL_CT_NONE;
 }
 
 static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
@@ -1249,6 +1256,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   mem_desc_param = (uct_bxi_mem_desc_param_t){
           .eqh     = self->tx.eqh,
           .start   = NULL,
+          .cth     = PTL_CT_NONE,
           .length  = PTL_SIZE_MAX,
           .options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
           .flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,

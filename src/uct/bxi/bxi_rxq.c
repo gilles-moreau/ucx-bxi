@@ -7,6 +7,7 @@
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params)
 {
+  ucs_status_t   status;
   ptl_me_t       me;
   uct_bxi_rxq_t *rxq = block->rxq;
 
@@ -24,6 +25,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
     block->start = params->start;
     block->size  = params->size;
     block->tag   = params->match;
+    block->cth   = params->cth;
   } else {
     me = (ptl_me_t){
             .ct_handle   = PTL_CT_NONE,
@@ -39,8 +41,15 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .length = block->size};
   }
 
-  return uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
-                                  &block->meh));
+  status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
+                                    &block->meh));
+  if (status != UCS_OK) {
+    return status;
+  }
+
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_INUSE;
+
+  return status;
 }
 
 void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
@@ -57,6 +66,13 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
   }
 
   block->meh = PTL_INVALID_HANDLE;
+}
+
+void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
+{
+  block->meh   = PTL_INVALID_HANDLE;
+  block->flags = 0;
+  ucs_mpool_put(block);
 }
 
 static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
@@ -97,7 +113,7 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_disable(uct_bxi_rxq_t *rxq)
 
   ucs_list_for_each_safe (block, tmp, &rxq->bhead, elem) {
     uct_bxi_recv_block_deactivate(block);
-    ucs_mpool_put(block);
+    uct_bxi_recv_block_release(block);
     ucs_list_del(&tmp->elem);
   }
 err:
@@ -115,6 +131,7 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   block->rxq   = rxq;
   block->meh   = PTL_INVALID_HANDLE;
   block->list  = rxq->list;
+  block->cth   = PTL_CT_NONE;
 }
 
 static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {

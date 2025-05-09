@@ -4,10 +4,16 @@
 #include <uct/base/uct_iface.h>
 #include <uct/bxi/bxi.h>
 
-typedef struct uct_bxi_rxq uct_bxi_rxq_t;
+typedef struct uct_bxi_rxq    uct_bxi_rxq_t;
+typedef struct uct_bxi_op_ctx uct_bxi_op_ctx_t;
 
 typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
                                                ptl_event_t     *ev);
+
+enum {
+  UCT_BXI_RECV_BLOCK_FLAG_INUSE      = UCS_BIT(0),
+  UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP = UCS_BIT(1)
+};
 
 typedef struct uct_bxi_recv_block_params {
   void            *start;
@@ -19,6 +25,7 @@ typedef struct uct_bxi_recv_block_params {
 } uct_bxi_recv_block_params_t;
 
 typedef struct uct_bxi_recv_block {
+  unsigned                 flags;
   int                      unexp;  /* Boolean is block unexpected */
   void                    *start;  /* Address of the receive block */
   size_t                   size;   /* Size of the receive block */
@@ -29,7 +36,8 @@ typedef struct uct_bxi_recv_block {
   uct_tag_t                tag;    /* Needed in case block is cancelled */
   ptl_list_t               list;   /* Portals list */
   uct_tag_context_t       *ctx;    /* Tag context provided by upper layer */
-  uct_bxi_iface_send_op_t *op;     /* OP in case of GET protocol */
+  ptl_handle_ct_t          cth; /* Counter associated when recv if offloaded */
+  uct_bxi_iface_send_op_t *op;  /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 typedef struct uct_bxi_rxq_param {
@@ -65,6 +73,7 @@ void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params);
 void         uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block);
+void         uct_bxi_recv_block_release(uct_bxi_recv_block_t *block);
 
 static inline ptl_pt_index_t uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
 {

@@ -69,7 +69,7 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
   ptl_md = (ptl_md_t){
           .start     = params->start,
           .length    = params->length,
-          .ct_handle = PTL_CT_NONE,
+          .ct_handle = params->cth,
           .eq_handle = params->eqh,
           .options   = params->options,
   };
