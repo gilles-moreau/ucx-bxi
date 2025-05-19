@@ -517,7 +517,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
           UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_GET_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_TAG_PURGE_UNEXP;
 
   return UCS_OK;
 }
@@ -799,6 +799,16 @@ ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 
 err:
   return status;
+}
+
+unsigned uct_bxi_iface_tag_purge_unexp(uct_iface_h tl_iface)
+{
+  unsigned         count;
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+
+  count = uct_bxi_iface_poll_rx(iface);
+
+  return count;
 }
 
 ucs_status_t
@@ -1444,7 +1454,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
-        .iface_tag_recv_overflow  = uct_bxi_iface_tag_recv_overflow,
+        .iface_tag_purge_unexp    = uct_bxi_iface_tag_purge_unexp,
         .iface_tag_op_create      = uct_bxi_iface_tag_create_op_ctx,
         .iface_tag_op_delete      = uct_bxi_iface_tag_delete_op_ctx,
 };

@@ -436,9 +436,10 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
 #define UCT_IFACE_FLAG_TAG_GET_ZCOPY   UCS_BIT(54) /**< Hardware tag matching get support */
 #define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(55) /**< Hardware tag matching operation offload support */
+#define UCT_IFACE_FLAG_TAG_PURGE_UNEXP UCS_BIT(56) /**< Hardware tag matching purge iface unexp */
 
         /* Interface capability */
-#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(56) /**< Interface is inter-node capable */
+#define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(57) /**< Interface is inter-node capable */
 /**
  * @}
  */

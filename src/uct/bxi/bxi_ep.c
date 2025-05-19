@@ -918,13 +918,6 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   return status;
 }
 
-void uct_bxi_iface_tag_recv_overflow(uct_iface_h tl_iface)
-{
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  iface->tm.recv_tried_offload++;
-}
-
 ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h   tl_iface,
                                              uct_op_ctx_h *op_ctx_p)
 {
