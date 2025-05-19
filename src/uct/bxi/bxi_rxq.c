@@ -27,6 +27,9 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
     block->tag   = params->match;
     block->cth   = params->cth;
   } else {
+    //NOTE: PTL_ME_UNEXPECTED_HDR_DISABLE cannot be used because an expected ME
+    //      could be posted and matched in the OVERFLOW list by another message.
+    //      The use of unexpected header guaranties the order of operations.
     me = (ptl_me_t){
             .ct_handle   = PTL_CT_NONE,
             .match_bits  = 0,
