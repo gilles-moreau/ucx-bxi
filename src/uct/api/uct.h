@@ -3639,9 +3639,9 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
  * @param [in]  iface     Interface to cancel the tag on.
  *
  */
-UCT_INLINE_API void uct_iface_tag_recv_overflow(uct_iface_h tl_iface) 
+UCT_INLINE_API unsigned uct_iface_tag_purge_unexp(uct_iface_h tl_iface) 
 {
-    return tl_iface->ops.iface_tag_recv_overflow(tl_iface);
+    return tl_iface->ops.iface_tag_purge_unexp(tl_iface);
 }
 
 /**

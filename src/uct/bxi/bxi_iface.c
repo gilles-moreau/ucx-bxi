@@ -285,6 +285,36 @@ uct_bxi_iface_is_unexpected(uct_bxi_recv_block_t *block)
   return block->list == PTL_OVERFLOW_LIST;
 }
 
+static UCS_F_ALWAYS_INLINE ucs_status_t
+uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag)
+{
+  ucs_status_t    status;
+  ptl_handle_me_t dummy;
+  ptl_me_t        me = {
+                 .ct_handle   = PTL_CT_NONE,
+                 .ignore_bits = 0,
+                 .match_bits  = tag,
+                 .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
+                 .min_free = 0,
+                 .length   = 0,
+                 .start    = NULL,
+                 .uid      = PTL_UID_ANY,
+                 .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
+                     PTL_ME_EVENT_COMM_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
+                     PTL_ME_EVENT_FLOWCTRL_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
+                     PTL_ME_EVENT_UNLINK_DISABLE,
+  };
+
+  status = uct_bxi_wrap(PtlMEAppend(uct_bxi_iface_md(iface)->nih,
+                                    iface->rx.tag.q->pti, &me,
+                                    PTL_PRIORITY_LIST, NULL, &dummy));
+  if (status == UCS_OK) {
+    iface->tm.unexp_hdr_count--;
+  }
+
+  return status;
+}
+
 static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
                                                     ptl_event_t     *ev)
 {
@@ -296,6 +326,9 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
   switch (ev->type) {
   case PTL_EVENT_PUT:
     if (uct_bxi_iface_is_unexpected(block)) {
+
+      iface->tm.unexp_hdr_count++;
+
       if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
         /* In this case, the protocol will always be continued by UCP. */
         switch (ev->hdr_data & 0xful) {
@@ -319,6 +352,11 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                           ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
                                           ev->match_bits, ev->hdr_data, NULL);
+      }
+
+      if (iface->tm.unexp_hdr_count > 0) {
+        status = uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits);
+        ucs_assert(iface->tm.unexp_hdr_count == 0);
       }
     } else {
       /* Receive block has been consumed, notify UCP layer so it can remove 
@@ -392,15 +430,16 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
      * Link it back, all included data has been processed already. */
     status = uct_bxi_recv_block_activate(block, NULL);
     break;
+  case PTL_EVENT_LINK:
+  case PTL_EVENT_PUT_OVERFLOW:
+    break;
+  case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_ACK:
   case PTL_EVENT_REPLY:
-  case PTL_EVENT_PUT_OVERFLOW:
-  case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_ATOMIC:
   case PTL_EVENT_FETCH_ATOMIC:
   case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
   case PTL_EVENT_ATOMIC_OVERFLOW:
-  case PTL_EVENT_LINK:
   case PTL_EVENT_SEARCH:
   case PTL_EVENT_SEND:
     ucs_error("PTL: event %s should not have been triggered",
@@ -987,7 +1026,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
   iface->tm.rndv_unexp.arg =
           UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
-  iface->tm.recv_tried_offload = 0;
+  iface->tm.unexp_hdr_count = 0;
 
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
