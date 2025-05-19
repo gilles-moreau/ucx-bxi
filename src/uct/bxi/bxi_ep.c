@@ -855,9 +855,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   params.ign   = ~tag_mask;
   params.cth   = cth;
   //FIXME: Add explanation for OVER_DISABLE
-  params.options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_OVER_DISABLE |
-                   PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE |
-                   ct_flags;
+  params.options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
+                   PTL_ME_EVENT_UNLINK_DISABLE | ct_flags;
 
   /* Then, post the memory entry. The Portals Priority list has already been set 
    * during memory initialization. */
@@ -914,6 +913,8 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     //       are required to maintain a list of cancelled blocks.
     ucs_list_add_head(&iface->rx.tag.cancel, &block->c_elem);
   }
+
+  iface->tm.unexp_hdr_count--;
 
   return status;
 }

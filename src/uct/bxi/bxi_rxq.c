@@ -29,6 +29,12 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
   } else {
     //NOTE: PTL_ME_UNEXPECTED_HDR_DISABLE cannot be used because an expected ME
     //      could be posted and matched in the OVERFLOW list by another message.
+    //      Using Bull's simulator, test_ucp_tag_match.send_nb_multiple_recv_unexp
+    //      fails because worker progression makes a message from the network to
+    //      be received by the receiver before the latter post its receive. When
+    //      it does, because they are no unexp header, the receive is posted in
+    //      the priority list and will be matched by the following message
+    //      arriving from the network.
     //      The use of unexpected header guaranties the order of operations.
     me = (ptl_me_t){
             .ct_handle   = PTL_CT_NONE,

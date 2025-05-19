@@ -233,7 +233,7 @@ typedef struct uct_bxi_iface {
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
     ucs_mpool_t  recv_block_mp;
-    unsigned int recv_tried_offload;
+    unsigned int unexp_hdr_count;
   } tm;
 
   struct {
