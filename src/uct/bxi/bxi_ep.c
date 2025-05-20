@@ -355,30 +355,40 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
   return UCS_ERR_NOT_IMPLEMENTED;
 }
 
-static ucs_status_t uct_bxi_ep_op_ctx_multiple(uct_iface_h        tl_iface,
-                                               ucs_list_link_t   *op_head,
-                                               uct_bxi_op_ctx_t **op_ctx_p)
+static ucs_status_t uct_bxi_ep_op_ctx_set(uct_iface_h        tl_iface,
+                                          uct_completion_t  *comp,
+                                          uct_bxi_op_ctx_t **op_ctx_p)
 {
-  ucs_status_t      status;
-  uct_bxi_op_ctx_t *op_ctx;
-  uct_bxi_op_ctx_t *tmp;
+  ucs_status_t      status = UCS_OK;
+  uct_bxi_op_ctx_t *op_ctx = NULL;
+  uct_bxi_op_ctx_t *tmp_op;
+  unsigned long     n_ops;
 
-  status = uct_bxi_iface_tag_create_op_ctx(tl_iface, (uct_op_ctx_h *)&op_ctx);
-  if (status != UCS_OK) {
-    return status;
-  }
-
-  ucs_list_for_each (tmp, op_head, super.elem) {
-    status = uct_bxi_wrap(PtlTriggeredCTInc(op_ctx->cth, (ptl_ct_event_t){1, 0},
-                                            tmp->cth, tmp->threshold));
+  if ((n_ops = ucs_list_length(&comp->op_head)) > 1) {
+    status = uct_bxi_iface_tag_create_op_ctx(tl_iface, (uct_op_ctx_h *)&op_ctx);
     if (status != UCS_OK) {
-      ucs_fatal("BXI: failed setting trig inc.");
+      return status;
     }
-    op_ctx->threshold++;
+
+    ucs_list_for_each (tmp_op, &comp->op_head, super.elem) {
+      status = uct_bxi_wrap(PtlTriggeredCTInc(op_ctx->cth,
+                                              (ptl_ct_event_t){1, 0},
+                                              tmp_op->cth, tmp_op->threshold));
+      if (status != UCS_OK) {
+        ucs_fatal("BXI: failed setting trig inc.");
+      }
+      op_ctx->threshold++;
+    }
+  } else if (n_ops == 1) {
+    op_ctx =
+            ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t, super.elem);
+  } else {
+    goto out;
   }
 
   *op_ctx_p = op_ctx;
 
+out:
   return status;
 }
 
@@ -439,9 +449,9 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   ucs_status_t      status;
   ptl_iovec_t      *ptl_iov;
-  uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_op_ctx_t *op_ctx;
+  uct_bxi_ep_t     *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t  *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_op_ctx_t *op_ctx = NULL;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -459,18 +469,13 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    if (ucs_list_length(&comp->op_head) > 1) {
-      status =
-              uct_bxi_ep_op_ctx_multiple(tl_ep->iface, &comp->op_head, &op_ctx);
-      if (status != UCS_OK) {
-        goto err;
-      }
-    } else {
-      op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t,
-                                     super.elem);
+    status = uct_bxi_ep_op_ctx_set(tl_ep->iface, comp, &op_ctx);
+    if (status != UCS_OK) {
+      goto err;
     }
-    ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+  }
 
+  if (op_ctx != NULL) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
@@ -481,6 +486,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                    ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
                    ep->iface_addr.tag, tag, 0, op, imm));
   }
+
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -524,9 +530,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 {
   ucs_status_t      status;
   ptl_iovec_t      *ptl_iov;
-  uct_bxi_ep_t     *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_op_ctx_t *op_ctx;
+  uct_bxi_ep_t     *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t  *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_op_ctx_t *op_ctx = NULL;
   uct_bxi_iface_send_op_t    *op;
   uct_bxi_recv_block_params_t params;
   uct_bxi_recv_block_t       *block;
@@ -551,6 +557,11 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   params.size  = ptl_iov->iov_len;
   /* ME match bits is the operation sequence number prefixed with a specific 
    * rendez-vous bit sequence. */
+  //FIXME: it seems tag unicity should be required here. While without
+  //       offloading it is ok since the sequence number is unique and sent
+  //       within the ptl_hdr_data_t, it will not work with operation offload
+  //       so we need another way to communicate unicity. We might be able
+  //       to use Endpoint sequence number.
   params.match   = flags & UCT_TAG_OFFLOAD_OPERATION ?
                            tag :
                            UCT_BXI_RNDV_GET_TAG(iface->tx.mem_desc->sn + 1);
@@ -561,7 +572,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                    PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
 
   /* Then, post the memory entry to the priority list. Target will execute 
-   * a GET operation on this */
+   * a GET operation on this. */
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
     goto err;
@@ -585,16 +596,13 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    if (ucs_list_length(&comp->op_head) > 1) {
-      status =
-              uct_bxi_ep_op_ctx_multiple(tl_ep->iface, &comp->op_head, &op_ctx);
-      if (status != UCS_OK) {
-        goto err;
-      }
-    } else {
-      op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t,
-                                     super.elem);
+    status = uct_bxi_ep_op_ctx_set(tl_ep->iface, comp, &op_ctx);
+    if (status != UCS_OK) {
+      goto err;
     }
+  }
+
+  if (op_ctx != NULL) {
     ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
@@ -745,7 +753,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   op->rndv.tag  = op_ctx->block->tag;
   op->handler   = uct_bxi_get_tag_handler; // Reset handler.
 
-  /* Also, attach operation to the block. */
+  /* Also, attach operation to the block. //TODO: explain why */
   op_ctx->block->op     = op;
   op_ctx->block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP;
 
