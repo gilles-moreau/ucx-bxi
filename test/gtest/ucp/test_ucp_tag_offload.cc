@@ -521,7 +521,8 @@ err:
 
         // Prepare the receive operation of the sender. No offload sched is provided
         // since sender's operations are not offloaded.
-        param = {};
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.schedh       = sched;
         req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
                                length, btag, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -530,6 +531,8 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Finally, send the first operation from the sender
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.schedh       = sched;
         req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
                                recvbuf.size(), ftag, &param);
         if (UCS_PTR_IS_ERR(req)) {

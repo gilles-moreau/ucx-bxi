@@ -229,6 +229,9 @@ ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface,
 
     UCS_PROFILE_CALL_VOID(ucp_datatype_iter_move, &req->send.state.dt_iter,
                           &recv_req->recv.dt_iter, length, &sg_count);
+    //FIXME: iter move reset the datatype of the receive request, this triggers
+    //       an assert later on. Better request handling is needed.
+    recv_req->recv.dt_iter.dt_class = req->send.state.dt_iter.dt_class;
 
     /* Set pointer to request's protocol configuration */
     ucs_assert(thresh_elem->proto_config.ep_cfg_index == ep->cfg_index);
