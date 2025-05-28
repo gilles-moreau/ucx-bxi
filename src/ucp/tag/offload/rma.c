@@ -4,6 +4,7 @@
 #endif
 
 #include <ucp/proto/proto_single.inl>
+#include <ucp/rndv/proto_rndv.inl>
 #include <ucp/tag/offload.h>
 #include <ucp/tag/proto_eager.inl>
 
@@ -70,6 +71,23 @@ ucp_rma_tag_offload_get_send_func(ucp_request_t                 *req,
           req->send.msg_proto.tag, iov, 1, 0, flags, &req->send.state.uct_comp);
 }
 
+static UCS_F_ALWAYS_INLINE void
+ucp_rma_tag_offload_get_completion(uct_completion_t *self)
+{
+  ucp_request_t *req =
+          ucs_container_of(self, ucp_request_t, send.state.uct_comp);
+
+  //NOTE: Memory associated to the GET request has already been cleaned by
+  //      the completion callback of the receive
+  if (ucp_proto_select_op_id(&req->send.proto_config->select_param) ==
+      UCP_OP_ID_TAG_SEND) {
+    UCP_EP_STAT_TAG_OP(req->send.ep, EAGER)
+  }
+
+  ucp_request_complete_send(req, self->status);
+  ucp_request_put(req);
+}
+
 UCS_PROFILE_FUNC(ucs_status_t, ucp_rma_tag_offload_get_progress, (self),
                  uct_pending_req_t *self)
 {
@@ -79,7 +97,7 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_rma_tag_offload_get_progress, (self),
           req, UCT_MD_MEM_ACCESS_RMA | UCT_MD_MEM_FLAG_HIDE_ERRORS,
           ucp_rma_tag_offload_get_send_func,
           ucp_request_invoke_uct_completion_success,
-          ucp_proto_request_zcopy_completion, ucp_proto_request_zcopy_init);
+          ucp_rma_tag_offload_get_completion, ucp_proto_request_zcopy_init);
 }
 
 ucp_proto_t ucp_rma_tag_offload_get_proto = {

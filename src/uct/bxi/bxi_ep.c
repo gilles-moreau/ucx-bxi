@@ -13,13 +13,19 @@ ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_SWAP] = PTL_SWAP, [UCT_ATOMIC_OP_CSWAP] = PTL_CSWAP,
 };
 
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_ep_remove_from_queue(uct_bxi_iface_send_op_t *op)
+{
+  ucs_list_del(&op->elem);
+}
+
 void uct_bxi_ep_get_bcopy_handler(uct_bxi_iface_send_op_t *op, const void *resp)
 {
   op->get.unpack_cb(op->get.unpack_arg, resp, op->length);
 
   uct_invoke_completion(op->user_comp, UCS_OK);
 
-  ucs_list_del(&op->elem);
+  uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
 }
 
@@ -28,14 +34,14 @@ void uct_bxi_ep_get_bcopy_handler_no_completion(uct_bxi_iface_send_op_t *op,
 {
   op->get.unpack_cb(op->get.unpack_arg, resp, op->length);
 
-  ucs_list_del(&op->elem);
+  uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_op_no_completion(uct_bxi_iface_send_op_t *op,
                                           const void              *resp)
 {
-  ucs_list_del(&op->elem);
+  uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
 }
 
@@ -44,7 +50,7 @@ static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
 
-  ucs_list_del(&op->elem);
+  uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
 }
 
@@ -64,7 +70,7 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
 
-  ucs_list_del(&op->elem);
+  uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
 }
 
@@ -75,6 +81,10 @@ static void uct_bxi_get_tag_handler(uct_bxi_iface_send_op_t *op,
   op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
                              UCS_OK);
 
+  /* Then, the zcopy completion callback. */
+  uct_invoke_completion(op->user_comp, UCS_OK);
+
+  uct_bxi_ep_remove_from_queue(op);
   /* Then, we may push OP back to the memory pool. */
   ucs_mpool_put_inline(op);
 }
@@ -547,31 +557,29 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
-  /* First, allocate a TAG block from the memory pool. */
+  /* First, allocate a TAG block from the memory pool. Receive block is 
+   * used to match the remote GET operation and is posted to the CTRL RXQ. */
   //TODO: rename macro
   UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
+                                    iface->rx.ctrl.q,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err);
 
   params.start = ptl_iov->iov_base;
   params.size  = ptl_iov->iov_len;
-  /* ME match bits is the operation sequence number prefixed with a specific 
-   * rendez-vous bit sequence. */
-  //FIXME: it seems tag unicity should be required here. While without
-  //       offloading it is ok since the sequence number is unique and sent
-  //       within the ptl_hdr_data_t, it will not work with operation offload
-  //       so we need another way to communicate unicity. We might be able
-  //       to use Endpoint sequence number.
-  params.match   = flags & UCT_TAG_OFFLOAD_OPERATION ?
-                           tag :
-                           UCT_BXI_RNDV_GET_TAG(iface->tx.mem_desc->sn + 1);
+  /* ME match bits is based on the remote PID. Since: 
+   * - ME is posted to a separate PTE and,
+   * - Matching bits is based on EP PID, 
+   * - Portals message ordering. 
+   * we ensure matching validity. */
+  params.match   = UCT_BXI_BUILD_RNDV_CTRL_TAG(ep->dev_addr.pid);
   params.cth     = PTL_INVALID_HANDLE;
   params.ign     = 0;
   params.options = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
                    PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
                    PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
 
-  /* Then, post the memory entry to the priority list. Target will execute 
+  /* Then, post the memory entry to the CTRL RXQ. Target will execute 
    * a GET operation on this. */
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
@@ -590,10 +598,10 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->rndv.block = block;
 
   op->length = uct_bxi_pack_rndv(
-          iface, op + 1, uct_bxi_rxq_get_addr(iface->rx.tag.q),
+          iface, op + 1, uct_bxi_rxq_get_addr(iface->rx.ctrl.q),
           (uint64_t)ptl_iov->iov_base, ptl_iov->iov_len, header, header_length);
 
-  UCT_BXI_HDR_SET(hdr, iface->tx.mem_desc->sn + 1, UCT_BXI_TAG_PROT_RNDV_HW);
+  UCT_BXI_HDR_SET(hdr, UCT_BXI_TAG_PROT_RNDV_HW);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     status = uct_bxi_ep_op_ctx_set(tl_ep->iface, comp, &op_ctx);
@@ -603,6 +611,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   }
 
   if (op_ctx != NULL) {
+    /* An operation context was provided, so the operation must be 
+     * triggered. */
     ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
@@ -674,7 +684,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   memcpy(op + 1, header, header_length);
 
-  UCT_BXI_HDR_SET(hdr, 0, UCT_BXI_TAG_PROT_RNDV_SW);
+  UCT_BXI_HDR_SET(hdr, UCT_BXI_TAG_PROT_RNDV_SW);
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                header_length, PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.tag, tag, 0, op, hdr));
@@ -738,7 +748,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   //NOTE: MD has been created using the base address, so the remote offset is 0.
   status = uct_bxi_wrap(PtlTriggeredGet(
           op->mem_desc->mdh, 0, iov->iov_len, ep->dev_addr.pid,
-          ep->iface_addr.tag, tag, 0, op, op_ctx->cth, op_ctx->threshold));
+          ep->iface_addr.ctrl, tag, 0, op, op_ctx->cth, op_ctx->threshold));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -771,6 +781,9 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
+  //TODO: update API since this call is only used for the rendez-vous protocol.
+  //      Therefore, tag is not needed.
+  uint64_t get_tag;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -787,14 +800,14 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    status = uct_bxi_offload_tag_get(ep, iface, op, tag, ptl_iov, iov_size,
-                                     remote_offset, comp);
+  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
+    /* Tag of remote ME is based on the pid, see uct_bxi_ep_tag_rndv_zcopy. */
+    get_tag = UCT_BXI_BUILD_RNDV_CTRL_TAG(uct_bxi_iface_md(iface)->pid);
+    status  = uct_bxi_offload_tag_get(ep, iface, op, get_tag, ptl_iov, iov_size,
+                                      remote_offset, comp);
   } else {
-    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
-                                 (ptl_size_t)ptl_iov->iov_base,
-                                 ptl_iov->iov_len, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, remote_offset, op));
+    status = UCS_ERR_UNSUPPORTED;
+    goto err;
   }
 
   if (status != UCS_OK) {
@@ -851,6 +864,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
   /* First, allocate a TAG block from the memory pool. */
   UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
+                                    iface->rx.tag.q,
                                     status = UCS_ERR_EXCEEDS_LIMIT;
                                     goto err_remove_hash);
 

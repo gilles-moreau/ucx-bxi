@@ -190,11 +190,12 @@ static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
-ucs_status_t
-uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
-                                 ptl_pt_index_t pti, uct_tag_t get_tag,
-                                 uct_tag_t send_tag, void *buffer,
-                                 size_t length, uct_tag_context_t *ctx)
+//NOTE: internal rendez-vous protocol could be removed in favor of using only
+//      the software protocol. In any case, it is already software-based since
+//      it requires the interface to be (sw) polled to be able to complete.
+ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
+        uct_bxi_iface_t *iface, ptl_process_t pid, ptl_pt_index_t pti,
+        uct_tag_t send_tag, void *buffer, size_t length, uct_tag_context_t *ctx)
 {
   ucs_status_t             status;
   uct_bxi_iface_send_op_t *op;
@@ -221,8 +222,8 @@ uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface, ptl_process_t pid,
   //NOTE: remote address is the remote offset here since the operation
   //      will match the specific GET ME posted by initiator.
   status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, pid, pti, UCT_BXI_RNDV_GET_TAG(get_tag),
-                               0, op));
+                               length, pid, pti,
+                               UCT_BXI_BUILD_RNDV_CTRL_TAG(pid), 0, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
@@ -241,8 +242,8 @@ uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
   uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
 
   status = uct_bxi_iface_tag_rndv_zcopy_get(
-          req->tgt.iface, req->tgt.pid, req->tgt.pti, req->tgt.get_tag,
-          req->tgt.send_tag, req->tgt.buffer, req->tgt.length, req->tgt.ctx);
+          req->tgt.iface, req->tgt.pid, req->tgt.pti, req->tgt.send_tag,
+          req->tgt.buffer, req->tgt.length, req->tgt.ctx);
   if (status == UCS_OK) {
     ucs_mpool_put(req);
   } else {
@@ -252,10 +253,11 @@ uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
   return status;
 }
 
-ucs_status_t
-uct_bxi_iface_pending_get_add(uct_bxi_iface_t *iface, ptl_process_t pid,
-                              ptl_pt_index_t pti, uct_tag_t get_tag,
-                              uct_tag_t send_tag, uct_bxi_recv_block_t *block)
+ucs_status_t uct_bxi_iface_pending_get_add(uct_bxi_iface_t      *iface,
+                                           ptl_process_t         pid,
+                                           ptl_pt_index_t        pti,
+                                           uct_tag_t             send_tag,
+                                           uct_bxi_recv_block_t *block)
 {
   uct_bxi_pending_req_t *req;
 
@@ -267,7 +269,6 @@ uct_bxi_iface_pending_get_add(uct_bxi_iface_t *iface, ptl_process_t pid,
   req->tgt.iface    = iface;
   req->tgt.pid      = pid;
   req->tgt.pti      = pti;
-  req->tgt.get_tag  = get_tag;
   req->tgt.send_tag = send_tag;
   req->tgt.length   = block->size;
   req->tgt.ctx      = block->ctx;
@@ -379,14 +380,11 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
            * are available. Use length from hdr since sender size may be different 
            * from receiver side. */
             status = uct_bxi_iface_tag_rndv_zcopy_get(
-                    iface, ev->initiator, hdr->pti,
-                    UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
+                    iface, ev->initiator, hdr->pti, ev->match_bits,
                     block->start, hdr->length, block->ctx);
             if (status == UCS_ERR_NO_RESOURCE) {
               status = uct_bxi_iface_pending_get_add(
-                      iface, ev->initiator, hdr->pti,
-                      UCT_BXI_HDR_GET_MATCH(ev->hdr_data), ev->match_bits,
-                      block);
+                      iface, ev->initiator, hdr->pti, ev->match_bits, block);
               ucs_assert_always(status == UCS_OK);
             }
           }
@@ -567,10 +565,12 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
   uct_bxi_iface_addr_t *addr  = (void *)tl_addr;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  addr->rma = iface->rx.rma.pti;
-  addr->am  = uct_bxi_rxq_get_addr(iface->rx.am.q);
-  addr->tag = !iface->tm.enabled ? UCT_BXI_PT_NULL :
-                                   uct_bxi_rxq_get_addr(iface->rx.tag.q);
+  addr->rma  = iface->rx.rma.pti;
+  addr->am   = uct_bxi_rxq_get_addr(iface->rx.am.q);
+  addr->tag  = !iface->tm.enabled ? UCT_BXI_PT_NULL :
+                                    uct_bxi_rxq_get_addr(iface->rx.tag.q);
+  addr->ctrl = !iface->tm.enabled ? UCT_BXI_PT_NULL :
+                                    uct_bxi_rxq_get_addr(iface->rx.ctrl.q);
 
   return UCS_OK;
 }
@@ -931,6 +931,7 @@ void uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
   }
 }
 
+//FIXME: move this to bxi_rxq.c
 static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,
                                           uct_bxi_rxq_t   *rxq)
 {
@@ -1030,14 +1031,14 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
-  rxq_param = (uct_bxi_rxq_param_t){
-          .eqh     = iface->rx.eqh,
-          .nih     = uct_bxi_iface_md(iface)->nih,
-          .mp      = iface->config.rx.tag_mp,
-          .list    = PTL_OVERFLOW_LIST,
-          .name    = "rxq-tag",
-          .handler = uct_bxi_iface_handle_tag_events,
-  };
+  rxq_param.flags   = 0;
+  rxq_param.eqh     = iface->rx.eqh;
+  rxq_param.nih     = uct_bxi_iface_md(iface)->nih;
+  rxq_param.mp      = iface->config.rx.tag_mp;
+  rxq_param.list    = PTL_OVERFLOW_LIST;
+  rxq_param.name    = "rxq-tag";
+  rxq_param.handler = uct_bxi_iface_handle_tag_events;
+
   status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.q);
   if (status != UCS_OK) {
     goto out;
@@ -1049,7 +1050,7 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   /* Initialize list of cancelled blocks. */
   ucs_list_head_init(&iface->rx.tag.cancel);
 
-  /* Work pool of operation. */
+  /* Pool of receive blocks for receiving expected messages. */
   ucs_mpool_params_reset(&mp_param);
   mp_param.max_chunk_size =
           iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t);
@@ -1065,6 +1066,31 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto err_release_rxq;
   }
 
+  /* Create RXQ for rendez-vous blocks, see uct_bxi_ep_tag_rndv_zcopy for 
+   * details.*/
+  rxq_param.flags = UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL;
+  rxq_param.eqh   = iface->rx.eqh;
+  rxq_param.nih   = uct_bxi_iface_md(iface)->nih;
+  rxq_param.mp    = (uct_iface_mpool_config_t){0};
+  rxq_param.list  = PTL_OVERFLOW_LIST;
+  rxq_param.name  = "ctrl-tag";
+  //NOTE: Although CTRL RXQ is different, handler is the same as TAG RXQ.
+  //      It should only handle the PTL_EVENT_GET event.
+  rxq_param.handler = uct_bxi_iface_handle_tag_events;
+
+  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.ctrl.q);
+  if (status != UCS_OK) {
+    goto out;
+  }
+
+  /* Append RXQ to the hash table for event handling. */
+  uct_bxi_iface_add_rxq(iface, iface->rx.ctrl.q);
+
+  /* Initialize list of cancelled blocks. */
+  ucs_list_head_init(&iface->rx.tag.cancel);
+
+  /* Memory pool of Operation Offload context. These are counters that are 
+   * used to implement dependencies between sends and receives. */
   ucs_mpool_params_reset(&mp_param);
   mp_param.max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size;
   mp_param.elems_per_chunk = config->tm.op_ctx_mp.bufs_grow;

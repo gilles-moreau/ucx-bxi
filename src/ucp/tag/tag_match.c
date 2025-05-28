@@ -46,6 +46,7 @@ ucs_status_t ucp_tag_match_init(ucp_tag_match_t *tm)
     kh_init_inplace(ucp_tag_frag_hash, &tm->frag_hash);
     ucs_queue_head_init(&tm->offload.sync_reqs);
     kh_init_inplace(ucp_tag_offload_hash, &tm->offload.tag_hash);
+    kh_init_inplace(ucp_tag_sched_hash, &tm->offload.sched_hash);
     tm->offload.thresh       = SIZE_MAX;
     tm->offload.zcopy_thresh = SIZE_MAX;
     tm->offload.iface        = NULL;
@@ -65,6 +66,7 @@ void ucp_tag_match_cleanup(ucp_tag_match_t *tm)
     }
 
     kh_destroy_inplace(ucp_tag_offload_hash, &tm->offload.tag_hash);
+    kh_destroy_inplace(ucp_tag_sched_hash, &tm->offload.sched_hash);
     kh_destroy_inplace(ucp_tag_frag_hash, &tm->frag_hash);
     ucs_free(tm->unexpected.hash);
     ucs_free(tm->expected.hash);

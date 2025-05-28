@@ -54,6 +54,10 @@ typedef union {
 KHASH_INIT(ucp_tag_frag_hash, uint64_t, ucp_tag_frag_match_t, 1,
            kh_int64_hash_func, kh_int64_hash_equal);
 
+#define ucp_tag_offload_sched_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
+KHASH_INIT(ucp_tag_sched_hash, ucp_offload_sched_h, char, 0,
+           ucp_tag_offload_sched_hash, kh_int64_hash_equal);
+
 
 /**
  * Tag-matching context
@@ -82,6 +86,7 @@ typedef struct ucp_tag_match {
     struct {
         ucs_queue_head_t      sync_reqs;        /* Outgoing sync send requests */
         khash_t(ucp_tag_offload_hash) tag_hash; /* Hash table of offload ifaces */
+        khash_t(ucp_tag_sched_hash) sched_hash; /* Hash table of scheduler */
         ucp_worker_iface_t    *iface;           /* Active offload iface (relevant if just
                                                    one iface is activated on the worker,
                                                    otherwise hash should be used) */
@@ -116,5 +121,16 @@ ucp_tag_exp_search_all(ucp_tag_match_t *tm, ucp_request_queue_t *req_queue,
 void ucp_tag_frag_list_process_queue(ucp_tag_match_t *tm, ucp_request_t *req,
                                      uint64_t msg_id
                                      UCS_STATS_ARG(int counter_idx));
+
+static UCS_F_ALWAYS_INLINE int 
+ucp_offload_sched_exists(ucp_tag_match_t *tm,
+                         ucp_offload_sched_h sched)
+{
+  khiter_t iter;
+
+  iter = kh_get(ucp_tag_sched_hash, &tm->offload.sched_hash, sched);
+  return iter != kh_end(&tm->offload.sched_hash);
+}
+
 
 #endif

@@ -248,12 +248,6 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_proto_request_send_op_common(
         return UCS_STATUS_PTR(status);
     }
 
-    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-        req->send.tag_offload.sched = param->schedh;
-        req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-        ucs_list_head_init(&req->send.state.uct_comp.op_head);
-    }
-
     UCS_PROFILE_CALL_VOID(ucp_request_send, req);
     if (req->flags & UCP_REQUEST_FLAG_COMPLETED) {
         /* coverity[offset_free] */
@@ -302,6 +296,16 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
     ucp_proto_select_param_init(&sel_param, op_id, param->op_attr_mask,
                                 op_flags, req->send.state.dt_iter.dt_class,
                                 &req->send.state.dt_iter.mem_info, sg_count);
+
+    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+        status = ucp_request_send_op_offload(&worker->tm, req, param);
+        if (status != UCS_OK) {
+            ucp_request_put_param(param, req);
+            return UCS_STATUS_PTR(status);
+        }
+        /* Append OP attribute to select protocols that support OP offload. */
+        ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
+    }
 
     msg_length = req->send.state.dt_iter.length + header_length;
     return ucp_proto_request_send_op_common(worker, ep, proto_select,

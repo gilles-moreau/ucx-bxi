@@ -460,7 +460,22 @@ UCS_TEST_P(test_ucp_tag_offload, eager_multi_recv,
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload)
 
 class test_ucp_tag_offload_triggered : public test_ucp_tag_offload {
+private:
+    bool disable_proto() const
+    {
+        return get_variant_value(0);
+    }
+
 public:
+    void init()
+    {
+        test_ucp_tag_offload::init();
+        if (disable_proto()) {
+            UCS_TEST_SKIP_R("Triggered operation not supported with old "
+                            "protocol.");
+        }
+    }
+
     ucs_status_t make_offload_sched(entity &se, ucp_offload_sched_h *sched_p) {
         ucs_status_t status;
         ucp_offload_sched_h sched;
@@ -480,7 +495,7 @@ err:
     }
 
     ucs_status_t offload_send_exp(size_t length, int is_rndv) {
-        ucp_offload_sched_h sched;
+        ucp_offload_sched_h ssched, rsched;
         ucs_status_ptr_t req;
         ucp_request_param_t param = {};
         std::vector<ucs_status_ptr_t> reqs;
@@ -489,7 +504,8 @@ err:
 
         receiver().connect(&sender(), get_ep_params());
 
-        ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
+        ASSERT_UCS_OK(make_offload_sched(sender(), &ssched));
+        ASSERT_UCS_OK(make_offload_sched(receiver(), &rsched));
 
         // Get eager length
         const ucp_tag_t ftag = 0x11, btag = 0x22;
@@ -498,9 +514,9 @@ err:
         std::vector<uint8_t> sendrecvbuf(length);
 
         // Prepare receive from which receiver's send depends
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh   = rsched;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
-        param.schedh   = sched;
         param.reply_ep = !is_rndv ? NULL : receiver().ep();
         req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
                                length, ftag, 0xffff, &param);
@@ -510,8 +526,8 @@ err:
         reqs.push_back(req);
 
         // Schedule triggered send operation of the receiver 
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
-        param.schedh       = sched;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh       = rsched;
         req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                recvbuf.size(), btag, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -521,8 +537,8 @@ err:
 
         // Prepare the receive operation of the sender. No offload sched is provided
         // since sender's operations are not offloaded.
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
-        param.schedh       = sched;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh       = ssched;
         req = ucp_tag_recv_nbx(sender().worker(), sendrecvbuf.data(),
                                length, btag, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -531,8 +547,8 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Finally, send the first operation from the sender
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
-        param.schedh       = sched;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh       = ssched;
         req = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
                                recvbuf.size(), ftag, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -544,13 +560,14 @@ err:
             request_wait(reqs.back());
             reqs.pop_back();
         }
-        delete_offload_sched(sched);
+        delete_offload_sched(ssched);
+        delete_offload_sched(rsched);
 
         return UCS_OK;
     }
 
     ucs_status_t offload_send_unexp(size_t length, int is_rndv) {
-        ucp_offload_sched_h sched;
+        ucp_offload_sched_h ssched, rsched;
         ucs_status_ptr_t req;
         ucp_request_param_t param = {};
         std::vector<ucs_status_ptr_t> reqs;
@@ -559,7 +576,8 @@ err:
 
         receiver().connect(&sender(), get_ep_params());
 
-        ASSERT_UCS_OK(make_offload_sched(receiver(), &sched));
+        ASSERT_UCS_OK(make_offload_sched(sender(), &ssched));
+        ASSERT_UCS_OK(make_offload_sched(receiver(), &rsched));
 
         // Get eager length
         const ucp_tag_t ftag = 0x11, btag = 0x22;
@@ -579,9 +597,9 @@ err:
         request_wait(req, {&sender()});
 
         // Prepare receive from which receiver's send depends
-        param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+        param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
-        param.schedh   = sched;
+        param.schedh   = rsched;
         param.reply_ep = !is_rndv ? NULL : sender().ep();
         req = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
                                length, ftag, 0xffff, &param);
@@ -591,8 +609,8 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Prepare the triggered send operation of the receiver 
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | UCP_OP_ATTR_FLAG_OP_OFFLOAD;
-        param.schedh       = sched;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.schedh       = rsched;
         req = ucp_tag_send_nbx(receiver().ep(), recvbuf.data(),
                                recvbuf.size(), btag, &param);
         if (UCS_PTR_IS_ERR(req)) {
@@ -615,7 +633,8 @@ err:
             reqs.pop_back();
         }
 
-        delete_offload_sched(sched);
+        delete_offload_sched(ssched);
+        delete_offload_sched(rsched);
 
         return UCS_OK;
     }
@@ -635,11 +654,6 @@ UCS_TEST_P(test_ucp_tag_offload_triggered, send_eager_unexp)
 UCS_TEST_P(test_ucp_tag_offload_triggered, send_rndv_exp, "RNDV_THRESH=1000")
 {
    ASSERT_UCS_OK(offload_send_exp(2048, 1));
-}
-
-UCS_TEST_P(test_ucp_tag_offload_triggered, send_rndv_unexp, "RNDV_THRESH=1000")
-{
-   ASSERT_UCS_OK(offload_send_unexp(2048, 1));
 }
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload_triggered)

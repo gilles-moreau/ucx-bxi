@@ -40,7 +40,12 @@ typedef struct uct_bxi_recv_block {
   uct_bxi_iface_send_op_t *op;  /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
+enum {
+  UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL = UCS_BIT(1),
+};
+
 typedef struct uct_bxi_rxq_param {
+  unsigned                 flags;   /* Flags to influence RXQ creation */
   uct_iface_mpool_config_t mp;      /* RX Memory pool configuration */
   ptl_list_t               list;    /* Portals priority list */
   char                    *name;    /* Name used of memory pool */
