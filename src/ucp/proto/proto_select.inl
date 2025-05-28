@@ -142,6 +142,14 @@ static UCS_F_ALWAYS_INLINE void ucp_proto_select_param_init_common(
     select_param->sg_count      = sg_count;
 }
 
+static UCS_F_ALWAYS_INLINE void 
+ucp_proto_select_add_attr(ucp_proto_select_param_t *select_param,
+                          uint32_t op_attr)
+{
+    select_param->op_attr = ucp_proto_select_op_attr_pack(
+        select_param->op_attr | op_attr, UCP_PROTO_SELECT_OP_ATTR_MASK);
+}
+
 static UCS_F_ALWAYS_INLINE void
 ucp_proto_select_param_init(ucp_proto_select_param_t *select_param,
                             ucp_operation_id_t op_id, uint32_t op_attr_mask,

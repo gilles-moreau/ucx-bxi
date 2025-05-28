@@ -10,22 +10,29 @@
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
-#define UCT_BXI_RNDV_PREFIX 0xdededad
-#define UCT_BXI_RNDV_GET_TAG(_sn)                                              \
-  (0xdeadbeef00000000 | (0x00000000ffffffff & (_sn)))
+#define UCT_BXI_RNDV_NID_MASK 0xffff
+#define UCT_BXI_RNDV_PID_MASK 0xffff
 
-#define UCT_BXI_HDR_GET_MATCH(_hdr) (((_hdr) >> 4) & 0xffffffff)
+#define UCT_BXI_RNDV_PREFIX 0xdededada
+#define UCT_BXI_BUILD_RNDV_CTRL_TAG(_pid)                                      \
+  ({                                                                           \
+    uint64_t _tag  = 0;                                                        \
+    _tag           = UCT_BXI_RNDV_PREFIX;                                      \
+    _tag           = _tag << 16;                                               \
+    _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
+    _tag           = _tag << 16;                                               \
+    _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
+    _tag;                                                                      \
+  })
 
-#define UCT_BXI_HDR_SET(_hdr, _match, _prot)                                   \
+#define UCT_BXI_HDR_SET(_hdr, _prot)                                           \
   _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
   _hdr  = (_hdr << 32);                                                        \
-  _hdr |= ((_match) & 0xffffffff);                                             \
-  _hdr  = (_hdr << 4);                                                         \
   _hdr |= ((_prot) & 0xf)
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
 {
-  return (((hdr & 0xfffffff000000000) >> 36) == UCT_BXI_RNDV_PREFIX);
+  return (((hdr & 0xffffffff00000000) >> 32) == UCT_BXI_RNDV_PREFIX);
 }
 
 enum {
@@ -72,10 +79,9 @@ typedef struct uct_bxi_pending_req {
       uct_completion_t *comp;
     } init;
     struct {
-      uct_bxi_iface_t   *iface;   /* Back pointer to interface */
-      ptl_process_t      pid;     /* Initiator PTL identifier */
-      ptl_pt_index_t     pti;     /* Initiator PTE from which RNDV was issued */
-      uct_tag_t          get_tag; /* Tag for GET operation */
+      uct_bxi_iface_t   *iface; /* Back pointer to interface */
+      ptl_process_t      pid;   /* Initiator PTL identifier */
+      ptl_pt_index_t     pti;   /* Initiator PTE from which RNDV was issued */
       uct_tag_t          send_tag; /* Initiator tag */
       size_t             length;   /* Initiator length */
       void              *buffer;   /* Receive buffer */
@@ -93,6 +99,7 @@ typedef struct uct_bxi_iface_addr {
   ptl_pt_index_t am;
   ptl_pt_index_t rma;
   ptl_pt_index_t tag;
+  ptl_pt_index_t ctrl;
 } uct_bxi_iface_addr_t;
 
 typedef struct uct_bxi_ep_addr {
@@ -256,6 +263,9 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t  *q;
       ucs_list_link_t cancel; /* List of cancelled block */
     } tag;
+    struct {
+      uct_bxi_rxq_t *q;
+    } ctrl; /* Control RXQ for internal protocols. */
     struct {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;
@@ -461,12 +471,14 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->handler   = _handler;                                               \
   (_desc)->user_comp = _user_comp;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc)                      \
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc, _rxq)                \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
-                           return UCS_ERR_NO_RESOURCE);
+                           return UCS_ERR_NO_RESOURCE);                        \
+  (_desc)->rxq = _rxq;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(_iface, _mp, _desc, _err_code)       \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err_code);
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(_iface, _mp, _desc, _rxq, _err_code) \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err_code);     \
+  (_desc)->rxq = _rxq;
 
 #define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
   UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \

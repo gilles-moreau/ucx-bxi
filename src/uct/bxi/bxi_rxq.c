@@ -178,6 +178,11 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
     goto err;
   }
 
+  /* No receive blocks for eager messages are requested. */
+  if (params->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL) {
+    goto out;
+  }
+
   //FIXME: we may question the use of a memory pool here since the number of
   //       buffer is fixed and everything should be posted to the NIC at init
   //       time. To implement a dynamic behavior then block initialization
@@ -206,6 +211,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
     goto err_clean_mp;
   }
 
+out:
   *rxq_p = rxq;
 
   return status;

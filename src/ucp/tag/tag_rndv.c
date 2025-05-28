@@ -200,6 +200,9 @@ ucp_tag_offload_try_rndv_get(ucp_worker_iface_t *wiface,
                                 recv_req->recv.dt_iter.dt_class,
                                 &recv_req->recv.dt_iter.mem_info, 1);
 
+    /* Operation will be offloaded, add offload flag. */
+    ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
+
     thresh_elem = ucp_proto_select_lookup(worker, &ep_config->proto_select, 
                                           ep->cfg_index,
                                           UCP_WORKER_CFG_INDEX_NULL, &sel_param, 

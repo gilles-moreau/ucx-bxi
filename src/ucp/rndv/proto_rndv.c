@@ -917,16 +917,17 @@ ucp_proto_rndv_handle_rtr(void *arg, void *data, size_t length, unsigned flags)
     ucp_trace_req(req, "recv RTR offset %zu length %zu/%zu req %p", rtr->offset,
                   rtr->size, req->send.state.dt_iter.length, req);
 
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOADED) {
-        ucp_tag_offload_cancel_rndv(req);
-        ucs_assert(!ucp_ep_use_indirect_id(req->send.ep));
-    }
-
     /* RTR covers the whole send request - use the send request directly */
     ucs_assert(req->flags & UCP_REQUEST_FLAG_PROTO_INITIALIZED);
 
     select_param = &req->send.proto_config->select_param;
     op_attr_mask = ucp_proto_select_op_attr_unpack(select_param->op_attr);
+
+    if (req->flags & UCP_REQUEST_FLAG_OFFLOADED) {
+        ucp_tag_offload_cancel_rndv(req);
+        ucs_assert(!ucp_ep_use_indirect_id(req->send.ep));
+        op_attr_mask &= ~UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+    }
 
     if (rtr->size == req->send.state.dt_iter.length) {
         /* RTR covers the whole send request - use the send request directly */

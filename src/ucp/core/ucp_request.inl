@@ -484,6 +484,47 @@ ucp_request_send_buffer_reg(ucp_request_t *req, ucp_md_map_t md_map,
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
+ucp_request_send_op_offload(ucp_tag_match_t *tm,
+                            ucp_request_t *req, 
+                            const ucp_request_param_t *param)
+{
+    req->send.tag_offload.sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
+                                                          schedh, NULL);
+
+    if (!ucp_offload_sched_exists(tm, req->send.tag_offload.sched)) {
+        /* A scheduler was provided but is not available in worker. */
+        ucs_error("req %p. provided scheduler not available. sched=%p", 
+                  req, req->send.tag_offload.sched);
+        return UCS_ERR_INVALID_PARAM;
+    }
+
+    req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+    ucs_list_head_init(&req->send.state.uct_comp.op_head);
+
+    return UCS_OK;
+}
+
+static UCS_F_ALWAYS_INLINE ucs_status_t
+ucp_request_recv_op_offload(ucp_tag_match_t *tm,
+                            ucp_request_t *req, 
+                            const ucp_request_param_t *param)
+{
+    req->recv.schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+
+    if (!ucp_offload_sched_exists(tm, req->recv.schedh)) {
+        /* A scheduler was provided but is not available in worker. */
+        ucs_error("req %p. provided scheduler not available. sched=%p", 
+                  req, req->recv.schedh);
+        return UCS_ERR_INVALID_PARAM;
+    }
+
+    req->flags         |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+    req->recv.reply_ep  = UCP_REQUEST_PARAM_FIELD(param, EPH, reply_ep, NULL);
+
+    return UCS_OK;
+}
+
+static UCS_F_ALWAYS_INLINE ucs_status_t
 ucp_request_send_reg_lane(ucp_request_t *req, ucp_lane_index_t lane)
 {
     ucp_md_map_t md_map;

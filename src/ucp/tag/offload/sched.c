@@ -1,4 +1,5 @@
 #include <ucp/core/ucp_worker.h>
+#include <ucs/datastruct/khash.h>
 #include <uct/api/uct.h>
 #include <uct/base/uct_iface.h>
 
@@ -12,8 +13,14 @@ struct ucp_offload_sched {
   ucp_offload_region_t *regions;
   size_t                count;
   size_t                capacity;
-  ucp_worker_iface_t   *wiface;
+  ucp_worker_h          worker;
+  int                   activated;
 };
+
+static int ucp_offload_sched_is_activated(ucp_offload_sched_h sched)
+{
+  return sched->worker->tm.offload.iface != NULL;
+}
 
 // Helper: grow the internal region array if needed
 static ucs_status_t ucp_offload_sched_ensure_capacity(ucp_offload_sched_h sched)
@@ -44,17 +51,24 @@ ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
                                           void *buffer, size_t size,
                                           uct_op_ctx_h *op_p)
 {
-  ucs_status_t status;
+  ucs_status_t        status;
+  ucp_worker_iface_t *wiface;
+
+  if (!ucp_offload_sched_is_activated(sched)) {
+    return UCS_OK;
+  }
 
   status = ucp_offload_sched_ensure_capacity(sched);
   if (status != UCS_OK) {
     return status;
   }
 
+  wiface = sched->worker->tm.offload.iface;
+
   sched->regions[sched->count].buffer = buffer;
   sched->regions[sched->count].size   = size;
 
-  status = uct_iface_tag_op_ctx_create(sched->wiface->iface,
+  status = uct_iface_tag_op_ctx_create(wiface->iface,
                                        &sched->regions[sched->count].op);
   if (status != UCS_OK) {
     return status;
@@ -100,6 +114,10 @@ size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
 {
   size_t found = 0;
 
+  if (!ucp_offload_sched_is_activated(sched)) {
+    return found;
+  }
+
   for (size_t i = 0; i < sched->count && found < max_overlaps; ++i) {
     if (ucp_offload_sched_regions_overlap(buffer, size,
                                           sched->regions[i].buffer,
@@ -108,6 +126,7 @@ size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
       found++;
     }
   }
+
   return found;
 }
 
@@ -116,16 +135,7 @@ ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
 {
   ucs_status_t        status = UCS_OK;
   ucp_offload_sched_h sched;
-
-  if (worker->tm.offload.iface == NULL) {
-    //FIXME: check tag offloading capabilities with get_attr
-    ucs_warn("OFF: operation offloading requested but no interface "
-             "available.");
-    return UCS_ERR_NO_RESOURCE;
-  }
-
-  ucs_assert(worker->num_active_ifaces == 1 &&
-             worker->tm.offload.iface != NULL);
+  int                 ret;
 
   sched = ucs_malloc(sizeof(struct ucp_offload_sched), "alloc oop ctx");
   if (sched == NULL) {
@@ -134,10 +144,15 @@ ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
     goto err;
   }
 
-  sched->regions  = NULL;
-  sched->count    = 0;
-  sched->capacity = 0;
-  sched->wiface   = worker->tm.offload.iface;
+  sched->activated = worker->tm.offload.iface == NULL;
+  sched->regions   = NULL;
+  sched->count     = 0;
+  sched->capacity  = 0;
+  sched->worker    = worker;
+
+  /* Append the scheduler to the worker's hash table. */
+  kh_put(ucp_tag_sched_hash, &worker->tm.offload.sched_hash, sched, &ret);
+  ucs_assertv(ret != UCS_KH_PUT_FAILED, "ret %d", ret);
 
   *sched_p = sched;
 err:
