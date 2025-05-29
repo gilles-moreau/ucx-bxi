@@ -372,7 +372,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         case UCT_BXI_TAG_PROT_RNDV_HW:
           /* BXI internal get protocol is initiated when no triggered get has 
            * been set up already. This would be the case when the protocol 
-           * has been offloaded. */
+           * has not been offloaded. */
           if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP)) {
             hdr = ev->start;
 
@@ -1297,6 +1297,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   kh_init_inplace(uct_bxi_rxq, &self->rx.queues);
 
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
+  rxq_param.flags   = 0;
   rxq_param.eqh     = self->rx.eqh;
   rxq_param.nih     = md->nih;
   rxq_param.mp      = self->config.rx.am_mp;

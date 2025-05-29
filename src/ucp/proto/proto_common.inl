@@ -12,6 +12,7 @@
 
 #include <ucp/dt/datatype_iter.inl>
 #include <ucp/core/ucp_request.inl>
+#include <ucp/tag/offload.h>
 
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
@@ -228,6 +229,7 @@ ucp_proto_request_send_init(ucp_request_t *req, ucp_ep_h ep, uint32_t flags)
 {
     req->flags   = UCP_REQUEST_FLAG_PROTO_SEND | flags;
     req->send.ep = ep;
+    ucs_list_head_init(&req->send.state.uct_comp.op_head);
 }
 
 
@@ -305,6 +307,17 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
         }
         /* Append OP attribute to select protocols that support OP offload. */
         ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
+
+        /* Check for overlapped region. */ 
+        //NOTE: it should be done once so avoid putting it in send functions, 
+        //      otherwise it can be called multiple time when the operation 
+        //      is appended to pending queues.
+        ucp_offload_sched_region_get_overlaps(
+                req->send.tag_offload.sched,
+                req->send.state.dt_iter.type.contig.buffer,
+                req->send.state.dt_iter.length, 
+                &req->send.state.uct_comp.op_head,
+                UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
     }
 
     msg_length = req->send.state.dt_iter.length + header_length;

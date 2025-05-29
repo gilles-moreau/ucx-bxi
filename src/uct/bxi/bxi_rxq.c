@@ -56,8 +56,6 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
     return status;
   }
 
-  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_INUSE;
-
   return status;
 }
 

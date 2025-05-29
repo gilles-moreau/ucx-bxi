@@ -488,6 +488,8 @@ ucp_request_send_op_offload(ucp_tag_match_t *tm,
                             ucp_request_t *req, 
                             const ucp_request_param_t *param)
 {
+    ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+
     req->send.tag_offload.sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
                                                           schedh, NULL);
 
@@ -499,7 +501,6 @@ ucp_request_send_op_offload(ucp_tag_match_t *tm,
     }
 
     req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-    ucs_list_head_init(&req->send.state.uct_comp.op_head);
 
     return UCS_OK;
 }
@@ -509,6 +510,8 @@ ucp_request_recv_op_offload(ucp_tag_match_t *tm,
                             ucp_request_t *req, 
                             const ucp_request_param_t *param)
 {
+    ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+
     req->recv.schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
 
     if (!ucp_offload_sched_exists(tm, req->recv.schedh)) {

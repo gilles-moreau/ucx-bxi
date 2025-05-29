@@ -11,8 +11,7 @@ typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
                                                ptl_event_t     *ev);
 
 enum {
-  UCT_BXI_RECV_BLOCK_FLAG_INUSE      = UCS_BIT(0),
-  UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP = UCS_BIT(1)
+  UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP = UCS_BIT(0)
 };
 
 typedef struct uct_bxi_recv_block_params {

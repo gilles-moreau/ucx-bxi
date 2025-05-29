@@ -85,7 +85,7 @@ static void uct_bxi_get_tag_handler(uct_bxi_iface_send_op_t *op,
   uct_invoke_completion(op->user_comp, UCS_OK);
 
   uct_bxi_ep_remove_from_queue(op);
-  /* Then, we may push OP back to the memory pool. */
+  /* Finally, we may push OP back to the memory pool. */
   ucs_mpool_put_inline(op);
 }
 

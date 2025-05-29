@@ -284,11 +284,6 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
     unsigned flags = 0;
 
     if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        ucs_assert(iov->count == 1);
-        ucp_offload_sched_region_get_overlaps(req->send.tag_offload.sched, 
-                                         iov->buffer, iov->length, 
-                                         &req->send.state.uct_comp.op_head, 
-                                         UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
         flags = UCT_TAG_OFFLOAD_OPERATION; 
     }
 
