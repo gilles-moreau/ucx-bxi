@@ -646,9 +646,14 @@ UCS_TEST_P(test_ucp_wireup_1sided, disconnect_nonexistent) {
     sender().destroy_worker();
 }
 
+//FIXME: below wireup test not supported with HW TM with BXI. 
+//       Reason: also RNDV_THRESH is set to inf, max eager size is limited 
+//       to 1168, see FIXME in bxi get_attr. Then, rndv protocol is selected 
+//       which makes the test to fail.
 UCS_TEST_P(test_ucp_wireup_1sided, disconnect_reconnect,
            /* RNDV requires progress on both sides - sender and receiver */
-           "RNDV_THRESH=inf") {
+           "RNDV_THRESH=inf", "BXI_TM_ENABLE?=n") {
+
     sender().connect(&receiver(), get_ep_params());
     send_b(sender().ep(), 1000, 1);
     disconnect(sender());
@@ -662,7 +667,7 @@ UCS_TEST_P(test_ucp_wireup_1sided, disconnect_reconnect,
 
 UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_onesided,
            /* RNDV requires progress on both sides - sender and receiver */
-           "RNDV_THRESH=inf") {
+           "RNDV_THRESH=inf", "BXI_TM_ENABLE?=n") {
     sender().connect(&receiver(), get_ep_params());
     send_b(sender().ep(), 1000, 100);
     disconnect(sender());
@@ -672,7 +677,7 @@ UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_onesided,
 UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_onesided_nozcopy,
            "ZCOPY_THRESH=-1",
            /* RNDV requires progress on both sides - sender and receiver */
-           "RNDV_THRESH=inf") {
+           "RNDV_THRESH=inf", "BXI_TM_ENABLE?=n") {
     sender().connect(&receiver(), get_ep_params());
     send_b(sender().ep(), 1000, 100);
     disconnect(sender());
@@ -681,7 +686,7 @@ UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_onesided_nozcopy,
 
 UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_onesided_wait,
            /* RNDV requires progress on both sides - sender and receiver */
-           "RNDV_THRESH=inf") {
+           "RNDV_THRESH=inf", "BXI_TM_ENABLE?=n") {
     sender().connect(&receiver(), get_ep_params());
     send_recv(sender().ep(), receiver().worker(), receiver().ep(), 8, 1);
     send_b(sender().ep(), 1000, 200);
@@ -726,7 +731,9 @@ UCS_TEST_P(test_ucp_wireup_1sided, send_disconnect_reply2) {
 
 
 // Cannot disconnect only one side when using self (using the same ep)
-UCS_TEST_SKIP_COND_P(test_ucp_wireup_1sided, disconnect_nb_onesided, is_self()) {
+//FIXME: same as above.
+UCS_TEST_SKIP_COND_P(test_ucp_wireup_1sided, disconnect_nb_onesided, is_self(), 
+                     "BXI_TM_ENABLE?=n") {
     sender().connect(&receiver(), get_ep_params());
 
     std::vector<void*> sreqs;

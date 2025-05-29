@@ -107,12 +107,6 @@ ucp_tag_rndv_offload_send_func(ucp_request_t                 *req,
 
   if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
     flags = UCT_TAG_OFFLOAD_OPERATION;
-    ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-    ucp_offload_sched_region_get_overlaps(
-            req->send.tag_offload.sched,
-            req->send.state.dt_iter.type.contig.buffer,
-            req->send.state.dt_iter.length, &req->send.state.uct_comp.op_head,
-            UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
   }
 
   rndv_op = uct_ep_tag_rndv_zcopy(

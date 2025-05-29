@@ -341,8 +341,11 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
     req->recv.uct_ctx.op_ctx          = NULL;
     if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        status = ucp_offload_sched_region_add(req->recv.schedh, iov.buffer, 
-                                              iov.length, &req->recv.uct_ctx.op_ctx);
+        ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+        status = ucp_offload_sched_region_add(req->recv.schedh, 
+                                              req->recv.dt_iter.type.contig.buffer, 
+                                              req->recv.dt_iter.length, 
+                                              &req->recv.uct_ctx.op_ctx);
         if (status != UCS_OK) {
             return status;
         }

@@ -56,13 +56,16 @@ ucp_rma_tag_offload_get_send_func(ucp_request_t                 *req,
                                   uct_iov_t                     *iov)
 {
   unsigned flags = 0;
+  ucp_request_t *recv_req = ucp_request_get_super(req);
 
   if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
     ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
     ucs_assert(iov->count == 1);
-    ucp_offload_sched_region_get_overlaps(
-            req->send.tag_offload.sched, iov->buffer, iov->length,
-            &req->send.state.uct_comp.op_head, UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+    
+    // Get scheduling info from the receive request.
+    req->send.tag_offload.sched = recv_req->recv.schedh;
+    ucs_list_add_head(&req->send.state.uct_comp.op_head, 
+                      &recv_req->recv.uct_ctx.op_ctx->elem);
     flags = UCT_TAG_OFFLOAD_OPERATION;
   }
 
