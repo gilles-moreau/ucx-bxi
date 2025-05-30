@@ -60,7 +60,9 @@ static void uct_bxi_send_rndv_ack_handler(uct_bxi_iface_send_op_t *op,
   //FIXME: INUSE flags to pass asserts.
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
   /* During ACK, reset handler for next PTL_EVENT_GET. Operation has to 
-   * be released when the GET operation from target is completed. */
+   * be released when the GET operation from target is completed: since 
+   * flushing is based on the endpoint send queue, removing the operation 
+   * from the queue here could result in corrupted flush. */
   op->handler = op->user_comp == NULL ? uct_bxi_send_op_no_completion :
                                         uct_bxi_send_comp_op_handler;
 }
@@ -815,6 +817,7 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   } else {
     status = UCS_INPROGRESS;
   }
+
   /* Append operation descriptor to completion queue and increment 
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
@@ -878,7 +881,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   params.cth   = cth;
   //FIXME: Add explanation for OVER_DISABLE
   params.options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
-                   PTL_ME_EVENT_UNLINK_DISABLE | ct_flags;
+                   PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
+                   ct_flags;
 
   /* Then, post the memory entry. The Portals Priority list has already been set 
    * during memory initialization. */
@@ -1252,7 +1256,7 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
   if (uct_bxi_iface_available(iface) > 0 &&
-      !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) {
+      (iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp))) {
     return UCS_ERR_BUSY;
   }
 

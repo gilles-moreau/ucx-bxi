@@ -199,6 +199,7 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
 {
   ucs_status_t             status;
   uct_bxi_iface_send_op_t *op;
+  uint64_t                 get_tag;
 
   UCT_BXI_CHECK_IFACE_RES(iface);
 
@@ -221,9 +222,9 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
 
   //NOTE: remote address is the remote offset here since the operation
   //      will match the specific GET ME posted by initiator.
-  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, pid, pti,
-                               UCT_BXI_BUILD_RNDV_CTRL_TAG(pid), 0, op));
+  get_tag = UCT_BXI_BUILD_RNDV_CTRL_TAG(uct_bxi_iface_md(iface)->pid);
+  status  = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
+                                length, pid, pti, get_tag, 0, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
@@ -231,6 +232,7 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
 
   //NOTE: These GET operation are not appended to any endpoint queue. As a
   //      consequence, they wont be flushed.
+  uct_bxi_iface_available_add(iface, -1);
 
   return status;
 }
@@ -430,7 +432,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
     break;
   case PTL_EVENT_LINK:
   case PTL_EVENT_PUT_OVERFLOW:
-    break;
   case PTL_EVENT_GET_OVERFLOW:
   case PTL_EVENT_ACK:
   case PTL_EVENT_REPLY:
@@ -616,14 +617,16 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d",
+      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d "
+                "block=%p",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
-                ev.pt_index);
+                ev.pt_index, ev.user_ptr);
 
       /* Get RX Queue from Portals Table Index */
       uct_bxi_iface_get_rxq(iface, ev.pt_index, &rxq);
 
       /* Handle the event. */
+      //FIXME: progressed is unused
       progressed += rxq->handler(iface, &ev);
       break;
     case PTL_EQ_EMPTY:
@@ -1164,7 +1167,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
   //TODO: implement support for scatter buffer.
-  iface->config.max_iovecs   = ucs_min(md->config.limits.max_iovecs, 1);
+  iface->config.max_iovecs   = ucs_max(md->config.limits.max_iovecs, 1);
   iface->config.max_msg_size = md->config.limits.max_msg_size;
   iface->config.max_inline =
           ucs_min(md->config.limits.max_volatile_size, UCS_ALLOCA_MAX_SIZE);
@@ -1416,14 +1419,17 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
 
-  ucs_debug(
-          "BXI: interface info. nih=%p, nid=%d, pid=%d, pti am=%d, pti tag=%d, "
-          "pti rma=%d, pti ctrl=%d, eqh=%p",
-          uct_bxi_iface_md(self)->nih.handle,
-          uct_bxi_iface_md(self)->pid.phys.nid,
-          uct_bxi_iface_md(self)->pid.phys.pid, self->rx.am.q->pti,
-          self->rx.tag.q->pti, self->rx.rma.pti, self->rx.ctrl.q->pti,
-          self->rx.eqh.handle);
+  ucs_debug("BXI: interface info. nih=%p, nid=%d, pid=%d, eqh=%p",
+            uct_bxi_iface_md(self)->nih.handle,
+            uct_bxi_iface_md(self)->pid.phys.nid,
+            uct_bxi_iface_md(self)->pid.phys.pid, self->rx.eqh.handle);
+
+  ucs_debug("BXI: interface pti. pti am=%d, pti tag=%d, pti rma=%d, "
+            "pti ctrl=%d, ",
+            self->rx.am.q->pti,
+            self->tm.enabled ? self->rx.tag.q->pti : UCT_BXI_PT_NULL,
+            self->rx.rma.pti,
+            self->tm.enabled ? self->rx.ctrl.q->pti : UCT_BXI_PT_NULL);
 
   return status;
 
