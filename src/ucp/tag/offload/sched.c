@@ -144,6 +144,8 @@ ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
     goto err;
   }
 
+  //FIXME: add iface attr checks.
+
   sched->activated = worker->tm.offload.iface == NULL;
   sched->regions   = NULL;
   sched->count     = 0;
