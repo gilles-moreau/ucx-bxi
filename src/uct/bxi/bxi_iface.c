@@ -704,9 +704,9 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
     switch (ret) {
     case PTL_OK:
       ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, outstanding=%lu, "
-                "start=%p, pti=%d",
+                "start=%p, pti=%d, op=%p",
                 iface, uct_bxi_event_str[ev.type], ev.mlength,
-                iface->tx.available, ev.start, ev.pt_index);
+                iface->tx.available, ev.start, ev.pt_index, ev.user_ptr);
       switch (ev.type) {
       case PTL_EVENT_SEND:
         ucs_warn("BXI: TX event %s should not have be configured",
@@ -1415,6 +1415,15 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
    * hash table uses ptl_process_t supposing it is 8 bytes. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
+
+  ucs_debug(
+          "BXI: interface info. nih=%p, nid=%d, pid=%d, pti am=%d, pti tag=%d, "
+          "pti rma=%d, pti ctrl=%d, eqh=%p",
+          uct_bxi_iface_md(self)->nih.handle,
+          uct_bxi_iface_md(self)->pid.phys.nid,
+          uct_bxi_iface_md(self)->pid.phys.pid, self->rx.am.q->pti,
+          self->rx.tag.q->pti, self->rx.rma.pti, self->rx.ctrl.q->pti,
+          self->rx.eqh.handle);
 
   return status;
 
