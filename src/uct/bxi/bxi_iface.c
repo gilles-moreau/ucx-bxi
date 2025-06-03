@@ -114,24 +114,6 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {NULL},
 };
 
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
-{
-  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
-
-  if (--op->comp.comp == 0) {
-    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
-      uct_bxi_md_mem_desc_fini(op->mem_desc);
-    }
-
-    /* Reset operation flags. */
-    op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
-    op->comp.handler(op, op + 1);
-  }
-}
-
 static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
                                                    ptl_event_t     *ev)
 {

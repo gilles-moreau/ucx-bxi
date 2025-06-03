@@ -54,6 +54,19 @@ static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
+static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
+                                                const void              *resp)
+{
+  /* Deactivate block and release it to memory pool. */
+  uct_bxi_recv_block_deactivate(op->rndv.block);
+  uct_bxi_recv_block_release(op->rndv.block);
+
+  /* Do not call user completion callback as it's been acknowledged already 
+   * during the sw protocol handled by UCP. */
+  uct_bxi_ep_remove_from_queue(op);
+  ucs_mpool_put_inline(op);
+}
+
 static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                              const void              *resp)
 {
@@ -643,12 +656,16 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_bxi_iface_send_op_t *op = (uct_bxi_iface_send_op_t *)tl_op;
 
-  /* Deactivate block and release it to memory pool. */
-  uct_bxi_recv_block_deactivate(op->rndv.block);
-  uct_bxi_recv_block_release(op->rndv.block);
+  /* Overwrite completion handler. Operation must be completed only if both 
+   * PTL_EVENT_ACK from rendezvous was also processed. */
+  op->comp.handler = uct_bxi_send_rndv_cancel_completion;
 
-  op->flags &= ~UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  uct_bxi_send_op_no_completion(op, NULL);
+  // NOTE: Uncertain if PTL_EVENT_ACK from the rendezvous message has
+  //       been processed, so we can't return the operation to the pool.
+  //       This is checked by the completion counter. Since the initiator
+  //       has received the RTR message from the target, there's no need
+  //       to invoke the user's completion callback.
+  uct_bxi_iface_completion_op(op);
 
   return UCS_OK;
 }
