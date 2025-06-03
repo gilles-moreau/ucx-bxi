@@ -54,6 +54,7 @@ typedef struct uct_bxi_rxq_param {
 } uct_bxi_rxq_param_t;
 
 typedef struct uct_bxi_rxq {
+  unsigned        flags;
   ptl_handle_ni_t nih;
   ptl_handle_eq_t eqh;
   ptl_pt_index_t  pti;  /* Portals Table Index for RX Queue */

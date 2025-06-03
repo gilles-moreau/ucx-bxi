@@ -162,6 +162,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
     goto err;
   }
 
+  rxq->flags               = params->flags;
   rxq->nih                 = params->nih;
   rxq->eqh                 = params->eqh;
   rxq->list                = params->list;
@@ -225,9 +226,10 @@ err:
 
 void uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq)
 {
-  uct_bxi_rxq_recv_blocks_disable(rxq);
-
-  ucs_mpool_cleanup(&rxq->mp, 1);
+  if (!(rxq->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL)) {
+    uct_bxi_rxq_recv_blocks_disable(rxq);
+    ucs_mpool_cleanup(&rxq->mp, 1);
+  }
 
   uct_bxi_wrap(PtlPTFree(rxq->nih, rxq->pti));
 
