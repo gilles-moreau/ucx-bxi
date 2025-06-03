@@ -1127,6 +1127,7 @@ static void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
 
   /* Release TAG RX queue. */
   uct_bxi_rxq_fini(iface->rx.tag.q);
+  uct_bxi_rxq_fini(iface->rx.ctrl.q);
 
   /* Receive block memory pool.*/
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
@@ -1472,7 +1473,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 
   /* Clean AM resources */
   uct_bxi_rxq_fini(self->rx.am.q);
-  uct_bxi_rxq_fini(self->rx.ctrl.q);
   PtlEQFree(self->rx.eqh);
 
   /* Clean endpoint hash table. */
