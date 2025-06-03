@@ -54,19 +54,6 @@ static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
-static void uct_bxi_send_rndv_ack_handler(uct_bxi_iface_send_op_t *op,
-                                          const void              *resp)
-{
-  //FIXME: INUSE flags to pass asserts.
-  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  /* During ACK, reset handler for next PTL_EVENT_GET. Operation has to 
-   * be released when the GET operation from target is completed: since 
-   * flushing is based on the endpoint send queue, removing the operation 
-   * from the queue here could result in corrupted flush. */
-  op->handler = op->user_comp == NULL ? uct_bxi_send_op_no_completion :
-                                        uct_bxi_send_comp_op_handler;
-}
-
 static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                              const void              *resp)
 {
@@ -590,9 +577,17 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
-                                    comp, uct_bxi_send_rndv_ack_handler,
+                                    comp, uct_bxi_send_comp_op_handler,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
+
+  /* Rendez-vous operation will creates two events: 
+   * - PTL_EVENT_ACK: acknowledge the reception of the first control message
+   * - PTL_EVENT_GET: target GET operation has issued the GET operation and 
+   *                  has retrieved the data.
+   * Therefore, we increment the completion counter so that the operation is 
+   * actually completed on the PTL_EVENT_GET. */
+  op->comp.comp++;
 
   /* Attach operation to block and vice versa so they can be both released, 
    * either on completion or if the operation is canceled. */
@@ -759,11 +754,11 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
    * - one for the RTS operation that will match the ME;
    * - one for the completion of the GET operation. */
   op_ctx->threshold++;
-  op->flags    |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
-  op->length    = op_ctx->block->size;
-  op->rndv.ctx  = op_ctx->block->ctx;
-  op->rndv.tag  = op_ctx->block->tag;
-  op->handler   = uct_bxi_get_tag_handler; // Reset handler.
+  op->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
+  op->length        = op_ctx->block->size;
+  op->rndv.ctx      = op_ctx->block->ctx;
+  op->rndv.tag      = op_ctx->block->tag;
+  op->comp.handler  = uct_bxi_get_tag_handler; // Reset handler.
 
   /* Also, attach operation to the block. //TODO: explain why */
   op_ctx->block->op     = op;
@@ -1200,13 +1195,15 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     if (op == NULL) {
       return UCS_ERR_NO_MEMORY;
     }
-    op->user_comp = comp;
-    op->handler   = uct_bxi_ep_flush_comp_op_handler;
-    op->flags     = UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH;
+    op->user_comp    = comp;
+    op->comp.handler = uct_bxi_ep_flush_comp_op_handler;
+    op->comp.comp    = 1;
+    op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH;
 
     /* Append operation descriptor to completion queue. */
-    //NOTE: Do not increment the MD sequence number since we only need to know
-    //      when is the last operation completed.
+    //FIXME: sequence number is not used to determine completion. Instead, it
+    //       is the queue structure (list) of the endpoint. This is a relicat
+    //       of the previous implementation with portals counter.
     uct_bxi_ep_add_flush_op_sn(ep, op, iface->tx.mem_desc->sn);
   }
 
