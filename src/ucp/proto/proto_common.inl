@@ -62,7 +62,6 @@ ucp_proto_completion_init(uct_completion_t *comp,
     comp->count  = 1;
     comp->status = UCS_OK;
     /* extra ref to be decremented when all sent */
-    ucs_list_head_init(&comp->op_head);
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
