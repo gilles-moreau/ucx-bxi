@@ -163,5 +163,10 @@ err:
 
 void ucp_offload_sched_fini(ucp_offload_sched_h sched)
 {
+  for (size_t i = 0; i < sched->count; ++i) {
+    uct_iface_tag_op_ctx_delete(sched->worker->tm.offload.iface->iface,
+                                sched->regions[i].op);
+    sched->count--;
+  }
   ucs_free(sched->regions);
 }

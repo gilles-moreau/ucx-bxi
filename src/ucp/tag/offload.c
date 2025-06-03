@@ -347,6 +347,7 @@ ucp_tag_offload_do_post(ucp_request_t *req)
                                               req->recv.dt_iter.length, 
                                               &req->recv.uct_ctx.op_ctx);
         if (status != UCS_OK) {
+            ucp_tag_offload_release_buf(req);
             return status;
         }
     }
