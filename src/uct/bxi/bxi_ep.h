@@ -223,7 +223,7 @@ uct_bxi_ep_add_send_op_sn(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_add_send_op(ep, op);
 
   ucs_trace_poll("ep %p add send op %p sn %lu handler %s", ep, op, op->sn,
-                 ucs_debug_get_symbol_name((void *)op->handler));
+                 ucs_debug_get_symbol_name((void *)op->comp.handler));
 }
 
 UCS_CLASS_DECLARE(uct_bxi_ep_t, const uct_ep_params_t *);

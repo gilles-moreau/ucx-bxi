@@ -119,15 +119,17 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
-  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
-    uct_bxi_md_mem_desc_fini(op->mem_desc);
-  }
+  if (--op->comp.comp == 0) {
+    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
+      uct_bxi_md_mem_desc_fini(op->mem_desc);
+    }
 
-  /* Reset operation flags. */
-  op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
-                 UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
-                 UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
-  op->handler(op, op + 1);
+    /* Reset operation flags. */
+    op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
+    op->comp.handler(op, op + 1);
+  }
 }
 
 static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
@@ -205,8 +207,9 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_DESC(iface, &iface->tx.send_op_mp, op);
-  op->handler = uct_bxi_get_rndv_handler;
-  op->flags   = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  op->comp.comp    = 1;
+  op->comp.handler = uct_bxi_get_rndv_handler;
+  op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
   UCT_SKIP_ZERO_LENGTH(length, op);
 
   /* Associate iface and the tag context of the receive block so that 
@@ -413,6 +416,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
     }
     break;
   case PTL_EVENT_GET:
+    /* Block was posted during rendez-vous. Event means target has successfully
+     * read data, initiator's operation can thus be completed. */
     uct_bxi_iface_completion_op(block->op);
     /* Block for GET has been consumed, it can be safely released and reused. */
     uct_bxi_recv_block_release(block);
@@ -781,6 +786,10 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
   }
 
   count = uct_bxi_iface_poll_tx(iface);
+
+  if (count < 0) {
+    ucs_debug("slip");
+  }
 
   return count;
 }
@@ -1167,7 +1176,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
   //TODO: implement support for scatter buffer.
-  iface->config.max_iovecs   = ucs_max(md->config.limits.max_iovecs, 1);
+  iface->config.max_iovecs   = 1;
   iface->config.max_msg_size = md->config.limits.max_msg_size;
   iface->config.max_inline =
           ucs_min(md->config.limits.max_volatile_size, UCS_ALLOCA_MAX_SIZE);
