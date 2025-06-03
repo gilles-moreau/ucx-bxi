@@ -378,6 +378,24 @@ uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
   iface->tx.available = count;
 }
 
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
+
+  if (--op->comp.comp == 0) {
+    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
+      uct_bxi_md_mem_desc_fini(op->mem_desc);
+    }
+
+    /* Reset operation flags. */
+    op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
+    op->comp.handler(op, op + 1);
+  }
+}
+
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 
