@@ -1048,14 +1048,15 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_reset(&mp_param);
   mp_param.max_chunk_size =
           iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t);
-  mp_param.elems_per_chunk = iface->config.tm.max_tags;
-  mp_param.max_elems       = iface->config.tm.max_tags;
-  mp_param.elem_size       = sizeof(uct_bxi_recv_block_t);
-  mp_param.alignment       = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops             = &uct_bxi_recv_block_mpool_ops;
-  mp_param.name            = "tag-recv-block";
-  mp_param.grow_factor     = 1;
-  status = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
+  mp_param.elems_per_chunk = mp_param.max_elems =
+          ucs_max(uct_bxi_iface_md(iface)->config.limits.max_entries,
+                  iface->config.tm.max_tags);
+  mp_param.elem_size   = sizeof(uct_bxi_recv_block_t);
+  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops         = &uct_bxi_recv_block_mpool_ops;
+  mp_param.name        = "tag-recv-block";
+  mp_param.grow_factor = 1;
+  status               = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
   if (status != UCS_OK) {
     goto err_release_rxq;
   }
@@ -1088,12 +1089,13 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_reset(&mp_param);
   mp_param.max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size;
   mp_param.elems_per_chunk = config->tm.op_ctx_mp.bufs_grow;
-  mp_param.max_elems       = config->tm.max_op_ctx;
-  mp_param.elem_size       = sizeof(uct_bxi_op_ctx_t);
-  mp_param.alignment       = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops             = &uct_bxi_op_ctx_mpool_ops;
-  mp_param.name            = "tag-op-ctx";
-  mp_param.grow_factor     = 1;
+  mp_param.max_elems   = ucs_max(uct_bxi_iface_md(iface)->config.limits.max_cts,
+                                 iface->config.tm.max_op_ctx);
+  mp_param.elem_size   = sizeof(uct_bxi_op_ctx_t);
+  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops         = &uct_bxi_op_ctx_mpool_ops;
+  mp_param.name        = "tag-op-ctx";
+  mp_param.grow_factor = 1;
 
   status = ucs_mpool_init(&mp_param, &iface->tm.op_ctx_mp);
   if (status != UCS_OK) {
