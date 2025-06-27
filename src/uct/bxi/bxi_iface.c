@@ -91,13 +91,13 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "list.\n"),
 
         {"MAX_TM_OP_CTX", "256",
-         "Maximum number of tag matching operation contexts (default: 256).",
-         ucs_offsetof(uct_bxi_iface_config_t, tm.max_op_ctx),
+         "Maximum number of tag matching generic operation (default: 256).",
+         ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_op_ctx",
-                ucs_offsetof(uct_bxi_iface_config_t, tm.op_ctx_mp), "\n"),
+                "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_gop",
+                ucs_offsetof(uct_bxi_iface_config_t, tm.gop_mp), "\n"),
 
         {"TM_LIST_SIZE", "32",
          "Limits the number of tags posted to the HW for matching. The actual "
@@ -108,7 +108,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         {"MAX_OPERATION_CONTEXT", "32",
          "Number of operation context allocable (default: 32)",
-         ucs_offsetof(uct_bxi_iface_config_t, tm.max_op_ctx),
+         ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
 
         {NULL},
@@ -542,7 +542,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
           UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_GET_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_TAG_PURGE_UNEXP;
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   return UCS_OK;
 }
@@ -834,16 +834,6 @@ err:
   return status;
 }
 
-unsigned uct_bxi_iface_tag_purge_unexp(uct_iface_h tl_iface)
-{
-  unsigned         count;
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  count = uct_bxi_iface_poll_rx(iface);
-
-  return count;
-}
-
 ucs_status_t
 uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
                                uct_tl_device_resource_t **tl_devices_p,
@@ -983,7 +973,7 @@ static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
 
 //NOTE: Think of preallocating all the counters associated with the
 //      operation contexts during memory pool initialization.
-static ucs_mpool_ops_t uct_bxi_op_ctx_mpool_ops = {
+static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
         .obj_init      = NULL,
@@ -1005,9 +995,9 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   }
 
   /* First, initialize interface configuration. */
-  iface->config.tm.max_tags   = config->tm.list_size;
-  iface->config.tm.max_op_ctx = config->tm.max_op_ctx;
-  iface->config.tm.max_zcopy  = config->seg_size;
+  iface->config.tm.max_tags  = config->tm.list_size;
+  iface->config.tm.max_gop   = config->tm.max_gop;
+  iface->config.tm.max_zcopy = config->seg_size;
 
   iface->config.rx.tag_mp = config->rx.tag_mp;
   //FIXME: Memory pool max elements is reset here, thus overwriting initial
@@ -1087,17 +1077,17 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   /* Memory pool of Operation Offload context. These are counters that are 
    * used to implement dependencies between sends and receives. */
   ucs_mpool_params_reset(&mp_param);
-  mp_param.max_chunk_size  = config->tm.op_ctx_mp.max_chunk_size;
-  mp_param.elems_per_chunk = config->tm.op_ctx_mp.bufs_grow;
+  mp_param.max_chunk_size  = config->tm.gop_mp.max_chunk_size;
+  mp_param.elems_per_chunk = config->tm.gop_mp.bufs_grow;
   mp_param.max_elems   = ucs_max(uct_bxi_iface_md(iface)->config.limits.max_cts,
-                                 iface->config.tm.max_op_ctx);
-  mp_param.elem_size   = sizeof(uct_bxi_op_ctx_t);
+                                 iface->config.tm.max_gop);
+  mp_param.elem_size   = sizeof(uct_bxi_gop_t);
   mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops         = &uct_bxi_op_ctx_mpool_ops;
+  mp_param.ops         = &uct_bxi_gop_mpool_ops;
   mp_param.name        = "tag-op-ctx";
   mp_param.grow_factor = 1;
 
-  status = ucs_mpool_init(&mp_param, &iface->tm.op_ctx_mp);
+  status = ucs_mpool_init(&mp_param, &iface->tm.gop_mp);
   if (status != UCS_OK) {
     goto err_release_blockrecvmp;
   }
@@ -1134,7 +1124,7 @@ static void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
   /* Receive block memory pool.*/
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
   /* And operation contexts.*/
-  ucs_mpool_cleanup(&iface->tm.op_ctx_mp, 1);
+  ucs_mpool_cleanup(&iface->tm.gop_mp, 1);
 
 out:
   return;
@@ -1531,9 +1521,9 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
-        .iface_tag_purge_unexp    = uct_bxi_iface_tag_purge_unexp,
-        .iface_tag_op_create      = uct_bxi_iface_tag_create_op_ctx,
-        .iface_tag_op_delete      = uct_bxi_iface_tag_delete_op_ctx,
+        .iface_tag_gop_create     = uct_bxi_iface_tag_gop_create,
+        .iface_tag_gop_delete     = uct_bxi_iface_tag_gop_delete,
+        .iface_tag_gop_depends_on = uct_bxi_iface_tag_gop_depends_on,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {

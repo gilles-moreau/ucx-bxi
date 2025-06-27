@@ -63,9 +63,10 @@ ucp_rma_tag_offload_get_send_func(ucp_request_t                 *req,
     ucs_assert(iov->count == 1);
     
     // Get scheduling info from the receive request.
-    req->send.tag_offload.sched = recv_req->recv.schedh;
-    ucs_list_add_head(&req->send.state.uct_comp.op_head, 
-                      &recv_req->recv.uct_ctx.op_ctx->elem);
+    req->send.tag_offload.sched  = recv_req->recv.schedh;
+    // For offloaded rendez-vous, recv and get are considered the same 
+    // generic operation. Thus, we use the same handle.
+    req->send.state.uct_comp.gop = recv_req->recv.uct_ctx.gop;
     flags = UCT_TAG_OFFLOAD_OPERATION;
   }
 

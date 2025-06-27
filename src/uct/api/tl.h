@@ -199,12 +199,16 @@ typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
                                                          uct_tag_context_t *ctx,
                                                          int force);
 
-typedef unsigned (*uct_iface_tag_purge_unexp_func_t)(uct_iface_h iface);
+typedef ucs_status_t (*uct_iface_tag_gop_create_func_t)(uct_iface_h iface,
+                                                        uct_gop_h *gop_p);
 
-typedef ucs_status_t (*uct_iface_tag_op_ctx_create_func_t)(uct_iface_h iface,
-                                                           uct_op_ctx_h *op_ctx_p);
-typedef void (*uct_iface_tag_op_ctx_delete_func_t)(uct_iface_h iface,
-                                                            uct_op_ctx_h op_ctx);
+typedef void (*uct_iface_tag_gop_delete_func_t)(uct_iface_h iface,
+                                                uct_gop_h gop);
+
+typedef ucs_status_t (*uct_iface_tag_gop_depends_on_func_t)(uct_iface_h iface,
+                                                            uct_gop_h gop, 
+                                                            uct_gop_h *gops,
+                                                            size_t gop_cnt);
 
 /* endpoint - pending queue */
 
@@ -344,9 +348,9 @@ typedef struct uct_iface_ops {
     /* interface - tagged operations */
     uct_iface_tag_recv_zcopy_func_t     iface_tag_recv_zcopy;
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
-    uct_iface_tag_purge_unexp_func_t    iface_tag_purge_unexp;
-    uct_iface_tag_op_ctx_create_func_t  iface_tag_op_create;
-    uct_iface_tag_op_ctx_delete_func_t  iface_tag_op_delete;
+    uct_iface_tag_gop_create_func_t     iface_tag_gop_create;
+    uct_iface_tag_gop_delete_func_t     iface_tag_gop_delete;
+    uct_iface_tag_gop_depends_on_func_t iface_tag_gop_depends_on;
 
     /* endpoint - pending queue */
     uct_ep_pending_add_func_t           ep_pending_add;

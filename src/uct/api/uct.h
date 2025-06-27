@@ -436,7 +436,6 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
 #define UCT_IFACE_FLAG_TAG_GET_ZCOPY   UCS_BIT(54) /**< Hardware tag matching get support */
 #define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(55) /**< Hardware tag matching operation offload support */
-#define UCT_IFACE_FLAG_TAG_PURGE_UNEXP UCS_BIT(56) /**< Hardware tag matching purge iface unexp */
 
         /* Interface capability */
 #define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(57) /**< Interface is inter-node capable */
@@ -1749,7 +1748,7 @@ struct uct_completion {
     ucs_status_t              status;  /**< Completion status, this field must
                                             be initialized with UCS_OK before
                                             first operation is started. */
-    ucs_list_link_t           op_head; /**< List of parent operation handles. */
+    uct_gop_h                 gop;     /**< Generic operation handle. */
 };
 
 
@@ -1776,6 +1775,7 @@ struct uct_pending_req {
 struct uct_tag_context {
     /**
      * Tag is consumed by the transport and should not be matched in software.
+     *
      *
      * @param [in]  self    Pointer to relevant context structure, which was
      *                      initially passed to @ref uct_iface_tag_recv_zcopy.
@@ -1823,18 +1823,18 @@ struct uct_tag_context {
       *  Offload Operation Context to setup operation dependencies. If not null, then
       *  it will be used by the corresponding operation. 
       */ 
-     uct_op_ctx_h op_ctx;
+     uct_gop_h gop;
 
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];
 };
 
 /**
- * Operation Context structure for storing offload information.
+ * Operation Context structure for storing generic operation information.
  */
-typedef struct uct_op_ctx {
-    ucs_list_link_t elem;
-} uct_op_ctx_t;
+typedef struct uct_gop {
+    int dummy;
+} uct_gop_t;
 
 
 /**
@@ -3631,37 +3631,22 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
 
 /**
  * @ingroup UCT_TAG
- * @brief Handle overflow tag.
- *
- * This routine informs the transport that a overflow event will be delivered 
- * because of an unsuccessful offload.
- *
- * @param [in]  iface     Interface to cancel the tag on.
- *
- */
-UCT_INLINE_API unsigned uct_iface_tag_purge_unexp(uct_iface_h tl_iface) 
-{
-    return tl_iface->ops.iface_tag_purge_unexp(tl_iface);
-}
-
-/**
- * @ingroup UCT_TAG
  * @brief Create an Offload Operation Context to a transport interface.
  *
  * This routine creates the necessary resources on a transport interface to be 
  * able to create dependencies between communication primitives.
  *
  * @param [in]    iface     Interface to post the tag on.
- * @param [out]   op_ctx   Context created.
+ * @param [out]   gop       Generic operation created.
  *
  * @return UCS_OK                - The context is created to the transport.
  * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
  *                                 resources.
  */
-UCT_INLINE_API ucs_status_t uct_iface_tag_op_ctx_create(uct_iface_h iface,
-                                                        uct_op_ctx_h *op_ctx_p)
+UCT_INLINE_API ucs_status_t uct_iface_tag_gop_create(uct_iface_h iface,
+                                                     uct_gop_h *gop_p)
 {
-    return iface->ops.iface_tag_op_create(iface, op_ctx_p);
+    return iface->ops.iface_tag_gop_create(iface, gop_p);
 }
 
 /**
@@ -3669,16 +3654,33 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_op_ctx_create(uct_iface_h iface,
  * @brief Delete an Offload Operation Context to a transport interface.
  *
  * @param [in]    iface     Interface to post the tag on.
- * @param [out]   op_ctx   Context.
+ * @param [in]   gop       Generic operation handle.
+ *
+ */
+UCT_INLINE_API void uct_iface_tag_gop_delete(uct_iface_h iface,
+                                             uct_gop_h gop)
+{
+    iface->ops.iface_tag_gop_delete(iface, gop);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Create dependencies between one Offload Operation to a table of 
+ * other Offload Operations.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ * @param [in]    gop       Target Operation handle.
+ * @param [in]    gops      Table of Operation handles.
+ * @param [in]    gop_cnt   Size of Operation handle table.
  *
  * @return UCS_OK                - The context is created to the transport.
- * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
- *                                 resources.
  */
-UCT_INLINE_API void uct_iface_tag_op_ctx_delete(uct_iface_h iface,
-                                                uct_op_ctx_h op_ctx)
+UCT_INLINE_API ucs_status_t uct_iface_tag_gop_depends_on(uct_iface_h iface,
+                                                         uct_gop_h gop,
+                                                         uct_gop_h *gops,
+                                                         size_t gop_cnt)
 {
-    iface->ops.iface_tag_op_delete(iface, op_ctx);
+    return iface->ops.iface_tag_gop_depends_on(iface, gop, gops, gop_cnt);
 }
 
 /**

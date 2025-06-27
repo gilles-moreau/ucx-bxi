@@ -12,12 +12,11 @@ typedef struct ucp_offload_region ucp_offload_region_t;
 
 ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
                                           void *buffer, size_t size,
-                                          uct_op_ctx_h *op_p);
+                                          uct_gop_h *op_p);
 
 size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
                                              void *buffer, size_t size,
-                                             ucs_list_link_t *out_overlaps,
-                                             size_t           max_overlaps);
+                                             uct_gop_h *op_p);
 
 ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
                                       ucp_offload_sched_h *ctx_p);

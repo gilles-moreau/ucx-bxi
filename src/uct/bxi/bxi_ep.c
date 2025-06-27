@@ -367,43 +367,6 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
   return UCS_ERR_NOT_IMPLEMENTED;
 }
 
-static ucs_status_t uct_bxi_ep_op_ctx_set(uct_iface_h        tl_iface,
-                                          uct_completion_t  *comp,
-                                          uct_bxi_op_ctx_t **op_ctx_p)
-{
-  ucs_status_t      status = UCS_OK;
-  uct_bxi_op_ctx_t *op_ctx = NULL;
-  uct_bxi_op_ctx_t *tmp_op;
-  unsigned long     n_ops;
-
-  if ((n_ops = ucs_list_length(&comp->op_head)) > 1) {
-    status = uct_bxi_iface_tag_create_op_ctx(tl_iface, (uct_op_ctx_h *)&op_ctx);
-    if (status != UCS_OK) {
-      return status;
-    }
-
-    ucs_list_for_each (tmp_op, &comp->op_head, super.elem) {
-      status = uct_bxi_wrap(PtlTriggeredCTInc(op_ctx->cth,
-                                              (ptl_ct_event_t){1, 0},
-                                              tmp_op->cth, tmp_op->threshold));
-      if (status != UCS_OK) {
-        ucs_fatal("BXI: failed setting trig inc.");
-      }
-      op_ctx->threshold++;
-    }
-  } else if (n_ops == 1) {
-    op_ctx =
-            ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t, super.elem);
-  } else {
-    goto out;
-  }
-
-  *op_ctx_p = op_ctx;
-
-out:
-  return status;
-}
-
 ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
                                    uct_pack_callback_t pack_cb, void *arg,
                                    unsigned flags)
@@ -459,11 +422,11 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                         uct_completion_t *comp)
 {
 
-  ucs_status_t      status;
-  ptl_iovec_t      *ptl_iov;
-  uct_bxi_ep_t     *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_op_ctx_t *op_ctx = NULL;
+  ucs_status_t     status;
+  ptl_iovec_t     *ptl_iov;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -480,18 +443,11 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
-  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    status = uct_bxi_ep_op_ctx_set(tl_ep->iface, comp, &op_ctx);
-    if (status != UCS_OK) {
-      goto err;
-    }
-  }
-
-  if (op_ctx != NULL) {
+  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-            tag, 0, op, imm, op_ctx->cth, op_ctx->threshold));
+            tag, 0, op, imm, gop->cth, gop->threshold));
   } else {
     status = uct_bxi_wrap(
             PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
@@ -540,11 +496,11 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           unsigned header_length, const uct_iov_t *iov,
                           size_t iovcnt, unsigned flags, uct_completion_t *comp)
 {
-  ucs_status_t      status;
-  ptl_iovec_t      *ptl_iov;
-  uct_bxi_ep_t     *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_op_ctx_t *op_ctx = NULL;
+  ucs_status_t     status;
+  ptl_iovec_t     *ptl_iov;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t    *op;
   uct_bxi_recv_block_params_t params;
   uct_bxi_recv_block_t       *block;
@@ -614,21 +570,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_HDR_SET(hdr, UCT_BXI_TAG_PROT_RNDV_HW);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    status = uct_bxi_ep_op_ctx_set(tl_ep->iface, comp, &op_ctx);
-    if (status != UCS_OK) {
-      goto err;
-    }
-  }
-
-  if (op_ctx != NULL) {
     /* An operation context was provided, so the operation must be 
      * triggered. */
-    ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+    ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
             PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
-            op_ctx->cth, op_ctx->threshold));
+            gop->cth, gop->threshold));
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -723,27 +672,23 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
 
 {
   ucs_status_t             status;
-  uct_bxi_op_ctx_t        *op_ctx;
+  uct_bxi_gop_t           *gop = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_mem_desc_param_t mem_desc_param;
 
   //NOTE: for now, get tag is only supported to perform the get
   //      operation within the rendez-vous protocol. As a consequence,
   //      it will only depend on the operation context from the associated
   //      receive.
-  ucs_assert((ucs_list_length(&comp->op_head) == 1));
-
-  /* Retrieve operation context. */
-  op_ctx = ucs_list_extract_head(&comp->op_head, uct_bxi_op_ctx_t, super.elem);
 
   /* Counter must have been allocated and block attached to the 
    * operation handle. */
-  ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE) &&
-             (op_ctx->block != NULL));
+  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE) &&
+             (gop->block != NULL));
 
   /* Buffer and size of the get operation should be the same as the receive 
    * block since they correspond to the same protocol. */
-  ucs_assert((op_ctx->block->size == iov->iov_len) &&
-             (op_ctx->block->start == iov->iov_base));
+  ucs_assert((gop->block->size == iov->iov_len) &&
+             (gop->block->start == iov->iov_base));
 
   /* Create MD and associate operation context counter for it to be incremented 
    * on operation completion. */
@@ -752,7 +697,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   mem_desc_param.length  = iov->iov_len;
   mem_desc_param.options = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
   mem_desc_param.flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
-  mem_desc_param.cth     = op_ctx->cth;
+  mem_desc_param.cth     = gop->cth;
   status = uct_bxi_md_mem_desc_create(uct_bxi_iface_md(iface), &mem_desc_param,
                                       &op->mem_desc);
   if (status != UCS_OK) {
@@ -760,9 +705,9 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   }
 
   //NOTE: MD has been created using the base address, so the remote offset is 0.
-  status = uct_bxi_wrap(PtlTriggeredGet(
-          op->mem_desc->mdh, 0, iov->iov_len, ep->dev_addr.pid,
-          ep->iface_addr.ctrl, tag, 0, op, op_ctx->cth, op_ctx->threshold));
+  status = uct_bxi_wrap(PtlTriggeredGet(op->mem_desc->mdh, 0, iov->iov_len,
+                                        ep->dev_addr.pid, ep->iface_addr.ctrl,
+                                        tag, 0, op, gop->cth, gop->threshold));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -770,16 +715,16 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   /* Increase operation counter threshold. There will be two increments:
    * - one for the RTS operation that will match the ME;
    * - one for the completion of the GET operation. */
-  op_ctx->threshold++;
+  gop->threshold++;
   op->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD;
-  op->length        = op_ctx->block->size;
-  op->rndv.ctx      = op_ctx->block->ctx;
-  op->rndv.tag      = op_ctx->block->tag;
+  op->length        = gop->block->size;
+  op->rndv.ctx      = gop->block->ctx;
+  op->rndv.tag      = gop->block->tag;
   op->comp.handler  = uct_bxi_get_tag_handler; // Reset handler.
 
   /* Also, attach operation to the block. //TODO: explain why */
-  op_ctx->block->op     = op;
-  op_ctx->block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP;
+  gop->block->op     = op;
+  gop->block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP;
 
   return status;
 }
@@ -852,7 +797,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   uct_bxi_iface_t            *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
   ptl_handle_ct_t             cth   = PTL_CT_NONE;
   unsigned                    ct_flags = 0;
-  uct_bxi_op_ctx_t           *op_ctx   = NULL;
+  uct_bxi_gop_t              *gop      = NULL;
   uct_bxi_recv_block_t       *block;
   uct_bxi_recv_block_params_t params;
 
@@ -869,11 +814,11 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     goto err;
   }
 
-  if (ctx->op_ctx != NULL) {
+  if (ctx->gop != NULL) {
     /* User specified a context to offload operations. */
-    op_ctx = ucs_derived_of(ctx->op_ctx, uct_bxi_op_ctx_t);
-    cth    = op_ctx->cth;
-    op_ctx->threshold++;
+    gop = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
+    cth = gop->cth;
+    gop->threshold++;
     ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
   }
 
@@ -904,8 +849,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   }
 
   /* Link the receive block which will be used in case of rendez-vous protocol. */
-  if (op_ctx != NULL) {
-    op_ctx->block = block;
+  if (gop != NULL) {
+    gop->block = block;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
@@ -957,47 +902,75 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   return status;
 }
 
-ucs_status_t uct_bxi_iface_tag_create_op_ctx(uct_iface_h   tl_iface,
-                                             uct_op_ctx_h *op_ctx_p)
+ucs_status_t uct_bxi_iface_tag_gop_create(uct_iface_h tl_iface,
+                                          uct_gop_h  *gop_p)
 {
-  ucs_status_t      status;
-  uct_bxi_op_ctx_t *op_ctx;
-  uct_bxi_iface_t  *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+  ucs_status_t     status;
+  uct_bxi_gop_t   *gop;
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  op_ctx = ucs_mpool_get(&iface->tm.op_ctx_mp);
-  if (op_ctx == NULL) {
+  gop = ucs_mpool_get(&iface->tm.gop_mp);
+  if (gop == NULL) {
     status = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
-  op_ctx->threshold = 0;
-  op_ctx->block     = NULL;
+  gop->threshold = 0;
+  gop->block     = NULL;
 
-  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &op_ctx->cth));
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
   if (status != UCS_OK) {
-    goto err_free_op_ctx;
+    goto err_free_gop;
   }
 
-  *op_ctx_p = (uct_op_ctx_h)op_ctx;
+  *gop_p = (uct_gop_h)gop;
 
   return status;
 
-err_free_op_ctx:
-  ucs_mpool_put(op_ctx);
+err_free_gop:
+  ucs_mpool_put(gop);
 err:
   return status;
 }
 
-void uct_bxi_iface_tag_delete_op_ctx(uct_iface_h  tl_iface,
-                                     uct_op_ctx_h tl_op_ctx)
+void uct_bxi_iface_tag_gop_delete(uct_iface_h tl_iface, uct_gop_h tl_gop)
 {
-  uct_bxi_op_ctx_t *op_ctx = (uct_bxi_op_ctx_t *)tl_op_ctx;
+  uct_bxi_gop_t *gop = (uct_bxi_gop_t *)tl_gop;
 
-  ucs_assert(!PtlHandleIsEqual(op_ctx->cth, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-  uct_bxi_wrap(PtlCTFree(op_ctx->cth));
+  uct_bxi_wrap(PtlCTFree(gop->cth));
 
-  ucs_mpool_put(op_ctx);
+  ucs_mpool_put(gop);
+}
+
+ucs_status_t uct_bxi_iface_tag_gop_depends_on(uct_iface_h tl_iface,
+                                              uct_gop_h   tl_gop,
+                                              uct_gop_h  *tl_gops,
+                                              size_t      gop_cnt)
+{
+  ucs_status_t   status = UCS_OK;
+  uct_bxi_gop_t *gop    = ucs_derived_of(tl_gop, uct_bxi_gop_t);
+  uct_bxi_gop_t *tmp_gop;
+  size_t         i;
+
+  /* To call this, we must have at least on dependency. */
+  ucs_assert(gop_cnt >= 1);
+
+  for (i = 0; i < gop_cnt; i++) {
+    tmp_gop = ucs_derived_of(tl_gops[i], uct_bxi_gop_t);
+
+    ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
+
+    status = uct_bxi_wrap(PtlTriggeredCTInc(gop->cth, (ptl_ct_event_t){1, 0},
+                                            tmp_gop->cth, tmp_gop->threshold));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: failed setting trig inc.");
+    }
+    gop->threshold++;
+  }
+
+  return status;
 }
 
 static ucs_status_t

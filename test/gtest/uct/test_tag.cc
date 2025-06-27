@@ -82,8 +82,8 @@ public:
         s.tag              = t;
         s.imm_data         = i;
         s.uct_comp.count   = 1;
-        ucs_list_head_init(&s.uct_comp.op_head);
         s.uct_comp.status  = UCS_OK;
+        s.uct_comp.gop     = NULL;
         s.uct_comp.func    = send_completion;
         s.sw_rndv          = s.comp = false;
         s.unexp            = unexp_flow;
@@ -96,7 +96,7 @@ public:
         r.mbuf                    = b;
         r.tag                     = t;
         r.tmask                   = m;
-        r.uct_ctx.op_ctx          = NULL;
+        r.uct_ctx.gop             = NULL;
         r.uct_ctx.completed_cb    = completed;
         r.uct_ctx.tag_consumed_cb = tag_consumed;
         r.uct_ctx.rndv_cb         = sw_rndv_completed;
@@ -128,7 +128,7 @@ public:
 
     ucs_status_t tag_eager_zcopy(entity &e, send_ctx &ctx)
     {
-        unsigned offload = ucs_list_is_empty(&ctx.uct_comp.op_head) ? 
+        unsigned offload = ctx.uct_comp.gop == NULL ? 
             0:UCT_TAG_OFFLOAD_OPERATION;
 
         UCS_TEST_GET_BUFFER_IOV(iov, iovcnt, ctx.mbuf->ptr(),
@@ -296,7 +296,7 @@ public:
                                              bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
-        uct_op_ctx_h op_ctx;
+        uct_gop_h gop;
 
         if (RUNNING_ON_VALGRIND) {
             length = ucs_min(length, 128U);
@@ -306,18 +306,18 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_op_ctx_create(receiver().iface(), &op_ctx));
+        ASSERT_UCS_OK(uct_iface_tag_gop_create(receiver().iface(), &gop));
 
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.op_ctx = op_ctx;
+        r_ctx.uct_ctx.gop = gop;
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        ucs_list_add_head(&rt_ctx.uct_comp.op_head, &op_ctx->elem);
+        rt_ctx.uct_comp.gop = gop;
         ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
 
         recv_ctx st_ctx;
@@ -332,7 +332,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_op_ctx_delete(receiver().iface(), op_ctx);
+        uct_iface_tag_gop_delete(receiver().iface(), gop);
         flush();
     }
 
@@ -340,7 +340,7 @@ public:
                                                bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
-        uct_op_ctx_h op_ctx;
+        uct_gop_h gop;
 
         if (RUNNING_ON_VALGRIND) {
             length = ucs_min(length, 128U);
@@ -350,18 +350,18 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_op_ctx_create(receiver().iface(), &op_ctx));
+        ASSERT_UCS_OK(uct_iface_tag_gop_create(receiver().iface(), &gop));
 
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.op_ctx = op_ctx;
+        r_ctx.uct_ctx.gop = gop;
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        ucs_list_add_head(&rt_ctx.uct_comp.op_head, &op_ctx->elem);
+        rt_ctx.uct_comp.gop = gop;
         ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
 
         recv_ctx st_ctx;
@@ -376,7 +376,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_op_ctx_delete(receiver().iface(), op_ctx);
+        uct_iface_tag_gop_delete(receiver().iface(), gop);
         flush();
     }
 
@@ -859,6 +859,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_offload_operation_expected,
 {
     test_tag_offload_operation_expected(static_cast<send_func>(&test_tag::tag_eager_zcopy));
 }
+
+//TODO: add unpexected test case
 
 UCT_TAG_INSTANTIATE_TEST_CASE(test_tag)
 
