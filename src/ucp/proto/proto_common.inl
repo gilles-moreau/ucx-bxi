@@ -228,7 +228,6 @@ ucp_proto_request_send_init(ucp_request_t *req, ucp_ep_h ep, uint32_t flags)
 {
     req->flags   = UCP_REQUEST_FLAG_PROTO_SEND | flags;
     req->send.ep = ep;
-    ucs_list_head_init(&req->send.state.uct_comp.op_head);
 }
 
 
@@ -315,8 +314,7 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
                 req->send.tag_offload.sched,
                 req->send.state.dt_iter.type.contig.buffer,
                 req->send.state.dt_iter.length, 
-                &req->send.state.uct_comp.op_head,
-                UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+                &req->send.state.uct_comp.gop);
     }
 
     msg_length = req->send.state.dt_iter.length + header_length;

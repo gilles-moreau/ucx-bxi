@@ -140,12 +140,12 @@ typedef struct uct_bxi_iface_send_op {
   };
 } uct_bxi_iface_send_op_t;
 
-typedef struct uct_bxi_op_ctx {
-  uct_op_ctx_t          super;
+typedef struct uct_bxi_gop {
+  uct_gop_t             super;     /* Generic operation handle */
   ptl_handle_ct_t       cth;       /* Handle to the OP counter */
   ptl_size_t            threshold; /* Threshold at which OP is triggered */
   uct_bxi_recv_block_t *block;     /* Receive block from rndv protocol */
-} uct_bxi_op_ctx_t;
+} uct_bxi_gop_t;
 
 typedef struct uct_bxi_device_addr {
   ptl_process_t pid;
@@ -182,8 +182,8 @@ typedef struct uct_bxi_iface_config {
   struct {
     int                      enable;
     unsigned int             list_size;
-    unsigned int             max_op_ctx; /* Maximum number of OP context */
-    uct_iface_mpool_config_t op_ctx_mp;  /* Receive descriptor for TAG RX. */
+    unsigned int             max_gop; /* Maximum number of OP context */
+    uct_iface_mpool_config_t gop_mp;  /* Receive descriptor for TAG RX. */
   } tm;
 } uct_bxi_iface_config_t;
 
@@ -222,8 +222,8 @@ typedef struct uct_bxi_iface {
     size_t max_msg_size; /* Maximum message size */
     size_t max_atomic_size;
     struct {
-      unsigned int max_op_ctx;
-      unsigned int max_tags;
+      unsigned int max_gop;   /* Maximum number of generic operation */
+      unsigned int max_tags;  /* Maximum number of hw matching descriptors */
       int          max_zcopy; /* Maximum payload size for zcopy */
     } tm;
 
@@ -234,7 +234,7 @@ typedef struct uct_bxi_iface {
 
   struct {
     unsigned int               enabled;
-    ucs_mpool_t                op_ctx_mp; /* Operation context for Triggered */
+    ucs_mpool_t                gop_mp; /* Operation context for Triggered */
     khash_t(uct_bxi_tag_addrs) tag_addrs;
     struct {
       void                    *arg; /* User defined arg */

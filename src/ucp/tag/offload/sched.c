@@ -1,12 +1,14 @@
+#include "sched.h"
+
 #include <ucp/core/ucp_worker.h>
 #include <ucs/datastruct/khash.h>
 #include <uct/api/uct.h>
 #include <uct/base/uct_iface.h>
 
 typedef struct ucp_offload_region {
-  void        *buffer;
-  size_t       size;
-  uct_op_ctx_h op;
+  void     *buffer;
+  size_t    size;
+  uct_gop_h op;
 } ucp_offload_region_t;
 
 struct ucp_offload_sched {
@@ -49,7 +51,7 @@ static ucs_status_t ucp_offload_sched_ensure_capacity(ucp_offload_sched_h sched)
 // Add a region to the sched
 ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
                                           void *buffer, size_t size,
-                                          uct_op_ctx_h *op_p)
+                                          uct_gop_h *op_p)
 {
   ucs_status_t        status;
   ucp_worker_iface_t *wiface;
@@ -68,8 +70,8 @@ ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
   sched->regions[sched->count].buffer = buffer;
   sched->regions[sched->count].size   = size;
 
-  status = uct_iface_tag_op_ctx_create(wiface->iface,
-                                       &sched->regions[sched->count].op);
+  status = uct_iface_tag_gop_create(wiface->iface,
+                                    &sched->regions[sched->count].op);
   if (status != UCS_OK) {
     return status;
   }
@@ -109,22 +111,52 @@ int ucp_offload_sched_regions_overlap(void *a_buf, size_t a_size, void *b_buf,
 // Return overlapping regions (caller allocates the output array)
 size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
                                              void *buffer, size_t size,
-                                             ucs_list_link_t *op_head,
-                                             size_t           max_overlaps)
+                                             uct_gop_h *gop_p)
 {
-  size_t found = 0;
+  ucs_status_t        status;
+  size_t              found = 0;
+  ucp_worker_iface_t *wiface;
+  uct_gop_h           gop = NULL;
+  uct_gop_h           gops[UCP_OFFLOAD_SCHED_MAX_OVERLAPS];
 
   if (!ucp_offload_sched_is_activated(sched)) {
     return found;
   }
 
-  for (size_t i = 0; i < sched->count && found < max_overlaps; ++i) {
+  wiface = sched->worker->tm.offload.iface;
+
+  for (size_t i = 0; i < sched->count; ++i) {
     if (ucp_offload_sched_regions_overlap(buffer, size,
                                           sched->regions[i].buffer,
                                           sched->regions[i].size)) {
-      ucs_list_add_head(op_head, &sched->regions[i].op->elem);
-      found++;
+
+      gops[found++] = sched->regions[i].op;
+
+      if (found > UCP_OFFLOAD_SCHED_MAX_OVERLAPS) {
+        ucs_error("SCHED: max dependencies overflow. max=%d",
+                  UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+        return -1;
+      }
     }
+  }
+
+  /* If overlap regions were found, create the dependencies between 
+   * operations. If there is only one dependency, then we may optimize 
+   * and use the same generic operation as a dependency. */
+  if (found > 1) {
+    status = uct_iface_tag_gop_create(wiface->iface, &gop);
+    if (status != UCS_OK) {
+      return -1;
+    }
+
+    status = uct_iface_tag_gop_depends_on(wiface->iface, gop, gops, found);
+    if (status != UCS_OK) {
+      return -1;
+    }
+
+    *gop_p = gop;
+  } else if (found == 1) {
+    *gop_p = gops[0];
   }
 
   return found;
@@ -164,8 +196,8 @@ err:
 void ucp_offload_sched_fini(ucp_offload_sched_h sched)
 {
   for (size_t i = 0; i < sched->count; ++i) {
-    uct_iface_tag_op_ctx_delete(sched->worker->tm.offload.iface->iface,
-                                sched->regions[i].op);
+    uct_iface_tag_gop_delete(sched->worker->tm.offload.iface->iface,
+                             sched->regions[i].op);
     sched->count--;
   }
   ucs_free(sched->regions);
