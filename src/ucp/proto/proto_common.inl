@@ -310,11 +310,13 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
         //NOTE: it should be done once so avoid putting it in send functions, 
         //      otherwise it can be called multiple time when the operation 
         //      is appended to pending queues.
-        ucp_offload_sched_region_get_overlaps(
+        if (ucp_offload_sched_region_get_overlaps(
                 req->send.tag_offload.sched,
                 req->send.state.dt_iter.type.contig.buffer,
                 req->send.state.dt_iter.length, 
-                &req->send.state.uct_comp.gop);
+                &req->send.state.uct_comp.gop)) {
+            req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+        }
     }
 
     msg_length = req->send.state.dt_iter.length + header_length;

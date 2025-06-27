@@ -500,8 +500,6 @@ ucp_request_send_op_offload(ucp_tag_match_t *tm,
         return UCS_ERR_INVALID_PARAM;
     }
 
-    req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-
     return UCS_OK;
 }
 
