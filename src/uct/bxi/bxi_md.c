@@ -156,12 +156,12 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
 // value.
 static inline ptl_interface_t uct_bxi_parse_device(const char *ptl_device)
 {
-  ptl_interface_t iface;
+  ptl_interface_t iface = 0;
   if (strstr(ptl_device, "bxi") == NULL) {
     // Device name from simulator, thus return 0
     iface = 0;
   } else {
-    sscanf(UCS_PTR_TYPE_OFFSET(ptl_device, 3), "%d", &iface);
+    sscanf(ptl_device + 3, "%d", &iface);
   }
   return iface;
 }

@@ -45,6 +45,14 @@ static void uct_bxi_send_op_no_completion(uct_bxi_iface_send_op_t *op,
   ucs_mpool_put_inline(op);
 }
 
+static void uct_bxi_send_ato_op_no_completion(uct_bxi_iface_send_op_t *op,
+                                              const void              *resp)
+{
+  uct_bxi_ep_remove_from_queue(op);
+  ucs_mpool_put_inline(op);
+  PtlAtomicSync();
+}
+
 static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                          const void              *resp)
 {
@@ -52,6 +60,16 @@ static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
 
   uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
+}
+
+static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
+                                             const void              *resp)
+{
+  uct_invoke_completion(op->user_comp, UCS_OK);
+
+  uct_bxi_ep_remove_from_queue(op);
+  ucs_mpool_put_inline(op);
+  PtlAtomicSync();
 }
 
 static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
@@ -987,8 +1005,8 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                               uct_bxi_send_comp_op_handler, size);
+  UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
+                                   uct_bxi_send_comp_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
@@ -1027,8 +1045,8 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
-                               uct_bxi_send_comp_op_handler, size);
+  UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
+                                   uct_bxi_send_comp_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
@@ -1069,8 +1087,8 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   UCT_BXI_CHECK_IFACE_RES(iface);
 
   /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
-                               uct_bxi_send_comp_op_handler, size);
+  UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
+                                   uct_bxi_send_comp_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value   = swap;

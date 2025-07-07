@@ -484,6 +484,16 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
+#define UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
+                                         _handler, _length)                    \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  (_desc)->ep        = _ep;                                                    \
+  (_desc)->comp.comp = 1;                                                      \
+  (_desc)->comp.handler =                                                      \
+          (_user_comp == NULL) ? uct_bxi_send_ato_op_no_completion : _handler; \
+  (_desc)->user_comp = _user_comp;                                             \
+  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+
 #define UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
                                          _handler, _length)                    \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
