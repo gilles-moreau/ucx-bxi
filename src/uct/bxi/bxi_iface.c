@@ -677,6 +677,12 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
   }
 }
 
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
+{
+  return op->length <= iface->config.max_inline;
+}
+
 /* Poll tx is both used for interface progression. Only events 
  * on initiator side are PTL_EVENT_SEND, PTL_EVENT_ACK and 
  * PTL_EVENT_REPLY. */
@@ -698,12 +704,14 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
                 iface, uct_bxi_event_str[ev.type], ev.mlength,
                 iface->tx.available, ev.start, ev.pt_index, ev.user_ptr);
       switch (ev.type) {
-      case PTL_EVENT_SEND:
-        ucs_warn("BXI: TX event %s should not have be configured",
-                 uct_bxi_event_str[ev.type]);
-        break;
       case PTL_EVENT_REPLY:
         /* This event is generated after TAG GET operation completion. */
+        if (uct_bxi_iface_op_is_inlined(iface, op)) {
+          //NOTE: for small size messages, host memory may not be coherent with
+          //      completion of the operation, thus force NIC synchronization.
+          //TODO: test with PTL_MD_VOLATILE unset
+          PtlAtomicSync();
+        }
       case PTL_EVENT_ACK:
         progressed++;
         op = ev.user_ptr;
@@ -713,6 +721,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         uct_bxi_iface_completion_op(op);
         uct_bxi_iface_check_flush(op->ep);
         break;
+      case PTL_EVENT_SEND:
       case PTL_EVENT_PUT:
       case PTL_EVENT_AUTO_UNLINK:
       case PTL_EVENT_PUT_OVERFLOW:
@@ -814,24 +823,12 @@ UCT_TL_IFACE_STAT_FLUSH(&iface->super.super);
 return UCS_OK;
 }
 
-//NOTE: Fence should enforce order of operations completion before and after.
-//      Infiniband has dedicated send flags for that but not Portals4. So one
-//      way is to flush all operations and wait for its completion.
-//TODO: improved fence implementation.
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 {
-  ucs_status_t status;
-
-  do {
-    status = uct_bxi_iface_progress(tl_iface);
-    if (status < 0) {
-      goto err;
-    }
-  } while ((status = uct_bxi_iface_flush(tl_iface, flags, NULL)) ==
-           UCS_INPROGRESS);
-
-err:
-  return status;
+  //NOTE: Fence semantic is to enforce completion of previous operations
+  //      and host visibility of memory.
+  PtlAtomicSync();
+  return UCS_OK;
 }
 
 ucs_status_t

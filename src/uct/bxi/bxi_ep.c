@@ -48,9 +48,14 @@ static void uct_bxi_send_op_no_completion(uct_bxi_iface_send_op_t *op,
 static void uct_bxi_send_ato_op_no_completion(uct_bxi_iface_send_op_t *op,
                                               const void              *resp)
 {
+  //FIXME: host memory between two consecutive atomic operations may not be
+  //       coherent, thus we need a synchronization. This should happen only
+  //       for intranode atomics.
+  if (uct_bxi_ep_is_intra_node(op->ep)) {
+    PtlAtomicSync();
+  }
   uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
-  PtlAtomicSync();
 }
 
 static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
@@ -67,9 +72,12 @@ static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
 {
   uct_invoke_completion(op->user_comp, UCS_OK);
 
+  //FIXME: see FIXME above.
+  if (uct_bxi_ep_is_intra_node(op->ep)) {
+    PtlAtomicSync();
+  }
   uct_bxi_ep_remove_from_queue(op);
   ucs_mpool_put_inline(op);
-  PtlAtomicSync();
 }
 
 static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,

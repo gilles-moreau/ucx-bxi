@@ -127,8 +127,6 @@ typedef struct uct_bxi_iface_send_op {
       void                 *unpack_arg; /* Unpack user arg for GET OP */
     } get;
     struct {
-    } rndv_get;
-    struct {
       uct_bxi_recv_block_t *block; /* Necessary in case of OP cancel */
       uct_tag_context_t    *ctx;   /* Tag context attached from target ME. */
       uct_tag_t tag; /* Initiator tag to be passed to target's comp callback. */

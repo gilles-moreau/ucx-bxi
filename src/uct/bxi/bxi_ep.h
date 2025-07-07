@@ -45,6 +45,13 @@ static UCS_F_ALWAYS_INLINE void uct_bxi_ep_disable_flush(uct_bxi_ep_t *ep)
   ep->flags = ~UCT_BXI_EP_FLUSH_REMOTE;
 }
 
+static UCS_F_ALWAYS_INLINE int uct_bxi_ep_is_intra_node(uct_bxi_ep_t *ep)
+{
+  uct_bxi_iface_t *iface =
+          ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
+  return ep->dev_addr.pid.phys.nid == uct_bxi_iface_md(iface)->pid.phys.nid;
+}
+
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
                                   uct_rkey_t rkey);
