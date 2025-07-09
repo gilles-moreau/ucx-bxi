@@ -185,7 +185,9 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
   uct_bxi_iface_send_op_t *op;
   uint64_t                 get_tag;
 
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  if (uct_bxi_iface_available(iface) <= 0) {
+    return UCS_ERR_NO_RESOURCE;
+  }
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_DESC(iface, &iface->tx.send_op_mp, op);
@@ -216,7 +218,7 @@ ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
   }
 
   //NOTE: These GET operation are not appended to any endpoint queue. As a
-  //      consequence, they wont be flushed.
+  //      consequence, they cant be flushed.
   uct_bxi_iface_available_add(iface, -1);
 
   return status;
@@ -670,6 +672,7 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
    * completed when there are no send operation before. */
   ucs_list_for_each_safe (op, tmp, &ep->send_ops, elem) {
     if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
+      UCT_TL_EP_STAT_FLUSH(&ep->super);
       uct_bxi_iface_completion_op(op);
     } else {
       break;
@@ -697,6 +700,8 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   while (1) {
     ret = PtlEQGet(iface->tx.eqh, &ev);
 
+    op = ev.user_ptr;
+
     switch (ret) {
     case PTL_OK:
       ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, outstanding=%lu, "
@@ -714,7 +719,6 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         }
       case PTL_EVENT_ACK:
         progressed++;
-        op = ev.user_ptr;
         if (ev.ni_fail_type != PTL_NI_OK) {
           uct_bxi_iface_handle_tx_failure(iface, op);
         }
@@ -815,19 +819,23 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
 
   if (count != 0)
 {
-  UCT_TL_IFACE_STAT_FLUSH_WAIT(&iface->super.super);
+  UCT_TL_IFACE_STAT_FLUSH_WAIT(&iface->super);
   return UCS_INPROGRESS;
 }
 
-UCT_TL_IFACE_STAT_FLUSH(&iface->super.super);
+UCT_TL_IFACE_STAT_FLUSH(&iface->super);
 return UCS_OK;
 }
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 {
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+
   //NOTE: Fence semantic is to enforce completion of previous operations
   //      and host visibility of memory.
   PtlAtomicSync();
+
+  UCT_TL_IFACE_STAT_FENCE(&iface->super);
   return UCS_OK;
 }
 
@@ -1264,8 +1272,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
                   ((params->field_mask & UCT_IFACE_PARAM_FIELD_STATS_ROOT) &&
                    (params->stats_root != NULL)) ?
                           params->stats_root :
-                          dev->stats)
-                   UCS_STATS_ARG(params->mode.device.dev_name));
+                          NULL) UCS_STATS_ARG(params->mode.device.dev_name));
 
   md = uct_bxi_iface_md(self);
 

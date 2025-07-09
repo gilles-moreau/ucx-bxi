@@ -140,7 +140,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   UCT_CHECK_AM_ID(id);
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -162,7 +162,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, length);
+  UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, size);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
                          UCT_AM_TRACE_TYPE_SEND, id, op + 1, size);
 err:
@@ -191,7 +191,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   UCT_CHECK_LENGTH(length, 0, iface->config.max_inline, "put_short");
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, length);
 
@@ -223,7 +223,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   ssize_t                  size = 0;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -266,7 +266,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_put_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -293,8 +293,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
    * memory descriptor sequence number. */
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
-  UCT_TL_EP_STAT_OP(&ep->super.super, PUT, ZCOPY,
-                    uct_iov_total_length(iov, iovcnt));
+  UCT_TL_EP_STAT_OP(&ep->super, PUT, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
 
 err:
@@ -312,7 +311,7 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -353,7 +352,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -380,7 +379,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, length);
+  UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
 
 err:
@@ -404,7 +403,7 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -458,7 +457,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -491,7 +490,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, length);
+  UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
 
 err:
@@ -535,7 +534,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
                              "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES_PTR(iface);
+  UCT_BXI_CHECK_IFACE_RES_PTR(iface, ep);
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
@@ -658,7 +657,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_LENGTH(header_length, 0, iface->config.seg_size,
                    "tag_rndv_request");
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   //NOTE: rndv_request cannot be offloaded since the rest of the protocol has
   //      to be done in software. This is the case with generic datatype, very
@@ -773,7 +772,7 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -806,7 +805,7 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, TAG, GET_ZCOPY, length);
+  UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
 
 err:
@@ -1010,7 +1009,7 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
@@ -1050,7 +1049,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -1092,7 +1091,7 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -1193,9 +1192,10 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
   //NOTE: Endpoint cannot be flushed if there are no resources since there
   //      may be requests in the pending list. They must be processed before
   //      this flush request.
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   if (ucs_list_is_empty(&ep->send_ops)) {
+    UCT_TL_EP_STAT_FLUSH(&ep->super);
     return UCS_OK;
   }
 
@@ -1223,12 +1223,18 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     uct_bxi_ep_add_flush_op_sn(ep, op, iface->tx.mem_desc->sn);
   }
 
+  UCT_TL_EP_STAT_FLUSH_WAIT(&ep->super);
   return UCS_INPROGRESS;
 }
 
 ucs_status_t uct_bxi_ep_fence(uct_ep_h tl_ep, unsigned flags)
 {
-  return uct_bxi_iface_fence(tl_ep->iface, flags);
+  //NOTE: Fence semantic is to enforce completion of previous operations
+  //      and host visibility of memory.
+  PtlAtomicSync();
+
+  UCT_TL_EP_STAT_FENCE(ucs_derived_of(tl_ep, uct_base_ep_t));
+  return UCS_OK;
 }
 
 ucs_status_t uct_bxi_ep_get_address(uct_ep_h tl_ep, uct_ep_addr_t *addr)
@@ -1266,10 +1272,12 @@ int uct_bxi_ep_is_connected(const uct_ep_h                      tl_ep,
 ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags)
 {
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
   if (uct_bxi_iface_available(iface) > 0 &&
-      (iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp))) {
+      ((iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) ||
+       !iface->tm.enabled)) {
     return UCS_ERR_BUSY;
   }
 
@@ -1286,7 +1294,7 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
 
-  UCT_BXI_CHECK_IFACE_RES(iface);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   // Send 0 length message, set length to 1 to pass IOV check.
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
@@ -1306,7 +1314,7 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
   uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super.super, PUT, SHORT, 0);
+  UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, 0);
   uct_bxi_log_put(iface);
 
   return status;

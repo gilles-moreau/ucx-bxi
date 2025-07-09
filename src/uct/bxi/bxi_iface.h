@@ -405,8 +405,9 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
 
-#define UCT_BXI_CHECK_IFACE_RES(_iface)                                        \
+#define UCT_BXI_CHECK_IFACE_RES(_iface, _ep)                                   \
   if (uct_bxi_iface_available(_iface) <= 0) {                                  \
+    UCS_STATS_UPDATE_COUNTER((_ep)->super.stats, UCT_EP_STAT_NO_RES, 1);       \
     return UCS_ERR_NO_RESOURCE;                                                \
   }
 
@@ -415,14 +416,15 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   UCT_CHECK_IOV_SIZE(_iovcnt, _max_iov, _func_name);                           \
   UCT_CHECK_LENGTH(_length, 0, _seg_size, "zcopy payload");
 
-#define UCT_BXI_CHECK_IFACE_RES_PTR(_iface)                                    \
+#define UCT_BXI_CHECK_IFACE_RES_PTR(_iface, _ep)                               \
   if (uct_bxi_iface_available(_iface) <= 0) {                                  \
+    UCS_STATS_UPDATE_COUNTER((_ep)->super.stats, UCT_EP_STAT_NO_RES, 1);       \
     return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE);                                \
   }
 
 //FIXME: rework all these macros...
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \
                            return UCS_ERR_NO_RESOURCE);
 
 #define UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                      \
@@ -430,7 +432,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                            return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE));
 
 #define UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err);
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err);
 
 #define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb,  \
                                            _arg, _length)                      \
@@ -511,12 +513,12 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->user_comp = _user_comp;
 
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc, _rxq)                \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \
                            return UCS_ERR_NO_RESOURCE);                        \
   (_desc)->rxq = _rxq;
 
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(_iface, _mp, _desc, _rxq, _err_code) \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc, _err_code);     \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
   (_desc)->rxq = _rxq;
 
 #define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
