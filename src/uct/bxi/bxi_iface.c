@@ -829,7 +829,9 @@ return UCS_OK;
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 {
+#ifdef ENABLE_STATS
   uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+#endif
 
   //NOTE: Fence semantic is to enforce completion of previous operations
   //      and host visibility of memory.

@@ -1272,7 +1272,9 @@ int uct_bxi_ep_is_connected(const uct_ep_h                      tl_ep,
 ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags)
 {
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+#ifdef ENABLE_STATS
+  uct_bxi_ep_t *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+#endif
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
   if (uct_bxi_iface_available(iface) > 0 &&
