@@ -1833,7 +1833,7 @@ struct uct_tag_context {
  * Operation Context structure for storing generic operation information.
  */
 typedef struct uct_gop {
-    int dummy;
+    size_t size;
 } uct_gop_t;
 
 

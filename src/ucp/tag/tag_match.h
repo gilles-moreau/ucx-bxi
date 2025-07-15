@@ -11,6 +11,7 @@
 #include <ucp/core/ucp_types.h>
 #include <ucs/datastruct/queue_types.h>
 #include <ucs/datastruct/khash.h>
+#include <ucs/datastruct/mpool.h>
 #include <ucs/sys/compiler_def.h>
 #include <ucs/stats/stats.h>
 
@@ -86,6 +87,7 @@ typedef struct ucp_tag_match {
     struct {
         ucs_queue_head_t      sync_reqs;        /* Outgoing sync send requests */
         khash_t(ucp_tag_offload_hash) tag_hash; /* Hash table of offload ifaces */
+        ucs_mpool_t           sched_mp;         /* Memory of schedule */
         khash_t(ucp_tag_sched_hash) sched_hash; /* Hash table of scheduler */
         ucp_worker_iface_t    *iface;           /* Active offload iface (relevant if just
                                                    one iface is activated on the worker,

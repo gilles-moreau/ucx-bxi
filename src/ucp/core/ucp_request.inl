@@ -493,11 +493,13 @@ ucp_request_send_op_offload(ucp_tag_match_t *tm,
     req->send.tag_offload.sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
                                                           schedh, NULL);
 
-    if (!ucp_offload_sched_exists(tm, req->send.tag_offload.sched)) {
-        /* A scheduler was provided but is not available in worker. */
-        ucs_error("req %p. provided scheduler not available. sched=%p", 
-                  req, req->send.tag_offload.sched);
-        return UCS_ERR_INVALID_PARAM;
+    if (ENABLE_PARAMS_CHECK) {
+        if (!ucp_offload_sched_exists(tm, req->send.tag_offload.sched)) {
+            /* A scheduler was provided but is not available in worker. */
+            ucs_error("req %p. provided scheduler not available. sched=%p", 
+                      req, req->send.tag_offload.sched);
+            return UCS_ERR_INVALID_PARAM;
+        }
     }
 
     return UCS_OK;
@@ -512,11 +514,13 @@ ucp_request_recv_op_offload(ucp_tag_match_t *tm,
 
     req->recv.schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
 
-    if (!ucp_offload_sched_exists(tm, req->recv.schedh)) {
-        /* A scheduler was provided but is not available in worker. */
-        ucs_error("req %p. provided scheduler not available. sched=%p", 
-                  req, req->recv.schedh);
-        return UCS_ERR_INVALID_PARAM;
+    if (ENABLE_PARAMS_CHECK) {
+        if (!ucp_offload_sched_exists(tm, req->recv.schedh)) {
+            /* A scheduler was provided but is not available in worker. */
+            ucs_error("req %p. provided scheduler not available. sched=%p", 
+                      req, req->recv.schedh);
+            return UCS_ERR_INVALID_PARAM;
+        }
     }
 
     req->flags         |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;

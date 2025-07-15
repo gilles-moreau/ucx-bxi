@@ -108,12 +108,19 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
                                          uint64_t imm_data)
 {
     ssize_t packed_len;
+    unsigned flags = 0;
+    void *arg = req;
+
+    if (ucs_unlikely(req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION)) {
+        flags = UCT_TAG_OFFLOAD_OPERATION; 
+        arg = req->send.state.uct_comp.gop;
+    }
 
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
-                                        ucp_eager_tag_offload_pack, req, 
-                                        0);
+                                        ucp_eager_tag_offload_pack, arg, 
+                                        flags);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }
@@ -140,6 +147,7 @@ static void ucp_proto_eager_tag_offload_bcopy_probe_common(
         .super.memtype_op    = UCT_EP_OP_GET_SHORT,
         .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG |
                                UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
+                               UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
                                UCP_PROTO_COMMON_INIT_FLAG_CAP_SEG_SIZE,
         .super.exclude_map   = 0,
         .super.reg_mem_info  = ucp_mem_info_unknown,

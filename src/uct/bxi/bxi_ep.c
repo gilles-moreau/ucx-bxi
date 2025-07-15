@@ -400,23 +400,32 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   ssize_t          size  = 0;
+  uct_bxi_gop_t   *gop;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
-  /* Take a bcopy send descriptor from the memory pool. Descriptor has 
-   * an operation first, then a buffer of size seg_size. */
-  UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
-                                     pack_cb, arg, &size);
-  if (size < 0) {
-    goto err;
-  }
-
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
-    ucs_error("BXI: triggered operation with bcopy not implemented.");
-    return UCS_ERR_NOT_IMPLEMENTED;
+    gop  = arg;
+    size = gop->super.size;
+
+    UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
+                                     uct_bxi_send_comp_op_handler, 0);
+
+    status = uct_bxi_wrap(PtlTriggeredPut(
+            iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cth,
+            gop->threshold));
   } else {
+    /* Take a bcopy send descriptor from the memory pool. Descriptor has 
+   * an operation first, then a buffer of size seg_size. */
+    UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
+                                       pack_cb, arg, &size);
+    if (size < 0) {
+      goto err;
+    }
+
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  size, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, imm));
@@ -825,6 +834,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   uct_bxi_gop_t              *gop      = NULL;
   uct_bxi_recv_block_t       *block;
   uct_bxi_recv_block_params_t params;
+  void                       *start;
 
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_iface_tag_recv_zcopy");
@@ -834,17 +844,10 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   memset(ptl_iov, 0, iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
+  /* The same tag cannot be associated to the same buffer. */
   status = uct_bxi_iface_tag_add_to_hash(iface, ptl_iov->iov_base);
   if (status != UCS_OK) {
     goto err;
-  }
-
-  if (ctx->gop != NULL) {
-    /* User specified a context to offload operations. */
-    gop = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
-    cth = gop->cth;
-    gop->threshold++;
-    ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
   }
 
   /* First, allocate a TAG block from the memory pool. */
@@ -852,11 +855,24 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                     iface->rx.tag.q,
                                     status = UCS_ERR_EXCEEDS_LIMIT;
                                     goto err_remove_hash);
-
   /* Attach upper layer context. */
   block->ctx = ctx;
 
-  params.start = ptl_iov->iov_base;
+  /* Handle operation offloading if requested. */
+  if (ucs_unlikely(ctx->gop != NULL)) {
+    gop      = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
+    cth      = gop->cth;
+    ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
+    start    = gop + 1;
+
+    gop->threshold++;
+
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP;
+  } else {
+    start = ptl_iov->iov_base;
+  }
+
+  params.start = start;
   params.size  = ptl_iov->iov_len;
   params.match = tag;
   params.ign   = ~tag_mask;
@@ -874,8 +890,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   }
 
   /* Link the receive block which will be used in case of rendez-vous protocol. */
-  if (gop != NULL) {
-    gop->block = block;
+  if (ucs_unlikely(gop != NULL)) {
+    gop->block   = block;
+    block->start = ptl_iov->iov_base;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
@@ -930,7 +947,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 ucs_status_t uct_bxi_iface_tag_gop_create(uct_iface_h tl_iface,
                                           uct_gop_h  *gop_p)
 {
-  ucs_status_t     status;
+  ucs_status_t     status = UCS_OK;
   uct_bxi_gop_t   *gop;
   uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
@@ -940,13 +957,7 @@ ucs_status_t uct_bxi_iface_tag_gop_create(uct_iface_h tl_iface,
     goto err;
   }
 
-  gop->threshold = 0;
-  gop->block     = NULL;
-
-  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
-  if (status != UCS_OK) {
-    goto err_free_gop;
-  }
+  gop->block = NULL;
 
   *gop_p = (uct_gop_h)gop;
 
@@ -960,11 +971,7 @@ err:
 
 void uct_bxi_iface_tag_gop_delete(uct_iface_h tl_iface, uct_gop_h tl_gop)
 {
-  uct_bxi_gop_t *gop = (uct_bxi_gop_t *)tl_gop;
-
-  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
-
-  uct_bxi_wrap(PtlCTFree(gop->cth));
+  uct_bxi_gop_t *gop = ucs_derived_of(tl_gop, uct_bxi_gop_t);
 
   ucs_mpool_put(gop);
 }

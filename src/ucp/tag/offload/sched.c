@@ -5,47 +5,9 @@
 #include <uct/api/uct.h>
 #include <uct/base/uct_iface.h>
 
-typedef struct ucp_offload_region {
-  void     *buffer;
-  size_t    size;
-  uct_gop_h op;
-} ucp_offload_region_t;
-
-struct ucp_offload_sched {
-  ucp_offload_region_t *regions;
-  size_t                count;
-  size_t                capacity;
-  ucp_worker_h          worker;
-  int                   activated;
-};
-
 static int ucp_offload_sched_is_activated(ucp_offload_sched_h sched)
 {
   return sched->worker->tm.offload.iface != NULL;
-}
-
-// Helper: grow the internal region array if needed
-static ucs_status_t ucp_offload_sched_ensure_capacity(ucp_offload_sched_h sched)
-{
-  size_t                new_capacity;
-  ucp_offload_region_t *new_regions;
-
-  if (sched->count < sched->capacity) {
-    return UCS_OK;
-  }
-
-  new_capacity = (sched->capacity == 0) ? 4 : sched->capacity * 2;
-  new_regions  = ucs_realloc(sched->regions,
-                             new_capacity * sizeof(ucp_offload_region_t),
-                             "offload region");
-  if (new_regions == NULL) {
-    return UCS_ERR_NO_MEMORY;
-  }
-
-  sched->regions  = new_regions;
-  sched->capacity = new_capacity;
-
-  return UCS_OK;
 }
 
 // Add a region to the sched
@@ -60,11 +22,6 @@ ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
     return UCS_OK;
   }
 
-  status = ucp_offload_sched_ensure_capacity(sched);
-  if (status != UCS_OK) {
-    return status;
-  }
-
   wiface = sched->worker->tm.offload.iface;
 
   sched->regions[sched->count].buffer = buffer;
@@ -75,6 +32,7 @@ ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
   if (status != UCS_OK) {
     return status;
   }
+  sched->regions[sched->count].op->size = size;
 
   *op_p = sched->regions[sched->count].op;
   sched->count++;
@@ -117,7 +75,7 @@ size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
   size_t              found = 0;
   ucp_worker_iface_t *wiface;
   uct_gop_h           gop = NULL;
-  uct_gop_h           gops[UCP_OFFLOAD_SCHED_MAX_OVERLAPS];
+  uct_gop_h           gops[UCP_SCHED_MAX_SCHEDULE_SIZE];
 
   if (!ucp_offload_sched_is_activated(sched)) {
     return found;
@@ -132,9 +90,9 @@ size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
 
       gops[found++] = sched->regions[i].op;
 
-      if (found > UCP_OFFLOAD_SCHED_MAX_OVERLAPS) {
+      if (found > UCP_SCHED_MAX_SCHEDULE_SIZE) {
         ucs_error("SCHED: max dependencies overflow. max=%d",
-                  UCP_OFFLOAD_SCHED_MAX_OVERLAPS);
+                  UCP_SCHED_MAX_SCHEDULE_SIZE);
         return -1;
       }
     }
@@ -153,6 +111,7 @@ size_t ucp_offload_sched_region_get_overlaps(ucp_offload_sched_h sched,
     if (status != UCS_OK) {
       return -1;
     }
+    gop->size = size;
 
     *gop_p = gop;
   } else if (found == 1) {
@@ -169,9 +128,8 @@ ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
   ucp_offload_sched_h sched;
   int                 ret;
 
-  sched = ucs_malloc(sizeof(struct ucp_offload_sched), "alloc oop ctx");
+  sched = ucs_mpool_get(&worker->tm.offload.sched_mp);
   if (sched == NULL) {
-    ucs_error("OOP: could not allocate offload operation context.");
     status = UCS_ERR_NO_MEMORY;
     goto err;
   }
@@ -179,9 +137,7 @@ ucs_status_t ucp_offload_sched_create(ucp_worker_h         worker,
   //FIXME: add iface attr checks.
 
   sched->activated = worker->tm.offload.iface == NULL;
-  sched->regions   = NULL;
   sched->count     = 0;
-  sched->capacity  = 0;
   sched->worker    = worker;
 
   /* Append the scheduler to the worker's hash table. */
@@ -198,7 +154,7 @@ void ucp_offload_sched_fini(ucp_offload_sched_h sched)
   for (size_t i = 0; i < sched->count; ++i) {
     uct_iface_tag_gop_delete(sched->worker->tm.offload.iface->iface,
                              sched->regions[i].op);
-    sched->count--;
   }
-  ucs_free(sched->regions);
+
+  ucs_mpool_put(sched);
 }

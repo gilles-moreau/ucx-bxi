@@ -389,6 +389,10 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
+        if (ucs_unlikely(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP)) {
+          memcpy(block->start, ev->start, block->size);
+        }
+
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
                                  ev->mlength, NULL, UCS_OK);
@@ -978,13 +982,37 @@ static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
+static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  ucs_status_t     status;
+  uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.gop_mp);
+  uct_bxi_gop_t   *gop   = obj;
+
+  gop->threshold = 0;
+  gop->block     = NULL;
+
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
+  if (status != UCS_OK) {
+    ucs_error("BXI: could not allocate counter.");
+  }
+}
+
+static void uct_bxi_iface_gop_cleanup(ucs_mpool_t *mp, void *obj)
+{
+  uct_bxi_gop_t *gop = obj;
+
+  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
+
+  uct_bxi_wrap(PtlCTFree(gop->cth));
+}
+
 //NOTE: Think of preallocating all the counters associated with the
 //      operation contexts during memory pool initialization.
 static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = NULL,
-        .obj_cleanup   = NULL,
+        .obj_init      = uct_bxi_iface_gop_init,
+        .obj_cleanup   = uct_bxi_iface_gop_cleanup,
         .obj_str       = NULL};
 
 static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
@@ -1064,7 +1092,6 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   rxq_param.eqh   = iface->rx.eqh;
   rxq_param.nih   = uct_bxi_iface_md(iface)->nih;
   rxq_param.mp    = (uct_iface_mpool_config_t){0};
-  rxq_param.list  = PTL_OVERFLOW_LIST;
   rxq_param.name  = "ctrl-tag";
   //NOTE: Although CTRL RXQ is different, handler is the same as TAG RXQ.
   //      It should only handle the PTL_EVENT_GET event.
@@ -1081,14 +1108,14 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   /* Initialize list of cancelled blocks. */
   ucs_list_head_init(&iface->rx.tag.cancel);
 
-  /* Memory pool of Operation Offload context. These are counters that are 
+  /* Memory pool of Generic operation. These are counters that are 
    * used to implement dependencies between sends and receives. */
   ucs_mpool_params_reset(&mp_param);
   mp_param.max_chunk_size  = config->tm.gop_mp.max_chunk_size;
   mp_param.elems_per_chunk = config->tm.gop_mp.bufs_grow;
   mp_param.max_elems   = ucs_max(uct_bxi_iface_md(iface)->config.limits.max_cts,
                                  iface->config.tm.max_gop);
-  mp_param.elem_size   = sizeof(uct_bxi_gop_t);
+  mp_param.elem_size   = sizeof(uct_bxi_gop_t) + iface->config.seg_size;
   mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
   mp_param.ops         = &uct_bxi_gop_mpool_ops;
   mp_param.name        = "tag-op-ctx";

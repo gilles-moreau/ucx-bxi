@@ -494,6 +494,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
+//TODO: _length argument is not used.
 #define UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
                                          _handler, _length)                    \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \

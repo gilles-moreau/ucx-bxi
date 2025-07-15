@@ -11,10 +11,17 @@
 #include "tag_match.inl"
 #include <ucp/tag/offload.h>
 
+static ucs_mpool_ops_t ucp_sched_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
 
 ucs_status_t ucp_tag_match_init(ucp_tag_match_t *tm)
 {
     size_t hash_size, bucket;
+    ucs_mpool_params_t mp_params;
 
     hash_size = ucs_roundup_pow2(UCP_TAG_MATCH_HASH_SIZE);
 
@@ -47,6 +54,21 @@ ucs_status_t ucp_tag_match_init(ucp_tag_match_t *tm)
     ucs_queue_head_init(&tm->offload.sync_reqs);
     kh_init_inplace(ucp_tag_offload_hash, &tm->offload.tag_hash);
     kh_init_inplace(ucp_tag_sched_hash, &tm->offload.sched_hash);
+
+    ucs_mpool_params_reset(&mp_params);
+    mp_params.max_chunk_size  = 1024*1024;
+    mp_params.elems_per_chunk = 128;
+    mp_params.elem_size       = sizeof(ucp_offload_sched_t);
+    mp_params.max_elems       = 128;
+    mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+    mp_params.ops             = &ucp_sched_mpool_ops;
+    mp_params.name            = "sched-mp";
+    mp_params.grow_factor     = 1;
+
+    if(ucs_mpool_init(&mp_params, &tm->offload.sched_mp) != UCS_OK) {
+        return UCS_ERR_NO_MEMORY;
+    }
+
     tm->offload.thresh       = SIZE_MAX;
     tm->offload.zcopy_thresh = SIZE_MAX;
     tm->offload.iface        = NULL;

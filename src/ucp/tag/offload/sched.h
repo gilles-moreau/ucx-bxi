@@ -6,9 +6,20 @@
 
 #include <ucs/datastruct/list.h>
 
-#define UCP_OFFLOAD_SCHED_MAX_OVERLAPS 6
+#define UCP_SCHED_MAX_SCHEDULE_SIZE 16
 
-typedef struct ucp_offload_region ucp_offload_region_t;
+typedef struct ucp_offload_region {
+  void     *buffer;
+  size_t    size;
+  uct_gop_h op;
+} ucp_offload_region_t;
+
+typedef struct ucp_offload_sched {
+  ucp_offload_region_t regions[UCP_SCHED_MAX_SCHEDULE_SIZE];
+  size_t               count;
+  ucp_worker_h         worker;
+  int                  activated;
+} ucp_offload_sched_t;
 
 ucs_status_t ucp_offload_sched_region_add(ucp_offload_sched_h sched,
                                           void *buffer, size_t size,
