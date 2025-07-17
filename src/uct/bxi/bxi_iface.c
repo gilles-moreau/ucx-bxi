@@ -345,6 +345,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
       }
 
       if (iface->tm.unexp_hdr_count > 0) {
+        /* It means receive has not been posted. Otherwise, recv_cancel 
+         * would have been called and the counter decremented. */
         status = uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits);
         ucs_assert(iface->tm.unexp_hdr_count == 0);
       }
@@ -365,9 +367,9 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP)) {
             hdr = ev->start;
 
-            /* Then, perform the GET operation. Add to pending queue if no resource 
-           * are available. Use length from hdr since sender size may be different 
-           * from receiver side. */
+            /* Then, perform the GET operation. Add to pending queue if no 
+             * resource are available. Use length from hdr since sender size 
+             * may be different from receiver side. */
             status = uct_bxi_iface_tag_rndv_zcopy_get(
                     iface, ev->initiator, hdr->pti, ev->match_bits,
                     block->start, hdr->length, block->ctx);
@@ -389,7 +391,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
-        if (ucs_unlikely(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP)) {
+        if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP) {
           memcpy(block->start, ev->start, block->size);
         }
 
@@ -417,7 +419,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
     goto err;
     break;
   case PTL_EVENT_AUTO_UNLINK:
-    break;
   case PTL_EVENT_AUTO_FREE:
     /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
      * Link it back, all included data has been processed already. */
@@ -649,7 +650,7 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
 {
   ucs_status_t status;
 
-  ucs_error("BXI: operation failed. op=%p, sn=%lu, ep=%p", op, op->sn, op->ep);
+  ucs_error("BXI: operation failed. op=%p, ep=%p", op, op->ep);
 
   /* Don't remove operation from outstanding list, it will be done later. */
 

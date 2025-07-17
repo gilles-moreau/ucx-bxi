@@ -5,7 +5,20 @@
 
 #include <sys/types.h>
 #include <time.h>
+#include <ucs/profile/profile.h>
 #include <uct/base/uct_log.h>
+
+//NOTE: No overflow event needs to be handled since the message will either:
+//      - generate a PTL_EVENT_PUT in a block in the overflow list, block will
+//      then be cancelled/unlinked, or
+//      - generate a PTL_EVENT_PUT in the priority list.
+#define UCT_BXI_ME_OPT_RECV_ZCOPY                                              \
+  PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
+          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE
+#define UCT_BXI_ME_OPT_RECV_ZCOPY_TRIG                                         \
+  PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
+          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
+          PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW
 
 ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_ADD] = PTL_SUM,   [UCT_ATOMIC_OP_AND] = PTL_BAND,
@@ -150,16 +163,15 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     goto err;
   }
 
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.am, id, 0, op, 0));
+  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.am, id, 0, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, size);
@@ -195,16 +207,15 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, length);
 
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
+                                 length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
@@ -233,16 +244,15 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     goto err;
   }
 
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, size);
@@ -278,10 +288,10 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh,
-                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
-                               PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+  status = uct_bxi_wrap(
+          PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
+                   ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   } else {
@@ -289,9 +299,8 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -318,17 +327,16 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                       unpack_cb, comp, arg, length);
 
-  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               remote_addr, op));
+  status = uct_bxi_wrap(PtlGetNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 length, ep->dev_addr.pid, ep->iface_addr.rma,
+                                 0, remote_addr, op));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, BCOPY, length);
@@ -364,19 +372,18 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
-                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
-                               ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               remote_addr, op));
+  status = uct_bxi_wrap(PtlGetNB(iface->tx.mem_desc->mdh,
+                                 (ptl_size_t)ptl_iov->iov_base,
+                                 ptl_iov->iov_len, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, remote_addr, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, uct_iov_total_length(iov, iovcnt));
@@ -392,9 +399,10 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
   return UCS_ERR_NOT_IMPLEMENTED;
 }
 
-ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
-                                   uct_pack_callback_t pack_cb, void *arg,
-                                   unsigned flags)
+UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
+                 (tl_ep, tag, imm, pack_cb, arg, flags), uct_ep_h tl_ep,
+                 uct_tag_t tag, uint64_t imm, uct_pack_callback_t pack_cb,
+                 void *arg, unsigned flags)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
@@ -413,10 +421,12 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                      uct_bxi_send_comp_op_handler, 0);
 
-    status = uct_bxi_wrap(PtlTriggeredPut(
+    status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
             ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cth,
             gop->threshold));
+    ucs_debug("BXI: triggered bcopy. nid=%u, pid=%u, size=%lu, op=%p",
+              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid, size, op);
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -426,18 +436,17 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
       goto err;
     }
 
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, imm));
+    status = uct_bxi_wrap(PtlPutNB(
+            iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm));
   }
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
@@ -455,7 +464,6 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                         size_t iovcnt, unsigned flags,
                                         uct_completion_t *comp)
 {
-
   ucs_status_t     status;
   ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
@@ -478,15 +486,15 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    status = uct_bxi_wrap(PtlTriggeredPut(
+    status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
             tag, 0, op, imm, gop->cth, gop->threshold));
   } else {
     status = uct_bxi_wrap(
-            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                   ep->iface_addr.tag, tag, 0, op, imm));
+            PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+                     ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
+                     ep->iface_addr.tag, tag, 0, op, imm));
   }
 
   if (status != UCS_OK) {
@@ -494,9 +502,8 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   } else {
     status = UCS_INPROGRESS;
   }
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
@@ -551,11 +558,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* First, allocate a TAG block from the memory pool. Receive block is 
    * used to match the remote GET operation and is posted to the CTRL RXQ. */
-  //TODO: rename macro
-  UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
                                     iface->rx.ctrl.q,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err);
+  uct_bxi_recv_block_init(block, ptl_iov->iov_base, ptl_iov->iov_len, tag,
+                          NULL);
 
   params.start = ptl_iov->iov_base;
   params.size  = ptl_iov->iov_len;
@@ -565,7 +573,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
    * - Portals message ordering. 
    * we ensure matching validity. */
   params.match   = UCT_BXI_BUILD_RNDV_CTRL_TAG(ep->dev_addr.pid);
-  params.cth     = PTL_INVALID_HANDLE;
+  params.cth     = PTL_CT_NONE;
   params.ign     = 0;
   params.options = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
                    PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
@@ -608,22 +616,25 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
      * triggered. */
     ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredPut(
+    status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
             PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
             gop->cth, gop->threshold));
+    ucs_debug("BXI: triggered rndv. nid=%u, pid=%u, size=%lu",
+              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid,
+              ptl_iov->iov_len);
   } else {
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, hdr));
+    status =
+            uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                  ep->iface_addr.tag, tag, 0, op, hdr));
   }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   return (ucs_status_ptr_t)op;
@@ -682,17 +693,16 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   memcpy(op + 1, header, header_length);
 
   UCT_BXI_HDR_SET(hdr, UCT_BXI_TAG_PROT_RNDV_SW);
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               header_length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, hdr));
+  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 header_length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv request return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
 err:
@@ -739,9 +749,11 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_offload_tag_get(
   }
 
   //NOTE: MD has been created using the base address, so the remote offset is 0.
-  status = uct_bxi_wrap(PtlTriggeredGet(op->mem_desc->mdh, 0, iov->iov_len,
-                                        ep->dev_addr.pid, ep->iface_addr.ctrl,
-                                        tag, 0, op, gop->cth, gop->threshold));
+  status = uct_bxi_wrap(PtlTriggeredGetNB(
+          op->mem_desc->mdh, 0, iov->iov_len, ep->dev_addr.pid,
+          ep->iface_addr.ctrl, tag, 0, op, gop->cth, gop->threshold));
+  ucs_debug("BXI: triggered get. nid=%u, pid=%u, size=%lu",
+            ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid, iov->iov_len);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -809,9 +821,8 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
@@ -819,6 +830,20 @@ ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
 err:
   return status;
+}
+
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_tag_recv_is_offloaded(uct_tag_context_t *ctx)
+{
+  return ctx->gop != NULL;
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_tag_gop_attach_block(uct_bxi_gop_t *gop, uct_bxi_recv_block_t *block)
+{
+  gop->block    = block;
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP;
+  block->cth    = gop->cth;
 }
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
@@ -829,19 +854,15 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   ucs_status_t                status;
   ptl_iovec_t                *ptl_iov;
   uct_bxi_iface_t            *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  ptl_handle_ct_t             cth   = PTL_CT_NONE;
-  unsigned                    ct_flags = 0;
-  uct_bxi_gop_t              *gop      = NULL;
+  uct_bxi_gop_t              *gop   = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
   uct_bxi_recv_block_t       *block;
   uct_bxi_recv_block_params_t params;
-  void                       *start;
 
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_iface_tag_recv_zcopy");
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  memset(ptl_iov, 0, iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   /* The same tag cannot be associated to the same buffer. */
@@ -851,48 +872,40 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   }
 
   /* First, allocate a TAG block from the memory pool. */
-  UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(iface, &iface->tm.recv_block_mp, block,
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
                                     iface->rx.tag.q,
                                     status = UCS_ERR_EXCEEDS_LIMIT;
                                     goto err_remove_hash);
-  /* Attach upper layer context. */
-  block->ctx = ctx;
+  uct_bxi_recv_block_init(block, ptl_iov->iov_base, ptl_iov->iov_len, tag, ctx);
 
   /* Handle operation offloading if requested. */
-  if (ucs_unlikely(ctx->gop != NULL)) {
-    gop      = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
-    cth      = gop->cth;
-    ct_flags = PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
-    start    = gop + 1;
+  if (ucs_unlikely(uct_bxi_tag_recv_is_offloaded(ctx))) {
+    /* Set ME parameters. */
+    params.cth     = gop->cth;
+    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_TRIG;
+    params.start   = gop + 1;
 
+    /* Link block to gop so it can be used by following GET operation 
+     * when message is large. */
+    uct_bxi_tag_gop_attach_block(gop, block);
+
+    /* Increment threshold which will trigger next dependent send. */
     gop->threshold++;
-
-    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP;
   } else {
-    start = ptl_iov->iov_base;
+    params.cth     = PTL_CT_NONE;
+    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY;
+    params.start   = ptl_iov->iov_base;
   }
 
-  params.start = start;
   params.size  = ptl_iov->iov_len;
   params.match = tag;
   params.ign   = ~tag_mask;
-  params.cth   = cth;
-  //FIXME: Add explanation for OVER_DISABLE
-  params.options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |
-                   PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
-                   ct_flags;
 
-  /* Then, post the memory entry. The Portals Priority list has already been set 
-   * during memory initialization. */
+  /* Then, post the memory entry. The Portals Priority list has already 
+   * been set during memory initialization. */
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
     goto err_release_block;
-  }
-
-  /* Link the receive block which will be used in case of rendez-vous protocol. */
-  if (ucs_unlikely(gop != NULL)) {
-    gop->block   = block;
-    block->start = ptl_iov->iov_base;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
@@ -994,8 +1007,9 @@ ucs_status_t uct_bxi_iface_tag_gop_depends_on(uct_iface_h tl_iface,
 
     ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredCTInc(gop->cth, (ptl_ct_event_t){1, 0},
-                                            tmp_gop->cth, tmp_gop->threshold));
+    status =
+            uct_bxi_wrap(PtlTriggeredCTIncNB(gop->cth, (ptl_ct_event_t){1, 0},
+                                             tmp_gop->cth, tmp_gop->threshold));
     if (status != UCS_OK) {
       ucs_fatal("BXI: failed setting trig inc.");
     }
@@ -1025,18 +1039,17 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
 
-  status = uct_bxi_wrap(
-          PtlAtomic(iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                    PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                    remote_addr, op, 0, uct_bxi_atomic_op_table[opcode], dt));
+  status = uct_bxi_wrap(PtlAtomicNB(
+          iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
+          PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op,
+          0, uct_bxi_atomic_op_table[opcode], dt));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
@@ -1065,7 +1078,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
 
-  status = uct_bxi_wrap(PtlFetchAtomic(
+  status = uct_bxi_wrap(PtlFetchAtomicNB(
           iface->tx.mem_desc->mdh, (uint64_t)result, iface->tx.mem_desc->mdh,
           (uint64_t)&op->atomic.value, size, ep->dev_addr.pid,
           ep->iface_addr.rma, 0, remote_addr, op, 0,
@@ -1077,9 +1090,8 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
@@ -1109,10 +1121,10 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   op->atomic.compare = compare;
 
   status = uct_bxi_wrap(
-          PtlSwap(iface->tx.mem_desc->mdh, (uint64_t)result,
-                  iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                  ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
-                  &op->atomic.compare, PTL_CSWAP, dt));
+          PtlSwapNB(iface->tx.mem_desc->mdh, (uint64_t)result,
+                    iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
+                    ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
+                    &op->atomic.compare, PTL_CSWAP, dt));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
@@ -1120,9 +1132,8 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
     status = UCS_INPROGRESS;
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
   UCT_TL_EP_STAT_ATOMIC(&ep->super);
 
@@ -1224,10 +1235,7 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH;
 
     /* Append operation descriptor to completion queue. */
-    //FIXME: sequence number is not used to determine completion. Instead, it
-    //       is the queue structure (list) of the endpoint. This is a relicat
-    //       of the previous implementation with portals counter.
-    uct_bxi_ep_add_flush_op_sn(ep, op, iface->tx.mem_desc->sn);
+    uct_bxi_ep_add_flush_op(ep, op);
   }
 
   UCT_TL_EP_STAT_FLUSH_WAIT(&ep->super);
@@ -1318,9 +1326,8 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
     ucs_fatal("BXI: PtlPut ep check return %d", status);
   }
 
-  /* Append operation descriptor to completion queue and increment 
-   * memory descriptor sequence number. */
-  uct_bxi_ep_add_send_op_sn(ep, op, iface->tx.mem_desc->sn++);
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, 0);

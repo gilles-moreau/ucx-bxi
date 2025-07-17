@@ -79,8 +79,6 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
     goto err_free_memdesc;
   }
 
-  mem_desc->sn = 0;
-
   *mem_desc_p = mem_desc;
 
   return status;

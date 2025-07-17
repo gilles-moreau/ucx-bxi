@@ -118,7 +118,6 @@ typedef struct uct_bxi_iface_send_op {
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
   uct_completion_t      *user_comp; /* User completion callback */
   uct_bxi_ep_t          *ep;        /* OP endpoint */
-  ptl_size_t             sn;        /* OP sequence number */
   size_t                 length;    /* Length of the OP */
 
   union {
@@ -518,7 +517,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                            return UCS_ERR_NO_RESOURCE);                        \
   (_desc)->rxq = _rxq;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC_PTR(_iface, _mp, _desc, _rxq, _err_code) \
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _rxq, _err_code) \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
   (_desc)->rxq = _rxq;
 

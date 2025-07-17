@@ -86,4 +86,14 @@ static inline ptl_pt_index_t uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
   return rxq->pti;
 }
 
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_recv_block_init(uct_bxi_recv_block_t *block, void *start, size_t size,
+                        uct_tag_t tag, uct_tag_context_t *ctx)
+{
+  block->start = start;
+  block->size  = size;
+  block->tag   = tag;
+  block->ctx   = ctx;
+}
+
 #endif

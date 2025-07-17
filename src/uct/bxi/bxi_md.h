@@ -29,8 +29,6 @@ typedef struct uct_bxi_mem_desc_param {
 typedef struct uct_bxi_mem_desc {
   unsigned        flags;
   ptl_handle_md_t mdh; /* Portals4 MD handle */
-  uint64_t        sn;  /* Current sequence number
-                       //FIXME: review sn ownership (iface, ep,...) */
 } uct_bxi_mem_desc_t;
 
 typedef struct uct_bxi_mem_entry_param {

@@ -2,8 +2,6 @@
 #include "bxi.h"
 #include "bxi_iface.h"
 
-#include <stdlib.h>
-
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params)
 {
@@ -22,10 +20,6 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .uid         = PTL_UID_ANY,
             .start       = params->start,
             .length      = params->size};
-    block->start = params->start;
-    block->size  = params->size;
-    block->tag   = params->match;
-    block->cth   = params->cth;
   } else {
     //NOTE: PTL_ME_UNEXPECTED_HDR_DISABLE cannot be used because an expected ME
     //      could be posted and matched in the OVERFLOW list by another message.
@@ -50,8 +44,8 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .length = block->size};
   }
 
-  status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
-                                    &block->meh));
+  status = uct_bxi_wrap(PtlMEAppendNB(rxq->nih, rxq->pti, &me, block->list,
+                                      block, &block->meh));
   if (status != UCS_OK) {
     return status;
   }
@@ -71,8 +65,6 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
     ucs_warn("BXI: block have unexpected headers still. pti=%d, start=%p",
              block->rxq->pti, block->start);
   }
-
-  block->meh = PTL_INVALID_HANDLE;
 }
 
 void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
