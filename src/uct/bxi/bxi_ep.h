@@ -27,13 +27,20 @@ typedef struct uct_bxi_ep {
   uint16_t              list_id;    /* ID in Portals PID list. */
   ucs_list_link_t       elem;       /* Element in Portals PID list. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
+  uct_bxi_cnt_t        *cnt;        /* Pointer to target PID counters */
 } uct_bxi_ep_t;
 
 typedef struct uct_bxi_ep_list {
   ucs_list_link_t head;
-  unsigned        num_ep;
   ptl_process_t   pid;
+  unsigned        num_ep;
+  uct_bxi_cnt_t   cnt; /* Message counters for this PID */
 } uct_bxi_ep_list_t;
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_inc_precv(uct_bxi_ep_t *ep)
+{
+  ep->cnt->precv++;
+}
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
 {
@@ -226,6 +233,11 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
 
   ucs_trace_poll("ep %p add send op %p handler %s", ep, op,
                  ucs_debug_get_symbol_name((void *)op->comp.handler));
+}
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_tag_inc_cnt(uct_bxi_ep_t *ep)
+{
+  ep->cnt->send++;
 }
 
 UCS_CLASS_DECLARE(uct_bxi_ep_t, const uct_ep_params_t *);

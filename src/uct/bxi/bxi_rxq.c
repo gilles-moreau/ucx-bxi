@@ -1,6 +1,7 @@
 #include "bxi_rxq.h"
 #include "bxi.h"
-#include "bxi_iface.h"
+
+#define UCT_BXI_CTB_INIT (ptl_ct_event_t){.success = 0, .failure = 0}
 
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params)
@@ -9,7 +10,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
   ptl_me_t       me;
   uct_bxi_rxq_t *rxq = block->rxq;
 
-  if (!block->unexp) {
+  if (!uct_bxi_recv_block_is_unexpected(block)) {
     me = (ptl_me_t){
             .ct_handle   = params->cth,
             .match_bits  = params->match,
@@ -58,20 +59,38 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
   int ret;
 
   ret = PtlMEUnlink(block->meh);
-  if (ret == PTL_IN_USE && !block->unexp) {
+  if (ret == PTL_IN_USE && !uct_bxi_recv_block_is_unexpected(block)) {
     ucs_warn("BXI: block have ongoing operations. pti=%d, start=%p",
              block->rxq->pti, block->start);
-  } else if (ret == PTL_IN_USE && block->unexp) {
+  } else if (ret == PTL_IN_USE && uct_bxi_recv_block_is_unexpected(block)) {
     ucs_warn("BXI: block have unexpected headers still. pti=%d, start=%p",
              block->rxq->pti, block->start);
   }
 }
 
+static UCS_F_ALWAYS_INLINE int uct_bxi_is_overflow(ptl_size_t thresh,
+                                                   ptl_size_t inc)
+{
+  return thresh < UINT64_MAX - inc;
+}
+
 void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
 {
+  ucs_status_t status;
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
-  ucs_mpool_put(block);
+
+  /* Counter value needs to be reset otherwise thresholds comparison will 
+   * hit integer overflow problems. Since PtlCTSet is blocking, do it just 
+   * before overflow happens.
+   * */
+  if (uct_bxi_is_overflow(block->ctb_thresh, block->rxq->config.blk_min_free)) {
+    status = uct_bxi_wrap(PtlCTSet(block->ctbh, UCT_BXI_CTB_INIT));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: could not reset counter.");
+    }
+    block->ctb_thresh = 0;
+  }
 }
 
 static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
@@ -124,7 +143,6 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   uct_bxi_rxq_t        *rxq   = ucs_container_of(mp, uct_bxi_rxq_t, mp);
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
 
-  block->unexp = 1;
   block->size  = rxq->config.blk_size;
   block->start = block + 1;
   block->rxq   = rxq;
@@ -160,8 +178,8 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
   rxq->list                = params->list;
   rxq->handler             = params->handler;
   rxq->config.num_blk      = params->mp.max_bufs;
-  rxq->config.blk_size     = iface->config.rx.num_seg * iface->config.seg_size;
-  rxq->config.blk_min_free = iface->config.seg_size;
+  rxq->config.blk_size     = params->num_segs * params->seg_size;
+  rxq->config.blk_min_free = params->seg_size;
 
   status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
                                    PTL_PT_ANY, &rxq->pti));

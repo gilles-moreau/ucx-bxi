@@ -1825,6 +1825,11 @@ struct uct_tag_context {
       */ 
      uct_gop_h gop;
 
+     /** 
+      * Reply endpoint to enable offloaded rendezvous.
+      */ 
+     uct_ep_h reply_ep;
+
      /** A placeholder for the private data used by the transport */
      char priv[UCT_TAG_PRIV_LEN];
 };

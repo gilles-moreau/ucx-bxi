@@ -25,19 +25,23 @@ typedef struct uct_bxi_recv_block_params {
 } uct_bxi_recv_block_params_t;
 
 typedef struct uct_bxi_recv_block {
-  unsigned                 flags;
-  int                      unexp;  /* Boolean is block unexpected */
-  void                    *start;  /* Address of the receive block */
-  size_t                   size;   /* Size of the receive block */
-  uct_bxi_rxq_t           *rxq;    /* Back reference to the RX Queue */
-  ptl_handle_me_t          meh;    /* Memory Entry handle */
-  ucs_list_link_t          elem;   /* Element in the RX Queue */
-  ucs_list_link_t          c_elem; /* Element in the cancel list */
-  uct_tag_t                tag;    /* Needed in case block is cancelled */
-  ptl_list_t               list;   /* Portals list */
-  uct_tag_context_t       *ctx;    /* Tag context provided by upper layer */
-  ptl_handle_ct_t          cth; /* Counter associated when recv if offloaded */
-  uct_bxi_iface_send_op_t *op;  /* OP in case of GET protocol */
+  unsigned           flags;
+  void              *start;      /* Address of the receive block */
+  size_t             size;       /* Size of the receive block */
+  size_t             send_size;  /* Actual size sent on the receive block */
+  uct_bxi_rxq_t     *rxq;        /* Back reference to the RX Queue */
+  ptl_handle_me_t    meh;        /* Memory Entry handle */
+  ucs_list_link_t    elem;       /* Element in the RX Queue */
+  ucs_list_link_t    c_elem;     /* Element in the cancel list */
+  uct_tag_t          tag;        /* Needed in case block is cancelled */
+  uct_tag_t          stag;       /* Send tag */
+  ptl_list_t         list;       /* Portals list: OVERFLOW or PRIORITY */
+  uct_tag_context_t *ctx;        /* Tag context provided by upper layer */
+  ptl_size_t         ctb_thresh; /* Threshold of the bytes counter */
+  ptl_handle_ct_t    ctbh;       /* Bytes counter associated for
+                                          offloaded rendez-vous */
+  ptl_handle_ct_t    cth;        /* Counter associated when recv if offloaded */
+  uct_bxi_iface_send_op_t *op;   /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 enum {
@@ -45,11 +49,13 @@ enum {
 };
 
 typedef struct uct_bxi_rxq_param {
-  unsigned                 flags;   /* Flags to influence RXQ creation */
-  uct_iface_mpool_config_t mp;      /* RX Memory pool configuration */
-  ptl_list_t               list;    /* Portals priority list */
-  char                    *name;    /* Name used of memory pool */
-  uct_bxi_rxq_ev_handler   handler; /* Event handler called when polling RX */
+  unsigned                 flags;    /* Flags to influence RXQ creation */
+  uct_iface_mpool_config_t mp;       /* RX Memory pool configuration */
+  ptl_list_t               list;     /* Portals priority list */
+  char                    *name;     /* Name used of memory pool */
+  uct_bxi_rxq_ev_handler   handler;  /* Event handler called when polling RX */
+  int                      num_segs; /* Number of segment per receive block */
+  size_t                   seg_size; /* Segment size */
   ptl_handle_ni_t          nih;
   ptl_handle_eq_t          eqh;
 } uct_bxi_rxq_param_t;
@@ -94,6 +100,12 @@ uct_bxi_recv_block_init(uct_bxi_recv_block_t *block, void *start, size_t size,
   block->size  = size;
   block->tag   = tag;
   block->ctx   = ctx;
+}
+
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_recv_block_is_unexpected(uct_bxi_recv_block_t *block)
+{
+  return block->list == PTL_OVERFLOW_LIST;
 }
 
 #endif

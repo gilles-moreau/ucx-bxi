@@ -14,20 +14,24 @@
 #define UCT_BXI_RNDV_PID_MASK 0xffff
 
 #define UCT_BXI_RNDV_PREFIX 0xdededada
-#define UCT_BXI_BUILD_RNDV_CTRL_TAG(_pid)                                      \
+#define UCT_BXI_BUILD_RNDV_TAG(_pid, _cnt)                                     \
   ({                                                                           \
     uint64_t _tag  = 0;                                                        \
-    _tag           = UCT_BXI_RNDV_PREFIX;                                      \
     _tag           = _tag << 16;                                               \
     _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
     _tag           = _tag << 16;                                               \
     _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
+    _tag           = _tag << 16;                                               \
+    _tag          |= _cnt;                                                     \
     _tag;                                                                      \
   })
 
-#define UCT_BXI_HDR_SET(_hdr, _prot)                                           \
-  _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
-  _hdr  = (_hdr << 32);                                                        \
+#define UCT_BXI_HDR_GET_LENGTH(_hdr)                                           \
+  (size_t)((_hdr >> 60) & 0x0ffffffffffffffful)
+
+#define UCT_BXI_HDR_SET(_hdr, _length, _prot)                                  \
+  _hdr  = _length;                                                             \
+  _hdr  = (_hdr << 60);                                                        \
   _hdr |= ((_prot) & 0xf)
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
@@ -43,7 +47,7 @@ enum {
 enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE   = UCS_BIT(0),
   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH   = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD = UCS_BIT(2), /* Send OP used its own MD */
+  UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE = UCS_BIT(2), /* Send OP used its own MD */
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -195,6 +199,12 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
 #define uct_bxi_eps_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
 KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_list_t *, 1, uct_bxi_eps_hash,
            kh_int64_hash_equal)
+
+typedef struct uct_bxi_cnt {
+  uint16_t precv; /* Posted receive count */
+  uint16_t crecv; /* Completed receive count */
+  uint16_t send;  /* Send count */
+} uct_bxi_cnt_t;
 
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
@@ -381,13 +391,13 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
   if (--op->comp.comp == 0) {
-    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD) {
+    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE) {
       uct_bxi_md_mem_desc_fini(op->mem_desc);
     }
 
     /* Reset operation flags. */
     op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_EXCL_MD |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE |
                    UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
     op->comp.handler(op, op + 1);
   }
