@@ -14,6 +14,9 @@
 #define UCT_BXI_RNDV_PID_MASK 0xffff
 
 #define UCT_BXI_RNDV_PREFIX 0xdededada
+
+/* ME match bits is based on the remote PID and endpoint counter. It is based 
+ * on Barret and al. */
 #define UCT_BXI_BUILD_RNDV_TAG(_pid, _cnt)                                     \
   ({                                                                           \
     uint64_t _tag  = 0;                                                        \
@@ -45,9 +48,9 @@ enum {
 
 /* Operation flags */
 enum {
-  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE   = UCS_BIT(0),
-  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH   = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE = UCS_BIT(2), /* Send OP used its own MD */
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE      = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH      = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE = UCS_BIT(2), /* Release MD */
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -142,10 +145,9 @@ typedef struct uct_bxi_iface_send_op {
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_gop {
-  uct_gop_t             super;     /* Generic operation handle */
-  ptl_handle_ct_t       cth;       /* Handle to the OP counter */
-  ptl_size_t            threshold; /* Threshold at which OP is triggered */
-  uct_bxi_recv_block_t *block;     /* Receive block from rndv protocol */
+  uct_gop_t             super; /* Generic operation handle */
+  uct_bxi_block_cnt_t   cnt;
+  uct_bxi_recv_block_t *block; /* Receive block from rndv protocol */
 } uct_bxi_gop_t;
 
 typedef struct uct_bxi_device_addr {
@@ -229,9 +231,10 @@ typedef struct uct_bxi_iface {
     size_t max_msg_size; /* Maximum message size */
     size_t max_atomic_size;
     struct {
-      unsigned int max_gop;   /* Maximum number of generic operation */
-      unsigned int max_tags;  /* Maximum number of hw matching descriptors */
-      int          max_zcopy; /* Maximum payload size for zcopy */
+      size_t       eager_limit; /* Maximum eager message size. */
+      unsigned int max_gop;     /* Maximum number of generic operation */
+      unsigned int max_tags;    /* Maximum number of hw matching descriptors */
+      int          max_zcopy;   /* Maximum payload size for zcopy */
     } tm;
 
     size_t iface_addr_size;
@@ -391,13 +394,13 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
   if (--op->comp.comp == 0) {
-    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE) {
+    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE) {
       uct_bxi_md_mem_desc_fini(op->mem_desc);
     }
 
     /* Reset operation flags. */
     op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_RELEASE |
+                   UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE |
                    UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
     op->comp.handler(op, op + 1);
   }
@@ -527,9 +530,14 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                            return UCS_ERR_NO_RESOURCE);                        \
   (_desc)->rxq = _rxq;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _rxq, _err_code) \
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _rxq, _start,    \
+                                          _size, _tag, _ctx, _err_code)        \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
-  (_desc)->rxq = _rxq;
+  (_desc)->rxq   = _rxq;                                                       \
+  (_desc)->start = _start;                                                     \
+  (_desc)->size  = _size;                                                      \
+  (_desc)->tag   = _tag;                                                       \
+  (_desc)->ctx   = _ctx
 
 #define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
   UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \

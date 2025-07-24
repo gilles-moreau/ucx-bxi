@@ -77,6 +77,7 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_is_overflow(ptl_size_t thresh,
 void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
 {
   ucs_status_t status;
+
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
 
@@ -84,12 +85,13 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
    * hit integer overflow problems. Since PtlCTSet is blocking, do it just 
    * before overflow happens.
    * */
-  if (uct_bxi_is_overflow(block->ctb_thresh, block->rxq->config.blk_min_free)) {
-    status = uct_bxi_wrap(PtlCTSet(block->ctbh, UCT_BXI_CTB_INIT));
+  if (uct_bxi_is_overflow(block->cnt.threshold,
+                          block->rxq->config.blk_min_free)) {
+    status = uct_bxi_wrap(PtlCTSet(block->cnt.cth, UCT_BXI_CTB_INIT));
     if (status != UCS_OK) {
       ucs_fatal("BXI: could not reset counter.");
     }
-    block->ctb_thresh = 0;
+    block->cnt.threshold = 0;
   }
 }
 

@@ -377,6 +377,10 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
 
       block->stag = ev->match_bits;
 
+      //NOTE: In case of wrong rendezvous prediction, we need to update the
+      //      block threshold to keep track of the hw counter value.
+      uct_bxi_recv_block_update_cnt_thresh(block, ev->mlength);
+
       /* Now, perform protocol specific actions. */
       if (uct_bxi_iface_is_rndv(ev->mlength)) {
         switch (ev->hdr_data & 0xful) {
@@ -415,10 +419,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
-        if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_GOP) {
-          memcpy(block->start, ev->start, ev->mlength);
-        }
-
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, block->stag, ev->hdr_data,
                                  ev->mlength, NULL, UCS_OK);
@@ -571,13 +571,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.eager.max_zcopy = 1168;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = 128;
-  attr->cap.tag.rndv.max_iov    = 1;
+  attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
-
-  //NOTE: Offloaded rendezvous requires the length to be transmitted within the
-  //      header data. 4 bits for protocol info is also needed so the maximum
-  //      size allowed is UINT64_MAX >> 4.
-  ucs_assert(iface->config.max_msg_size < (UINT64_MAX >> 4));
 
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
@@ -1015,8 +1010,9 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
   block->cth   = PTL_CT_NONE;
 
   /* Initialize the byte counter for rendez-vous offload. */
-  block->ctb_thresh = 0;
-  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->ctbh));
+  block->cnt.threshold = 0;
+  status               = uct_bxi_wrap(
+          PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cnt.cth));
   if (status != UCS_OK) {
     ucs_fatal("BXI: could not allocate counter.");
   }
@@ -1026,9 +1022,9 @@ static void uct_bxi_iface_recv_block_cleanup(ucs_mpool_t *mp, void *obj)
 {
   uct_bxi_recv_block_t *block = obj;
 
-  ucs_assert(!PtlHandleIsEqual(block->ctbh, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(block->cnt.cth, PTL_INVALID_HANDLE));
 
-  uct_bxi_wrap(PtlCTFree(block->ctbh));
+  uct_bxi_wrap(PtlCTFree(block->cnt.cth));
 }
 
 static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
@@ -1044,10 +1040,11 @@ static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
   uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.gop_mp);
   uct_bxi_gop_t   *gop   = obj;
 
-  gop->threshold = 0;
-  gop->block     = NULL;
+  gop->cnt.threshold = 0;
+  gop->block         = NULL;
 
-  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
+  status =
+          uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cnt.cth));
   if (status != UCS_OK) {
     ucs_error("BXI: could not allocate counter.");
   }
@@ -1057,9 +1054,9 @@ static void uct_bxi_iface_gop_cleanup(ucs_mpool_t *mp, void *obj)
 {
   uct_bxi_gop_t *gop = obj;
 
-  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(gop->cnt.cth, PTL_INVALID_HANDLE));
 
-  uct_bxi_wrap(PtlCTFree(gop->cth));
+  uct_bxi_wrap(PtlCTFree(gop->cnt.cth));
 }
 
 static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
@@ -1083,10 +1080,17 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto out;
   }
 
+  //NOTE: Offloaded rendezvous requires the length to be transmitted within the
+  //      header data. 4 bits for protocol info is also needed so the maximum
+  //      size allowed is UINT64_MAX >> 4.
+  ucs_assert(iface->config.max_msg_size < (UINT64_MAX >> 4));
+
   /* First, initialize interface configuration. */
   iface->config.tm.max_tags  = config->tm.list_size;
   iface->config.tm.max_gop   = config->tm.max_gop;
   iface->config.tm.max_zcopy = config->seg_size;
+  //FIXME: see FIXME in get_attr.
+  iface->config.tm.eager_limit = 1168;
 
   iface->config.rx.tag_mp = config->rx.tag_mp;
   //FIXME: Memory pool max elements is reset here, thus overwriting initial

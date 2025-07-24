@@ -70,6 +70,27 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
                                         uct_bxi_mem_desc_param_t *params,
                                         uct_bxi_mem_desc_t      **mem_desc_p);
 void         uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc);
+
+static UCS_F_ALWAYS_INLINE uct_bxi_mem_desc_t *
+uct_bxi_md_mem_desc_create_inline(uct_bxi_md_t *md, ptl_handle_eq_t eqh,
+                                  ptl_handle_ct_t cth)
+{
+
+  uct_bxi_mem_desc_param_t mem_desc_param;
+  uct_bxi_mem_desc_t      *mem_desc = NULL;
+
+  mem_desc_param.eqh     = eqh;
+  mem_desc_param.start   = 0;
+  mem_desc_param.length  = PTL_SIZE_MAX;
+  mem_desc_param.options = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
+  mem_desc_param.flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
+  mem_desc_param.cth     = cth;
+
+  uct_bxi_md_mem_desc_create(md, &mem_desc_param, &mem_desc);
+
+  return mem_desc;
+}
+
 /**
  * Memory domain constructor.
  *
