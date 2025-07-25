@@ -113,18 +113,6 @@ ucs_status_ptr_t uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                            unsigned          flags,
                                            uct_completion_t *comp);
 
-ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
-                                              ptl_process_t    pid,
-                                              ptl_pt_index_t   pti,
-                                              uct_tag_t send_tag, void *buffer,
-                                              size_t             length,
-                                              uct_tag_context_t *ctx);
-
-ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
-                                      const uct_iov_t *iov, size_t iovcnt,
-                                      uint64_t remote_offset, unsigned flags,
-                                      uct_completion_t *comp);
-
 ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
 
 ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
@@ -149,8 +137,6 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
 ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        iface,
                                            uct_tag_context_t *ctx, int force);
-
-void uct_bxi_iface_tag_recv_overflow(uct_iface_h tl_iface);
 
 ucs_status_t uct_bxi_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                        uint32_t swap, uint64_t remote_addr,

@@ -1032,6 +1032,11 @@ UCT_TAG_INSTANTIATE_TEST_CASE(test_tag_stats)
 
 #endif
 
+#if HAVE_BXI 
+
+//TODO: define BXI specify test here.
+
+#endif
 
 #if IBV_HW_TM
 

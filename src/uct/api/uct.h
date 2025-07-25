@@ -1819,6 +1819,35 @@ struct uct_tag_context {
      void (*rndv_cb)(uct_tag_context_t *self, uct_tag_t stag, const void *header,
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
+    /**
+     * This callback is invoked when rendezvous send notification has arrived
+     * and a corresponding tag has been posted but could not be processed by 
+     * the NIC. This happens when iface support only partial rendezvous offload
+     * and no reply endpoint were given.
+     *
+     * @note The callback is always invoked from the context (thread, process)
+     *       that called @a uct_iface_progress().
+     *
+     * @note It is allowed to call other communication routines from the callback.
+     *
+     * @param [in]  arg           User-defined argument
+     * @param [in]  stag          Tag from sender.
+     * @param [in]  header        User defined header.
+     * @param [in]  header_length User defined header length in bytes.
+     * @param [in]  remote_addr   Sender's buffer virtual address.
+     * @param [in]  length        Sender's buffer length.
+     * @param [in]  rkey_buf      Sender's buffer packed remote key. It can be
+     *                            passed to uct_rkey_unpack() to create uct_rkey_t.
+     * @param [in]  status        Status returned by UCT module.
+     * @param [in]  flags         Mask with @ref uct_cb_param_flags
+     *
+     */
+
+     void (*rndv_exp_cb)(uct_tag_context_t *self, uct_tag_t stag,
+                         const void *header, unsigned header_length, 
+                         uint64_t remote_addr, size_t length,
+                         const void *rkey_buf, ucs_status_t status, unsigned flags);
+
      /** 
       *  Offload Operation Context to setup operation dependencies. If not null, then
       *  it will be used by the corresponding operation. 

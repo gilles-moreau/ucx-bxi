@@ -72,10 +72,9 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  unsigned int pti;
-  uint64_t     remote_addr;
-  size_t       length;
-  size_t       header_length;
+  uint64_t remote_addr;
+  size_t   length;
+  size_t   header_length;
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {
@@ -133,9 +132,7 @@ typedef struct uct_bxi_iface_send_op {
       void                 *unpack_arg; /* Unpack user arg for GET OP */
     } get;
     struct {
-      uct_bxi_recv_block_t *block; /* Necessary in case of OP cancel */
-      uct_tag_context_t    *ctx;   /* Tag context attached from target ME. */
-      uct_tag_t tag; /* Initiator tag to be passed to target's comp callback. */
+      uct_bxi_recv_block_t *block; /* Used for completion and OP cancel */
     } rndv;
     struct {
       uint64_t value;

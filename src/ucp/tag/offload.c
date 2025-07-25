@@ -175,6 +175,78 @@ UCS_PROFILE_FUNC_VOID(ucp_tag_offload_rndv_cb,
     ucp_tag_offload_release_buf(req);
 }
 
+/* RNDV request matched by the transport but rndv not offloaded. */
+UCS_PROFILE_FUNC_VOID(ucp_tag_offload_rndv_exp_cb,
+                      (self, stag, header, header_length, remote_addr, 
+                      length, rkey_buf, status, flags),
+                      uct_tag_context_t *self, uct_tag_t stag,
+                      const void *header, unsigned header_length, 
+                      uint64_t remote_addr, size_t length,
+                      const void *rkey_buf, ucs_status_t status, unsigned flags)
+{
+    ucp_request_t *req   = ucs_container_of(self, ucp_request_t, recv.uct_ctx);
+    ucp_worker_t *worker = req->recv.worker;
+    const void *uct_rkeys[]   = { rkey_buf };
+    const ucp_tag_offload_unexp_rndv_hdr_t *rndv_hdr;
+    ucp_rndv_rts_hdr_t *dummy_rts;
+    ucp_tag_hdr_t *tag;
+    ucp_md_map_t md_map;
+    size_t dummy_rts_size;
+    size_t rkey_size;
+    void *header_host_copy;
+
+    UCP_WORKER_STAT_TAG_OFFLOAD(req->recv.worker, MATCHED_HW_RNDV);
+
+    --req->recv.tag.wiface->post_count;
+    if (ucs_unlikely(status != UCS_OK)) {
+        ucp_tag_offload_release_buf(req);
+        ucp_request_complete_tag_recv(req, status);
+        return;
+    }
+
+    ucs_assert(header_length == sizeof(*rndv_hdr));
+
+    if (!UCP_MEM_IS_HOST(req->recv.dt_iter.mem_info.type) &&
+        !(flags & UCT_TAG_RECV_CB_INLINE_DATA)) {
+        /* SW rendezvous request is stored in the user buffer (temporarily)
+           when matched. If user buffer allocated on GPU memory, need to "pack"
+           it to the host memory staging buffer for further processing. */
+        header_host_copy = ucs_alloca(header_length);
+        ucp_mem_type_pack(req->recv.worker, header_host_copy, header,
+                          header_length, req->recv.dt_iter.mem_info.type);
+        rndv_hdr = header_host_copy;
+    } else {
+        rndv_hdr = header;
+    }
+
+    /* Calculate size for dummy (on-stack) RTS packet */
+    md_map         = UCS_BIT(rndv_hdr->md_index);
+    rkey_size      = ucp_rkey_packed_size(worker->context, md_map,
+                                             UCS_SYS_DEVICE_ID_UNKNOWN, 0);
+    dummy_rts_size = sizeof(*dummy_rts) + rkey_size;
+
+    /* Build the dummy RTS packet, copy meta-data from unexpected rndv header
+     * and remote key from rkey_buf.
+     */
+    dummy_rts              = ucs_alloca(dummy_rts_size);
+    dummy_rts->sreq.ep_id  = rndv_hdr->ep_id;
+    dummy_rts->sreq.req_id = rndv_hdr->req_id;
+    dummy_rts->address     = remote_addr;
+    dummy_rts->size        = length;
+    dummy_rts->opcode      = UCP_RNDV_RTS_TAG_OK;
+    tag                    = ucp_tag_hdr_from_rts(dummy_rts);
+    tag->tag               = stag;
+
+    ucp_rkey_packed_copy(worker->context, md_map, UCS_MEMORY_TYPE_HOST,
+                         dummy_rts + 1, uct_rkeys);
+
+    ucs_assert(header_length >= sizeof(ucp_rndv_rts_hdr_t));
+
+    ucp_tag_rndv_matched(req->recv.worker, req, dummy_rts, dummy_rts_size);
+
+    ucp_tag_offload_release_buf(req);
+}
+
 UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
                  (arg, flags, stag, hdr, hdr_length, remote_addr, length, rkey_buf),
                  void *arg, unsigned flags, uint64_t stag, const void *hdr,
@@ -339,6 +411,9 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
+    req->recv.uct_ctx.rndv_exp_cb     = ucp_tag_offload_rndv_exp_cb;
+    req->recv.uct_ctx.reply_ep        = req->recv.reply_ep != NULL ?
+            ucp_ep_get_tag_uct_ep(req->recv.reply_ep) : NULL;
     req->recv.uct_ctx.gop             = NULL;
     if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
         ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
@@ -364,15 +439,6 @@ ucp_tag_offload_do_post(ucp_request_t *req)
         ucp_tag_offload_release_buf(req);
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_TAG_EXCEED);
         return status;
-    }
-
-    if ((req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) && 
-        (req->recv.reply_ep != NULL)) {
-        status = ucp_tag_offload_try_rndv_get(wiface, req);
-        if (status != UCS_OK) {
-            ucp_tag_offload_release_buf(req);
-            return status;
-        }
     }
 
     UCP_WORKER_STAT_TAG_OFFLOAD(worker, POSTED);

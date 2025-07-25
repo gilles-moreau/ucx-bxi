@@ -163,112 +163,6 @@ static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
   return status;
 }
 
-static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
-                                     const void              *resp)
-{
-  /* First, invoke tag-related callback. */
-  op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
-                             UCS_OK);
-
-  /* Then, we may push OP back to the memory pool. */
-  ucs_mpool_put_inline(op);
-}
-
-//NOTE: internal rendez-vous protocol could be removed in favor of using only
-//      the software protocol. In any case, it is already software-based since
-//      it requires the interface to be (sw) polled to be able to complete.
-ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
-        uct_bxi_iface_t *iface, ptl_process_t pid, ptl_pt_index_t pti,
-        uct_tag_t send_tag, void *buffer, size_t length, uct_tag_context_t *ctx)
-{
-  ucs_status_t             status;
-  uct_bxi_iface_send_op_t *op;
-  uint64_t                 get_tag;
-
-  if (uct_bxi_iface_available(iface) <= 0) {
-    return UCS_ERR_NO_RESOURCE;
-  }
-
-  /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_DESC(iface, &iface->tx.send_op_mp, op);
-  op->comp.comp    = 1;
-  op->comp.handler = uct_bxi_get_rndv_handler;
-  op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  UCT_SKIP_ZERO_LENGTH(length, op);
-
-  /* Associate iface and the tag context of the receive block so that 
-   * the completion callback may be called. This enables the block 
-   * to be released by caller. */
-  op->length   = length;
-  op->rndv.ctx = ctx;
-  op->rndv.tag = send_tag;
-
-  /* Internal GET operation needs to be handled particularly, they 
-   * are not attached to a endpoint. */
-  op->ep = NULL;
-
-  //NOTE: remote address is the remote offset here since the operation
-  //      will match the specific GET ME posted by initiator.
-  get_tag = UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid, 0);
-  status  = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                                length, pid, pti, get_tag, 0, op));
-
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
-  }
-
-  //NOTE: These GET operation are not appended to any endpoint queue. As a
-  //      consequence, they cant be flushed.
-  uct_bxi_iface_available_add(iface, -1);
-
-  return status;
-}
-
-static ucs_status_t
-uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
-{
-  ucs_status_t           status;
-  uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
-
-  status = uct_bxi_iface_tag_rndv_zcopy_get(
-          req->tgt.iface, req->tgt.pid, req->tgt.pti, req->tgt.send_tag,
-          req->tgt.buffer, req->tgt.length, req->tgt.ctx);
-  if (status == UCS_OK) {
-    ucs_mpool_put(req);
-  } else {
-    ucs_assert(status == UCS_ERR_NO_RESOURCE);
-  }
-
-  return status;
-}
-
-ucs_status_t uct_bxi_iface_pending_get_add(uct_bxi_iface_t      *iface,
-                                           ptl_process_t         pid,
-                                           ptl_pt_index_t        pti,
-                                           uct_tag_t             send_tag,
-                                           uct_bxi_recv_block_t *block)
-{
-  uct_bxi_pending_req_t *req;
-
-  req = ucs_mpool_get(&iface->tx.pending_mp);
-  if (req == NULL) {
-    return UCS_ERR_NO_MEMORY;
-  }
-
-  req->tgt.iface    = iface;
-  req->tgt.pid      = pid;
-  req->tgt.pti      = pti;
-  req->tgt.send_tag = send_tag;
-  req->tgt.length   = block->size;
-  req->tgt.ctx      = block->ctx;
-  req->tgt.buffer   = block->start;
-  req->super.func   = uct_bxi_iface_tag_rndv_get_progress;
-
-  uct_pending_req_queue_push(&iface->tx.pending_q, &req->super);
-
-  return UCS_OK;
-}
-
 static UCS_F_ALWAYS_INLINE void uct_bxi_iface_inc_crecv(uct_bxi_iface_t *iface,
                                                         ptl_process_t    pid)
 {
@@ -341,6 +235,9 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         /* In this case, the protocol will always be continued by UCP. */
         switch (ev->hdr_data & 0xful) {
         case UCT_BXI_TAG_PROT_RNDV_HW:
+          /* Sent size must be eager_limit + 1, cf triggered rendezvous algorithm. */
+          ucs_assert(ev->mlength == iface->config.tm.eager_limit + 1);
+
           hdr    = ev->start;
           status = iface->tm.rndv_unexp.cb(
                   iface->tm.rndv_unexp.arg, 0, ev->match_bits,
@@ -360,6 +257,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
                                           ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
                                           ev->match_bits, ev->hdr_data, NULL);
+        //FIXME: status not handle and possibly overwritten later.
       }
 
       if (iface->tm.unexp_hdr_count > 0) {
@@ -389,25 +287,17 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           //      triggered get.
           block->send_size = UCT_BXI_HDR_GET_LENGTH(ev->hdr_data);
 
-          /* BXI internal get protocol is initiated when no triggered get has 
-           * been set up already. This would be the case when the protocol 
-           * has not been offloaded. */
-          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP)) {
+          /* If rndv was not offloaded, then it must be handled in sw. */
+          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD)) {
+            /* Sent size must be eager_limit + 1, cf triggered rendezvous algorithm. */
+            ucs_assert(ev->mlength == iface->config.tm.eager_limit + 1);
+
             hdr = ev->start;
-
-            /* Then, perform the GET operation. Add to pending queue if no 
-             * resource are available. Use length from hdr since sender size 
-             * may be different from receiver side. */
-            status = uct_bxi_iface_tag_rndv_zcopy_get(
-                    iface, ev->initiator, hdr->pti, ev->match_bits,
-                    block->start, hdr->length, block->ctx);
-            if (status == UCS_ERR_NO_RESOURCE) {
-              status = uct_bxi_iface_pending_get_add(
-                      iface, ev->initiator, hdr->pti, ev->match_bits, block);
-              ucs_assert_always(status == UCS_OK);
-            }
+            block->ctx->rndv_exp_cb(block->ctx, ev->match_bits,
+                                    (const void *)(hdr + 1), hdr->header_length,
+                                    hdr->remote_addr, hdr->length, NULL, UCS_OK,
+                                    0);
           }
-
           break;
         case UCT_BXI_TAG_PROT_RNDV_SW:
           /* UCP will proceed with a normal software rendez-vous protocol. */
@@ -695,12 +585,6 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 {
   uct_bxi_iface_send_op_t *op, *tmp;
 
-  /* Endpoint may be NULL if previously completed operation was a GET 
-   * resulting from the TAG RNDV protocol. */
-  if (ep == NULL) {
-    return;
-  }
-
   /* Loop on operation queue and complete all flush operations: flush is 
    * completed when there are no send operation before. */
   ucs_list_for_each_safe (op, tmp, &ep->send_ops, elem) {
@@ -750,6 +634,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
           //TODO: test with PTL_MD_VOLATILE unset
           PtlAtomicSync();
         }
+        // Fallthrough
       case PTL_EVENT_ACK:
         progressed++;
         if (ev.ni_fail_type != PTL_NI_OK) {
@@ -1584,7 +1469,6 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_tag_eager_zcopy       = uct_bxi_ep_tag_eager_zcopy,
         .ep_tag_eager_bcopy       = uct_bxi_ep_tag_eager_bcopy,
         .ep_tag_eager_short       = ucs_empty_function_return_unsupported,
-        .ep_tag_get_zcopy         = uct_bxi_ep_tag_get_zcopy,
         .ep_tag_rndv_cancel       = uct_bxi_ep_tag_rndv_cancel,
         .ep_tag_rndv_request      = uct_bxi_ep_tag_rndv_request,
         .ep_atomic_cswap64        = uct_bxi_ep_atomic_cswap64,
