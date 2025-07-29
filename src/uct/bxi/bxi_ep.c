@@ -24,10 +24,6 @@
           PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
           PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW |                    \
           PTL_ME_EVENT_CT_BYTES
-#define UCT_BXI_ME_OPT_RECV_ZCOPY_TRIG                                         \
-  PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
-          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
-          PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW
 
 uct_bxi_block_cnt_t dummy_cnt = {.threshold = 0, .cth = PTL_CT_NONE};
 
@@ -138,7 +134,7 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   block->ctx->completed_cb(block->ctx, block->stag, 0, block->send_size, NULL,
                            UCS_OK);
 
-  uct_bxi_ep_remove_from_queue(op);
+  uct_bxi_recv_block_release(block);
   /* Finally, we may push OP back to the memory pool. */
   ucs_mpool_put_inline(op);
 }
@@ -176,9 +172,10 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     goto err;
   }
 
-  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.am, id, 0, op, 0));
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                               size, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.am, id, 0, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut return %d", status);
   }
@@ -220,9 +217,10 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, length);
 
-  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                                 length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.rma, 0, remote_addr, op, 0));
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
+                               length, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
   }
@@ -257,9 +255,10 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
     goto err;
   }
 
-  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.rma, 0, remote_addr, op, 0));
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                               size, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
@@ -301,10 +300,11 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  status = uct_bxi_wrap(
-          PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                   ep->iface_addr.rma, 0, remote_addr, op, 0));
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh,
+                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
+                               PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.rma, 0, remote_addr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   } else {
@@ -340,9 +340,10 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                       unpack_cb, comp, arg, length);
 
-  status = uct_bxi_wrap(PtlGetNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 length, ep->dev_addr.pid, ep->iface_addr.rma,
-                                 0, remote_addr, op));
+  //TODO: replace by PtlGetNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                               length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                               remote_addr, op));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -385,10 +386,11 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
-  status = uct_bxi_wrap(PtlGetNB(iface->tx.mem_desc->mdh,
-                                 (ptl_size_t)ptl_iov->iov_base,
-                                 ptl_iov->iov_len, ep->dev_addr.pid,
-                                 ep->iface_addr.rma, 0, remote_addr, op));
+  //TODO: replace by PtlGetNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
+                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
+                               ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                               remote_addr, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
@@ -438,8 +440,6 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
             iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
             ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cnt.cth,
             gop->cnt.threshold));
-    ucs_debug("BXI: triggered bcopy. nid=%u, pid=%u, size=%lu, op=%p",
-              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid, size, op);
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -449,9 +449,10 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
       goto err;
     }
 
-    status = uct_bxi_wrap(PtlPutNB(
-            iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm));
+    //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, imm));
   }
 
   if (status != UCS_OK) {
@@ -461,8 +462,6 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-  /* Increment endpoint send counter. */
-  uct_bxi_ep_tag_inc_cnt(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -506,10 +505,11 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
             tag, 0, op, imm, gop->cnt.cth, gop->cnt.threshold));
   } else {
+    //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(
-            PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-                     ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                     ep->iface_addr.tag, tag, 0, op, imm));
+            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
+                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
+                   ep->iface_addr.tag, tag, 0, op, imm));
   }
 
   if (status != UCS_OK) {
@@ -521,8 +521,6 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-  /* Increment endpoint send counter. */
-  uct_bxi_ep_tag_inc_cnt(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -541,6 +539,7 @@ static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *src,
   hdr->remote_addr   = remote_addr;
   hdr->length        = length;
   hdr->header_length = header_length;
+  hdr->pti           = iface->rx.ctrl.q->pti;
 
   memcpy(hdr + 1, header, header_length);
 
@@ -573,12 +572,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* First, allocate a TAG block from the memory pool. Receive block is 
    * used to match the remote GET operation and is posted to the CTRL RXQ. */
-  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
-          iface, &iface->tm.recv_block_mp, block, iface->rx.ctrl.q,
-          ptl_iov->iov_base, ptl_iov->iov_len,
-          UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid, ep->cnt->send), NULL,
-          status = UCS_ERR_NO_RESOURCE;
-          goto err);
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
+                                    iface->rx.ctrl.q, ptl_iov->iov_base,
+                                    ptl_iov->iov_len,
+                                    UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid),
+                                    NULL, status = UCS_ERR_NO_RESOURCE;
+                                    goto err);
 
   params.start   = block->start;
   params.size    = block->size;
@@ -611,7 +610,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->comp.comp++;
 
   /* Attach operation to block and vice versa so they can be both released, 
-   * either on completion or if the operation is canceled. */
+   * either on PTL_EVENT_GET completion or if the operation is canceled. */
   block->op      = op;
   op->rndv.block = block;
 
@@ -635,10 +634,10 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
               ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid,
               ptl_iov->iov_len);
   } else {
-    status =
-            uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                  ep->iface_addr.tag, tag, 0, op, hdr));
+    //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
   }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
@@ -647,8 +646,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-  /* Increment endpoint send counter. */
-  uct_bxi_ep_tag_inc_cnt(ep);
 
   return (ucs_status_ptr_t)op;
 
@@ -663,8 +660,9 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_bxi_iface_send_op_t *op = (uct_bxi_iface_send_op_t *)tl_op;
 
-  /* Overwrite completion handler. Operation must be completed only if both 
-   * PTL_EVENT_ACK from rendezvous was also processed. */
+  /* Overwrite completion handler. Operation must be completed only if
+   * PTL_EVENT_ACK from rendezvous was also processed. Also decrease 
+   * completion counter by one, if ACK has been received, then */
   op->comp.handler = uct_bxi_send_rndv_cancel_completion;
 
   // NOTE: Uncertain if PTL_EVENT_ACK from the rendezvous message has
@@ -706,9 +704,10 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   memcpy(op + 1, header, header_length);
 
   UCT_BXI_HDR_SET(hdr, 0, UCT_BXI_TAG_PROT_RNDV_SW);
-  status = uct_bxi_wrap(PtlPutNB(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 header_length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, hdr));
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                               header_length, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv request return %d", status);
@@ -717,8 +716,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-  /* Increment endpoint send counter. */
-  uct_bxi_ep_tag_inc_cnt(ep);
 
 err:
   return status;
@@ -735,39 +732,40 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_tag_recv_rndv_zcopy(
         uct_bxi_mem_desc_t *mem_desc, uct_bxi_block_cnt_t *cnt,
         ptl_size_t thresh)
 {
-  ucs_status_t             status;
-  uct_bxi_iface_send_op_t *op;
-  uct_tag_t                tag;
+  ucs_status_t status = UCS_OK;
+  uct_tag_t    tag;
 
-  /* If message size is lower than eager limit, there will be no rendezvous. 
-   * The message will be truncated, either by BXI or by UCP.*/
-  if (block->size < iface->config.tm.eager_limit) {
-    return UCS_OK;
+  if (uct_bxi_iface_available(iface) <= 0) {
+    return UCS_ERR_NO_RESOURCE;
   }
 
-  UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+  //FIXME: think of having an operation dedicated to the block,
+  //       as an attribute.
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, block->op, ep,
+                               NULL, uct_bxi_recv_rndv_tag_handler,
+                               block->size);
+  block->op->comp.handler  = uct_bxi_recv_rndv_tag_handler;
+  block->op->rndv.block    = block;
+  block->op->mem_desc      = mem_desc;
+  block->op->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+  block->flags            |= UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE;
 
-  /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                               uct_bxi_recv_rndv_tag_handler, block->size);
+  if (ep != NULL) {
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD;
+    block->cth    = cnt->cth;
 
-  op->length = block->size;
-
-  /* Counter-based tag, see Barret and al. */
-  tag = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid, ep->cnt->precv);
-
-  status = uct_bxi_wrap(PtlTriggeredGetNB(
-          op->mem_desc->mdh, (ptl_size_t)block->start, op->length,
-          ep->dev_addr.pid, ep->iface_addr.ctrl, tag, 0, op, cnt->cth, thresh));
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
+    tag    = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
+    status = uct_bxi_wrap(PtlTriggeredGet(block->op->mem_desc->mdh,
+                                          (ptl_size_t)block->start, block->size,
+                                          ep->dev_addr.pid, ep->iface_addr.ctrl,
+                                          tag, 0, block->op, cnt->cth, thresh));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
+    }
+  } else {
+    block->cth = PTL_CT_NONE;
   }
 
-  return status;
-
-err:
-  ucs_mpool_put(op);
   return status;
 }
 
@@ -808,7 +806,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
   /* Decide wether to offload the rendezvous or not. */
   if (ucs_unlikely(uct_bxi_tag_recv_is_offloaded(ctx))) {
-    if (block->size > iface->config.tm.eager_limit && ep != NULL) {
+    /* Offloaded operation without endpoint are not supported. */
+    ucs_assert(ep != NULL);
+    if (block->size > iface->config.tm.eager_limit) {
       /* If operations is offloaded, we need to count the completion of the 
        * PtlTriggeredGet and we do so by creating a dedicated MD. */
       mem_desc = uct_bxi_md_mem_desc_create_inline(uct_bxi_iface_md(iface),
@@ -834,31 +834,23 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     }
 
     /* Set param for ME Append. */
-    params.cth     = gop->cnt.cth;
+    params.cth     = block->cth;
     params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT;
+    gop->cnt.threshold++;
 
-    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD;
-    /* Save counter handle in case receive is cancelled. */
-    block->cth = block->cnt.cth;
   } else {
-    if (block->size > iface->config.tm.eager_limit && ep != NULL) {
-      /* In this case, use the block counter. */
-      status = uct_bxi_iface_tag_recv_rndv_zcopy(
-              iface, ep, block, iface->tx.mem_desc, &block->cnt,
-              block->cnt.threshold + iface->config.tm.eager_limit + 1);
+    //NOTE: We must not check for size to determine if a rendezvous request
+    //      will be received or not. Indeed, UCX allows to set configurable
+    //      threshold.
+    /* In this case, use the block counter. */
+    status = uct_bxi_iface_tag_recv_rndv_zcopy(
+            iface, ep, block, iface->tx.mem_desc, &block->cnt,
+            block->cnt.threshold + iface->config.tm.eager_limit + 1);
 
-      /* Set param for ME Append. */
-      params.cth     = block->cnt.cth;
-      params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
-
-      block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD |
-                      UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT;
-      /* Save counter in case receive is cancelled. */
-      block->cth = block->cnt.cth;
-    } else {
-      params.cth     = PTL_CT_NONE;
-      params.options = UCT_BXI_ME_OPT_RECV_ZCOPY;
-    }
+    /* Set param for ME Append. */
+    block->flags   = UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT;
+    params.cth     = block->cth;
+    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
   }
 
   params.start = ptl_iov->iov_base;
@@ -871,9 +863,6 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   if (status != UCS_OK) {
     goto err_release_op;
   }
-
-  /* Increment Posted receive counter */
-  uct_bxi_ep_inc_precv(ep);
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
@@ -1008,10 +997,11 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
 
-  status = uct_bxi_wrap(PtlAtomicNB(
-          iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-          PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op,
-          0, uct_bxi_atomic_op_table[opcode], dt));
+  //TODO: replace by PtlAtomicNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(
+          PtlAtomic(iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
+                    PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                    remote_addr, op, 0, uct_bxi_atomic_op_table[opcode], dt));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
@@ -1047,7 +1037,8 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   /* Store the value since the Atomic call needs an address. */
   op->atomic.value = value;
 
-  status = uct_bxi_wrap(PtlFetchAtomicNB(
+  //TODO: replace by PtlFetchAtomicNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlFetchAtomic(
           iface->tx.mem_desc->mdh, (uint64_t)result, iface->tx.mem_desc->mdh,
           (uint64_t)&op->atomic.value, size, ep->dev_addr.pid,
           ep->iface_addr.rma, 0, remote_addr, op, 0,
@@ -1089,11 +1080,12 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   op->atomic.value   = swap;
   op->atomic.compare = compare;
 
+  //TODO: replace by PtlSwapNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(
-          PtlSwapNB(iface->tx.mem_desc->mdh, (uint64_t)result,
-                    iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                    ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
-                    &op->atomic.compare, PTL_CSWAP, dt));
+          PtlSwap(iface->tx.mem_desc->mdh, (uint64_t)result,
+                  iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
+                  ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
+                  &op->atomic.compare, PTL_CSWAP, dt));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);

@@ -62,8 +62,7 @@ public:
         status = uct_config_modify(m_iface_config, "RC_TM_MP_SRQ_ENABLE", "no");
         ASSERT_TRUE((status == UCS_OK) || (status == UCS_ERR_NO_ELEM));
 
-        status = uct_config_modify(m_iface_config,
-                                   "BXI_TM_ENABLE", "y");
+        status = uct_config_modify(m_iface_config, "BXI_TM_ENABLE", "y");
         ASSERT_TRUE((status == UCS_OK) || (status == UCS_ERR_NO_ELEM));
 
         uct_test::init();
@@ -97,6 +96,7 @@ public:
         r.tag                     = t;
         r.tmask                   = m;
         r.uct_ctx.gop             = NULL;
+        r.uct_ctx.reply_ep        = NULL;
         r.uct_ctx.completed_cb    = completed;
         r.uct_ctx.tag_consumed_cb = tag_consumed;
         r.uct_ctx.rndv_cb         = sw_rndv_completed;
@@ -313,6 +313,7 @@ public:
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
         r_ctx.uct_ctx.gop = gop;
+        r_ctx.uct_ctx.reply_ep = receiver().ep(0);
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
@@ -357,6 +358,7 @@ public:
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
         r_ctx.uct_ctx.gop = gop;
+        r_ctx.uct_ctx.reply_ep = receiver().ep(0);
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.

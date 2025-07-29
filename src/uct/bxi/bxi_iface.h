@@ -10,36 +10,38 @@
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
-#define UCT_BXI_RNDV_NID_MASK 0xffff
-#define UCT_BXI_RNDV_PID_MASK 0xffff
+#define UCT_BXI_RNDV_NID_MASK 0xffffff
+#define UCT_BXI_RNDV_PID_MASK 0xffffff
 
-#define UCT_BXI_RNDV_PREFIX 0xdededada
+#define UCT_BXI_RNDV_PREFIX     0xbabe
+#define UCT_BXI_RNDV_MAX_LENGTH (((size_t)1 << 44) - 1)
 
-/* ME match bits is based on the remote PID and endpoint counter. It is based 
- * on Barret and al. */
-#define UCT_BXI_BUILD_RNDV_TAG(_pid, _cnt)                                     \
+/* ME match bits is based on the remote PID. */
+#define UCT_BXI_BUILD_RNDV_TAG(_pid)                                           \
   ({                                                                           \
     uint64_t _tag  = 0;                                                        \
+    _tag           = UCT_BXI_RNDV_PREFIX;                                      \
     _tag           = _tag << 16;                                               \
     _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
-    _tag           = _tag << 16;                                               \
+    _tag           = _tag << 24;                                               \
     _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
-    _tag           = _tag << 16;                                               \
-    _tag          |= _cnt;                                                     \
+    _tag           = _tag << 24;                                               \
     _tag;                                                                      \
   })
 
 #define UCT_BXI_HDR_GET_LENGTH(_hdr)                                           \
-  (size_t)((_hdr >> 60) & 0x0ffffffffffffffful)
+  (size_t)((_hdr >> 4) & 0x00000ffffffffffful)
 
 #define UCT_BXI_HDR_SET(_hdr, _length, _prot)                                  \
-  _hdr  = _length;                                                             \
-  _hdr  = (_hdr << 60);                                                        \
+  _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
+  _hdr  = (_hdr << 44);                                                        \
+  _hdr |= ((_length) & 0xfffffffffff);                                         \
+  _hdr  = (_hdr << 4);                                                         \
   _hdr |= ((_prot) & 0xf)
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
 {
-  return (((hdr & 0xffffffff00000000) >> 32) == UCT_BXI_RNDV_PREFIX);
+  return (((hdr & 0xffff000000000000) >> 48) == UCT_BXI_RNDV_PREFIX);
 }
 
 enum {
@@ -72,9 +74,10 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint64_t remote_addr;
-  size_t   length;
-  size_t   header_length;
+  uint64_t       remote_addr;
+  size_t         length;
+  size_t         header_length;
+  ptl_pt_index_t pti;
 } uct_bxi_hdr_rndv_t;
 
 typedef struct uct_bxi_pending_req {

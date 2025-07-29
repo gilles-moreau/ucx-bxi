@@ -11,9 +11,9 @@ typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
                                                ptl_event_t     *ev);
 
 enum {
-  UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP   = UCS_BIT(0),
-  UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT   = UCS_BIT(1),
-  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD = UCS_BIT(2)
+  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD = UCS_BIT(0),
+  UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE   = UCS_BIT(1),
+  UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT   = UCS_BIT(2)
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -38,7 +38,6 @@ typedef struct uct_bxi_recv_block {
   size_t              eager_limit; /* Eager limit */
   uct_bxi_rxq_t      *rxq;         /* Back reference to the RX Queue */
   ptl_handle_me_t     meh;         /* Memory Entry handle */
-  ucs_list_link_t     elem;        /* Element in the RX Queue */
   ucs_list_link_t     c_elem;      /* Element in the cancel list */
   uct_tag_t           tag;         /* Needed in case block is cancelled */
   uct_tag_t           stag;        /* Send tag */
@@ -82,8 +81,7 @@ typedef struct uct_bxi_rxq {
   uct_bxi_rxq_ev_handler handler; /* Event handler when RXQ is polled. */
 } uct_bxi_rxq_t;
 
-ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
-                                uct_bxi_rxq_param_t *params,
+ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p);
 void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 

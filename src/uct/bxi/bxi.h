@@ -53,7 +53,7 @@ typedef enum {
     ucs_error("BXI: error PTL_NO_INIT");                                       \
     break;                                                                     \
   default:                                                                     \
-    ucs_error("BXI: unknown BXI error.");                                      \
+    ucs_error("BXI: unknown BXI error. rc=%x.", rc);                           \
     break;                                                                     \
   }
 

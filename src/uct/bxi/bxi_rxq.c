@@ -1,7 +1,7 @@
 #include "bxi_rxq.h"
 #include "bxi.h"
 
-#define UCT_BXI_CTB_INIT (ptl_ct_event_t){.success = 0, .failure = 0}
+#define UCT_BXI_CT_INIT (ptl_ct_event_t){.success = 0, .failure = 0}
 
 ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
                                          uct_bxi_recv_block_params_t *params)
@@ -10,7 +10,7 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
   ptl_me_t       me;
   uct_bxi_rxq_t *rxq = block->rxq;
 
-  if (!uct_bxi_recv_block_is_unexpected(block)) {
+  if (params != NULL) {
     me = (ptl_me_t){
             .ct_handle   = params->cth,
             .match_bits  = params->match,
@@ -71,12 +71,18 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
 static UCS_F_ALWAYS_INLINE int uct_bxi_is_overflow(ptl_size_t thresh,
                                                    ptl_size_t inc)
 {
-  return thresh < UINT64_MAX - inc;
+  return thresh > UINT64_MAX - inc;
 }
 
 void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
 {
   ucs_status_t status;
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE) {
+    ucs_mpool_put(block->op);
+  }
+
+  uct_bxi_recv_block_update_cnt_thresh(block, block->send_size);
 
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
@@ -85,14 +91,15 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
    * hit integer overflow problems. Since PtlCTSet is blocking, do it just 
    * before overflow happens.
    * */
-  if (uct_bxi_is_overflow(block->cnt.threshold,
-                          block->rxq->config.blk_min_free)) {
-    status = uct_bxi_wrap(PtlCTSet(block->cnt.cth, UCT_BXI_CTB_INIT));
+  if (uct_bxi_is_overflow(block->cnt.threshold, block->eager_limit)) {
+    status = uct_bxi_wrap(PtlCTSet(block->cnt.cth, UCT_BXI_CT_INIT));
     if (status != UCS_OK) {
       ucs_fatal("BXI: could not reset counter.");
     }
     block->cnt.threshold = 0;
   }
+
+  ucs_mpool_put(block);
 }
 
 static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
@@ -112,9 +119,6 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
       goto err;
     }
 
-    /* Append block to list. */
-    ucs_list_add_head(&rxq->bhead, &block->elem);
-
     /* Create the ME on the card. */
     rc = uct_bxi_recv_block_activate(block, NULL);
     if (rc != UCS_OK) {
@@ -122,20 +126,6 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
     }
   }
 
-err:
-  return rc;
-}
-
-static ucs_status_t uct_bxi_rxq_recv_blocks_disable(uct_bxi_rxq_t *rxq)
-{
-  ucs_status_t          rc    = UCS_OK;
-  uct_bxi_recv_block_t *block = NULL, *tmp = NULL;
-
-  ucs_list_for_each_safe (block, tmp, &rxq->bhead, elem) {
-    uct_bxi_recv_block_deactivate(block);
-    uct_bxi_recv_block_release(block);
-    ucs_list_del(&tmp->elem);
-  }
 err:
   return rc;
 }
@@ -153,15 +143,22 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   block->cth   = PTL_CT_NONE;
 }
 
+static void uct_bxi_rxq_block_cleanup(ucs_mpool_t *mp, void *obj)
+{
+  uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
+
+  uct_bxi_recv_block_deactivate(block);
+  uct_bxi_recv_block_release(block);
+}
+
 static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
         .obj_init      = uct_bxi_rxq_block_init,
-        .obj_cleanup   = NULL,
+        .obj_cleanup   = uct_bxi_rxq_block_cleanup,
         .obj_str       = NULL};
 
-ucs_status_t uct_bxi_rxq_create(uct_bxi_iface_t     *iface,
-                                uct_bxi_rxq_param_t *params,
+ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p)
 {
   ucs_status_t       status;
@@ -239,8 +236,8 @@ err:
 void uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq)
 {
   if (!(rxq->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL)) {
-    uct_bxi_rxq_recv_blocks_disable(rxq);
-    ucs_mpool_cleanup(&rxq->mp, 1);
+    //NOTE: no need to check for leaks since the pool is static.
+    ucs_mpool_cleanup(&rxq->mp, 0);
   }
 
   uct_bxi_wrap(PtlPTFree(rxq->nih, rxq->pti));
