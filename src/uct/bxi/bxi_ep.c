@@ -8,6 +8,8 @@
 #include <ucs/profile/profile.h>
 #include <uct/base/uct_log.h>
 
+uct_bxi_comp_cnt_t dummy_cnt = {.threshold = 0, .cth = PTL_CT_NONE};
+
 //NOTE: No overflow event needs to be handled since the message will either:
 //      - generate a PTL_EVENT_PUT in a block in the overflow list, block will
 //      then be cancelled/unlinked, or
@@ -15,17 +17,13 @@
 #define UCT_BXI_ME_OPT_RECV_ZCOPY                                              \
   PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
           PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE
-#define UCT_BXI_ME_OPT_RECV_ZCOPY_CNT                                          \
-  PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
-          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
-          PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW
 #define UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES                                    \
   PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
           PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
           PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW |                    \
           PTL_ME_EVENT_CT_BYTES
 
-uct_bxi_block_cnt_t dummy_cnt = {.threshold = 0, .cth = PTL_CT_NONE};
+#define UCT_BXI_CT_INC (ptl_ct_event_t){.success = 1, .failure = 0}
 
 ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_ADD] = PTL_SUM,   [UCT_ATOMIC_OP_AND] = PTL_BAND,
@@ -131,12 +129,11 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   ucs_assert(block->size >= block->send_size);
 
   /* First, invoke tag-related callback. */
-  block->ctx->completed_cb(block->ctx, block->stag, 0, block->send_size, NULL,
+  block->ctx->completed_cb(block->ctx, block->stag, 0, op->mlength, NULL,
                            UCS_OK);
 
+  /* This OP is released by the block release. */
   uct_bxi_recv_block_release(block);
-  /* Finally, we may push OP back to the memory pool. */
-  ucs_mpool_put_inline(op);
 }
 
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
@@ -438,8 +435,8 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
 
     status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cnt.cth,
-            gop->cnt.threshold));
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cth,
+            gop->ct_value));
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
@@ -503,7 +500,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
     status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-            tag, 0, op, imm, gop->cnt.cth, gop->cnt.threshold));
+            tag, 0, op, imm, gop->cth, gop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(
@@ -624,15 +621,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     /* An operation context was provided, so the operation must be 
      * triggered. */
-    ucs_assert(!PtlHandleIsEqual(gop->cnt.cth, PTL_INVALID_HANDLE));
+    ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPutNB(
             iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
             PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
-            gop->cnt.cth, gop->cnt.threshold));
-    ucs_debug("BXI: triggered rndv. nid=%u, pid=%u, size=%lu",
-              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid,
-              ptl_iov->iov_len);
+            gop->cth, gop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
@@ -722,51 +716,39 @@ err:
 }
 
 static UCS_F_ALWAYS_INLINE int
-uct_bxi_tag_recv_is_offloaded(uct_tag_context_t *ctx)
+uct_bxi_tag_recv_is_offloaded(uct_bxi_recv_block_t *block)
 {
-  return ctx->gop != NULL;
+  return block->ctx->gop != NULL;
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_tag_recv_rndv_zcopy(
+static UCS_F_ALWAYS_INLINE void uct_bxi_iface_tag_recv_rndv_zcopy(
         uct_bxi_iface_t *iface, uct_bxi_ep_t *ep, uct_bxi_recv_block_t *block,
-        uct_bxi_mem_desc_t *mem_desc, uct_bxi_block_cnt_t *cnt,
-        ptl_size_t thresh)
+        uct_bxi_recv_block_params_t *params, ptl_size_t *thresh_p)
 {
   ucs_status_t status = UCS_OK;
   uct_tag_t    tag;
 
-  if (uct_bxi_iface_available(iface) <= 0) {
-    return UCS_ERR_NO_RESOURCE;
+  tag = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
+
+  /* Trigger Get at current counter value plus eager_limit + 1, as defined by 
+     * Barrett and al. */
+  status = uct_bxi_wrap(PtlTriggeredGet(
+          block->mdh, (ptl_size_t)block->start, block->size, ep->dev_addr.pid,
+          ep->iface_addr.ctrl, tag, 0, block->op, block->cth,
+          block->ct_value + iface->config.tm.eager_limit + 1));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
 
-  //FIXME: think of having an operation dedicated to the block,
-  //       as an attribute.
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, block->op, ep,
-                               NULL, uct_bxi_recv_rndv_tag_handler,
-                               block->size);
-  block->op->comp.handler  = uct_bxi_recv_rndv_tag_handler;
-  block->op->rndv.block    = block;
-  block->op->mem_desc      = mem_desc;
-  block->op->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  block->flags            |= UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE;
+  /* Update block parameter and threshold in case of OP offload. */
+  params->cth     = block->cth;
+  params->options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
+  /* Since counter will be used by both the block ME and the MD, the next OP 
+     * must be triggered when ctrl msg have been received (+ eager_limit + 1) and 
+     * the GET has completed (+1) => iface->config.tm.eager_limit + 2. */
+  *thresh_p = block->ct_value + iface->config.tm.eager_limit + 2;
 
-  if (ep != NULL) {
-    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD;
-    block->cth    = cnt->cth;
-
-    tag    = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
-    status = uct_bxi_wrap(PtlTriggeredGet(block->op->mem_desc->mdh,
-                                          (ptl_size_t)block->start, block->size,
-                                          ep->dev_addr.pid, ep->iface_addr.ctrl,
-                                          tag, 0, block->op, cnt->cth, thresh));
-    if (status != UCS_OK) {
-      ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
-    }
-  } else {
-    block->cth = PTL_CT_NONE;
-  }
-
-  return status;
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD;
 }
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
@@ -777,10 +759,10 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   ucs_status_t                status;
   ptl_iovec_t                *ptl_iov;
   uct_bxi_iface_t            *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_ep_t               *ep  = ucs_derived_of(ctx->reply_ep, uct_bxi_ep_t);
-  uct_bxi_gop_t              *gop = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
+  uct_bxi_ep_t               *ep = ucs_derived_of(ctx->reply_ep, uct_bxi_ep_t);
   uct_bxi_recv_block_t       *block;
-  uct_bxi_mem_desc_t         *mem_desc;
+  uct_bxi_gop_t              *gop;
+  ptl_size_t                  thresh;
   uct_bxi_recv_block_params_t params;
 
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -804,51 +786,51 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                     status = UCS_ERR_EXCEEDS_LIMIT;
                                     goto err_remove_hash);
 
-  /* Decide wether to offload the rendezvous or not. */
-  if (ucs_unlikely(uct_bxi_tag_recv_is_offloaded(ctx))) {
-    /* Offloaded operation without endpoint are not supported. */
-    ucs_assert(ep != NULL);
-    if (block->size > iface->config.tm.eager_limit) {
-      /* If operations is offloaded, we need to count the completion of the 
-       * PtlTriggeredGet and we do so by creating a dedicated MD. */
-      mem_desc = uct_bxi_md_mem_desc_create_inline(uct_bxi_iface_md(iface),
-                                                   iface->tx.eqh, gop->cnt.cth);
-      if (mem_desc == NULL) {
-        goto err_release_block;
-      }
+  if (uct_bxi_iface_available(iface) <= 0) {
+    return UCS_ERR_NO_RESOURCE;
+  }
 
-      /* In this case, use the generic operation provided in the tag context. */
-      //NOTE: offloaded are now used only within the collective context so we
-      //      may rely on the size condition since send and receive size must be
-      //      equal. In this case, we don't use bytes.
-      //FIXME: If previous condition is relaxed, then threshold configuration
-      //       becomes undecidable. CT_BYTES has to be used to enable offloaded
-      //       rendezvous and we have no way to decide why threshold to use for
-      //       the next operation.
-      status = uct_bxi_iface_tag_recv_rndv_zcopy(
-              iface, ep, block, mem_desc, &gop->cnt, gop->cnt.threshold + 1);
-      if (status != UCS_OK) {
-        uct_bxi_md_mem_desc_fini(mem_desc);
-        goto err_release_block;
-      }
+  /* An operation is needed in case a rendezvous message is received. Completion 
+   * of the OP should be tracked by a counter only if it is offloaded. Tracking 
+   * completion of the GET is only needed when operation is offloaded, thus the 
+   * MD is chosen accordingly.
+   * Here are the possible paths:
+   * - wrong prediction and eager msg was received instead, then the operation 
+   *   is not used and just released during block release,
+   * - endpoint was not provided, thus the operation is used to complete the 
+   *   protocol upon event handling, 
+   * - otherwise, operation will be triggered. */
+  UCT_BXI_IFACE_GET_TX_RNDV_OP(iface, &iface->tx.send_op_mp, block->op, ep,
+                               block->size, block);
+
+  /* Instruct to release the operation upon completion of either protocol. */
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE;
+
+  /* Initialise ME params with default value, they may be changed during 
+   * protocol configuration. */
+  params.cth     = PTL_CT_NONE;
+  params.options = UCT_BXI_ME_OPT_RECV_ZCOPY;
+  thresh         = block->ct_value + block->size;
+
+  /* If receive size if lower than the eager limit, then the rendezvous can
+   * never be offloaded. However, the rendezvous threshold is configurable by 
+   * the upper layer meaning that the sender may decide to send a rendezvous 
+   * control message even though msg_size < eager_limit. As a consequence, 
+   * the protocol will be completed during event handling. */
+  if (block->size > iface->config.tm.eager_limit && ep != NULL) {
+    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &params, &thresh);
+  }
+
+  if (ucs_unlikely(uct_bxi_tag_recv_is_offloaded(block))) {
+    gop    = ucs_derived_of(ctx->gop, uct_bxi_gop_t);
+    status = uct_bxi_wrap(
+            PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC, block->cth, thresh));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: could not trig ct inc.");
     }
+    gop->ct_value += 1;
 
-    /* Set param for ME Append. */
-    params.cth     = block->cth;
-    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT;
-    gop->cnt.threshold++;
-
-  } else {
-    //NOTE: We must not check for size to determine if a rendezvous request
-    //      will be received or not. Indeed, UCX allows to set configurable
-    //      threshold.
-    /* In this case, use the block counter. */
-    status = uct_bxi_iface_tag_recv_rndv_zcopy(
-            iface, ep, block, iface->tx.mem_desc, &block->cnt,
-            block->cnt.threshold + iface->config.tm.eager_limit + 1);
-
-    /* Set param for ME Append. */
-    block->flags   = UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT;
+    /* Update (again) ME parameters. */
     params.cth     = block->cth;
     params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
   }
@@ -861,15 +843,14 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   /* Then, post the memory entry. */
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
-    goto err_release_op;
+    /* Operation will be released with block release. */
+    goto err_release_block;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
   return status;
 
-err_release_op:
-  ucs_mpool_put(block->op);
 err_release_block:
   uct_bxi_recv_block_release(block);
 err_remove_hash:
@@ -963,15 +944,14 @@ ucs_status_t uct_bxi_iface_tag_gop_depends_on(uct_iface_h tl_iface,
   for (i = 0; i < gop_cnt; i++) {
     tmp_gop = ucs_derived_of(tl_gops[i], uct_bxi_gop_t);
 
-    ucs_assert(!PtlHandleIsEqual(tmp_gop->cnt.cth, PTL_INVALID_HANDLE));
+    ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(
-            PtlTriggeredCTIncNB(gop->cnt.cth, (ptl_ct_event_t){1, 0},
-                                tmp_gop->cnt.cth, tmp_gop->cnt.threshold));
+    status = uct_bxi_wrap(PtlTriggeredCTIncNB(gop->cth, (ptl_ct_event_t){1, 0},
+                                              tmp_gop->cth, tmp_gop->ct_value));
     if (status != UCS_OK) {
       ucs_fatal("BXI: failed setting trig inc.");
     }
-    gop->cnt.threshold++;
+    gop->ct_value++;
   }
 
   return status;

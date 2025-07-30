@@ -208,7 +208,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
       iface->tm.unexp_hdr_count++;
 
       if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
-        /* In this caseuct_bxi_recv_rndv_tag_handler, the protocol will always be continued by UCP. */
+        /* In this case, the protocol will always be continued by UCP. */
         switch (ev->hdr_data & 0xful) {
         case UCT_BXI_TAG_PROT_RNDV_HW:
           /* Sent size must be eager_limit + 1, cf triggered rendezvous algorithm. */
@@ -249,32 +249,36 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
       block->ctx->tag_consumed_cb(block->ctx);
       uct_bxi_iface_tag_del_from_hash(iface, block->start);
 
+      uct_bxi_recv_block_update_cnt_value(block, ev->mlength);
       block->stag = ev->match_bits;
 
       /* Now, perform protocol specific actions. */
       if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
         switch (ev->hdr_data & 0xful) {
         case UCT_BXI_TAG_PROT_RNDV_HW:
-          //NOTE: Send size is needed during the completion of the
-          //      triggered get.
           block->send_size = UCT_BXI_HDR_GET_LENGTH(ev->hdr_data);
 
           /* If rndv was not offloaded, then it must be handled in sw. */
           if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD)) {
             hdr    = ev->start;
             status = uct_bxi_wrap(PtlGet(
-                    block->op->mem_desc->mdh, (ptl_size_t)block->start,
+                    iface->tx.mem_desc->mdh, (ptl_size_t)block->start,
                     block->send_size, ev->initiator, hdr->pti,
                     UCT_BXI_BUILD_RNDV_TAG(ev->initiator), 0, block->op));
             if (status != UCS_OK) {
               ucs_fatal("BXI: sw rndv get failed");
             }
           }
+
+          /* Operation is not completed, do not release block. */
           break;
         case UCT_BXI_TAG_PROT_RNDV_SW:
           /* UCP will proceed with a normal software rendez-vous protocol. */
           block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start,
                               ev->mlength, UCS_OK, 0);
+
+          /* Operation is completed by HW, release block. */
+          uct_bxi_recv_block_release(block);
           break;
         default:
           ucs_fatal("BXI: unrecognized rndv protocol.");
@@ -285,9 +289,10 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, block->stag, ev->hdr_data,
                                  block->send_size, NULL, UCS_OK);
-      }
 
-      uct_bxi_recv_block_release(block);
+        /* Operation is completed by HW, release block. */
+        uct_bxi_recv_block_release(block);
+      }
     }
 
     break;
@@ -610,6 +615,8 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         }
         // Fallthrough
       case PTL_EVENT_ACK:
+        op->mlength = ev.mlength;
+
         progressed++;
         if (ev.ni_fail_type != PTL_NI_OK) {
           uct_bxi_iface_handle_tx_failure(iface, op);
@@ -855,6 +862,7 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
           ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
   ucs_status_t          status;
   uct_bxi_recv_block_t *block = obj;
+  ptl_md_t              md;
 
   block->flags = 0;
   block->size  = 0;
@@ -862,14 +870,25 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
   block->rxq   = iface->rx.tag.q;
   block->list  = PTL_PRIORITY_LIST;
   block->meh   = PTL_INVALID_HANDLE;
-  block->cth   = PTL_CT_NONE;
 
   /* Initialize the byte counter for rendez-vous offload. */
-  block->cnt.threshold = 0;
-  status               = uct_bxi_wrap(
-          PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cnt.cth));
+  block->ct_value = 0;
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cth));
   if (status != UCS_OK) {
     ucs_fatal("BXI: could not allocate counter.");
+  }
+
+  /* Initialize the MD for rendez-vous offload. */
+  md.eq_handle = iface->tx.eqh;
+  md.length    = PTL_SIZE_MAX;
+  md.options   = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
+  md.start     = 0;
+  md.ct_handle = block->cth;
+
+  status = uct_ptl_wrap(
+          PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &block->mdh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not bind MD.");
   }
 }
 
@@ -877,9 +896,11 @@ static void uct_bxi_iface_recv_block_cleanup(ucs_mpool_t *mp, void *obj)
 {
   uct_bxi_recv_block_t *block = obj;
 
-  ucs_assert(!PtlHandleIsEqual(block->cnt.cth, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlCTFree(block->cth));
 
-  uct_bxi_wrap(PtlCTFree(block->cnt.cth));
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlMDRelease(block->mdh));
 }
 
 static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
@@ -895,11 +916,10 @@ static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
   uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.gop_mp);
   uct_bxi_gop_t   *gop   = obj;
 
-  gop->cnt.threshold = 0;
-  gop->block         = NULL;
+  gop->ct_value = 0;
+  gop->block    = NULL;
 
-  status =
-          uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cnt.cth));
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
   if (status != UCS_OK) {
     ucs_error("BXI: could not allocate counter.");
   }
@@ -909,9 +929,9 @@ static void uct_bxi_iface_gop_cleanup(ucs_mpool_t *mp, void *obj)
 {
   uct_bxi_gop_t *gop = obj;
 
-  ucs_assert(!PtlHandleIsEqual(gop->cnt.cth, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-  uct_bxi_wrap(PtlCTFree(gop->cnt.cth));
+  uct_bxi_wrap(PtlCTFree(gop->cth));
 }
 
 static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
@@ -1113,12 +1133,9 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
 
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
-  uct_bxi_iface_t *iface =
-          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
   uct_bxi_iface_send_op_t *op = obj;
 
-  op->mem_desc = iface->tx.mem_desc;
-  op->flags    = 0;
+  op->flags = 0;
 }
 
 static ucs_mpool_ops_t uct_bxi_send_mpool_ops = {

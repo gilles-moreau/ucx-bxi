@@ -122,12 +122,13 @@ typedef struct uct_bxi_send_op_comp {
 
 typedef struct uct_bxi_iface_send_op {
   unsigned               flags;
-  uct_bxi_mem_desc_t    *mem_desc;  /* MD on which OP is performed */
+  uct_bxi_mem_desc_t    *mem_desc;  /* MD to be released if trig get */
   uct_bxi_send_op_comp_t comp;      /* Handler called completion */
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
   uct_completion_t      *user_comp; /* User completion callback */
   uct_bxi_ep_t          *ep;        /* OP endpoint */
   size_t                 length;    /* Length of the OP */
+  size_t                 mlength;   /* Length actually sent */
 
   union {
     struct {
@@ -145,9 +146,10 @@ typedef struct uct_bxi_iface_send_op {
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_gop {
-  uct_gop_t             super; /* Generic operation handle */
-  uct_bxi_block_cnt_t   cnt;
-  uct_bxi_recv_block_t *block; /* Receive block from rndv protocol */
+  uct_gop_t             super;    /* Generic operation handle */
+  ptl_handle_ct_t       cth;      /* Counter handle */
+  ptl_size_t            ct_value; /* SW value tracking HW counter value */
+  uct_bxi_recv_block_t *block;    /* Receive block from rndv protocol */
 } uct_bxi_gop_t;
 
 typedef struct uct_bxi_device_addr {
@@ -494,6 +496,15 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->comp.handler =                                                      \
           (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
   (_desc)->user_comp = _user_comp;                                             \
+  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+
+#define UCT_BXI_IFACE_GET_TX_RNDV_OP(_iface, _mp, _desc, _ep, _length, _block) \
+  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
+  (_desc)->ep            = _ep;                                                \
+  (_desc)->comp.comp     = 1;                                                  \
+  (_desc)->comp.handler  = uct_bxi_recv_rndv_tag_handler;                      \
+  (_desc)->rndv.block    = _block;                                             \
+  (_desc)->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;                   \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
 #define UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \

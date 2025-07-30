@@ -867,7 +867,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_offload_operation_expected,
 UCT_TAG_INSTANTIATE_TEST_CASE(test_tag)
 
 
-#if defined (ENABLE_STATS) && IBV_HW_TM
+#if defined (ENABLE_STATS) && IBV_HW_TM && !HAVE_BXI
 extern "C" {
 #include <uct/api/uct.h>
 #include <uct/ib/mlx5/rc/rc_mlx5_common.h>

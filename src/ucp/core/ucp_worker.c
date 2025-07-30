@@ -1382,10 +1382,6 @@ ucs_status_t ucp_worker_iface_open(ucp_worker_h worker, ucp_rsc_index_t tl_id,
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_ARG  |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_CB   |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_EAGER_CB;
-
-        if (worker->context->config.ext.tm_init_activate) {
-            ucp_tag_offload_iface_activate(wiface);
-        }
     }
 
     iface_params.async_event_arg   = wiface;

@@ -13,7 +13,6 @@ typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD = UCS_BIT(0),
   UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE   = UCS_BIT(1),
-  UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT   = UCS_BIT(2)
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -25,27 +24,28 @@ typedef struct uct_bxi_recv_block_params {
   ptl_handle_ct_t  cth;
 } uct_bxi_recv_block_params_t;
 
-typedef struct uct_bxi_block_cnt {
+typedef struct uct_bxi_comp_cnt {
   ptl_handle_ct_t cth;
   ptl_size_t      threshold;
-} uct_bxi_block_cnt_t;
+} uct_bxi_comp_cnt_t;
 
 typedef struct uct_bxi_recv_block {
-  unsigned            flags;
-  void               *start;       /* Address of the receive block */
-  size_t              size;        /* Size of the receive block */
-  size_t              send_size;   /* Actual size sent on the receive block */
-  size_t              eager_limit; /* Eager limit */
-  uct_bxi_rxq_t      *rxq;         /* Back reference to the RX Queue */
-  ptl_handle_me_t     meh;         /* Memory Entry handle */
-  ucs_list_link_t     c_elem;      /* Element in the cancel list */
-  uct_tag_t           tag;         /* Needed in case block is cancelled */
-  uct_tag_t           stag;        /* Send tag */
-  ptl_list_t          list;        /* Portals list: OVERFLOW or PRIORITY */
-  uct_tag_context_t  *ctx;         /* Tag context provided by upper layer */
-  uct_bxi_block_cnt_t cnt;
-  ptl_handle_ct_t     cth;     /* Counter associated when recv if offloaded */
-  uct_bxi_iface_send_op_t *op; /* OP in case of GET protocol */
+  unsigned           flags;
+  void              *start;       /* Address of the receive block */
+  size_t             size;        /* Size of the receive block */
+  size_t             send_size;   /* Actual size sent on the receive block */
+  size_t             eager_limit; /* Eager limit */
+  uct_bxi_rxq_t     *rxq;         /* Back reference to the RX Queue */
+  ucs_list_link_t    c_elem;      /* Element in the cancel list */
+  uct_tag_t          tag;         /* Needed in case block is cancelled */
+  uct_tag_t          stag;        /* Send tag */
+  ptl_list_t         list;        /* Portals list: OVERFLOW or PRIORITY */
+  uct_tag_context_t *ctx;         /* Tag context provided by upper layer */
+  ptl_handle_me_t    meh;         /* Memory Entry handle */
+  ptl_handle_ct_t    cth;         /* Counter handle associated to the block */
+  ptl_handle_md_t    mdh;         /* Memory Descriptor used for GET */
+  ptl_size_t         ct_value;    /* SW counter tracking HW counter */
+  uct_bxi_iface_send_op_t *op;    /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 enum {
@@ -102,11 +102,10 @@ uct_bxi_recv_block_is_unexpected(uct_bxi_recv_block_t *block)
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_recv_block_update_cnt_thresh(uct_bxi_recv_block_t *block,
-                                     ptl_size_t            mlength)
+uct_bxi_recv_block_update_cnt_value(uct_bxi_recv_block_t *block,
+                                    ptl_size_t            mlength)
 {
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_UPDATE_CNT)
-    block->cnt.threshold -= block->eager_limit + 1 - mlength;
+  block->ct_value += mlength;
 }
 
 #endif

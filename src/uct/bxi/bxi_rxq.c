@@ -81,9 +81,6 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE) {
     ucs_mpool_put(block->op);
   }
-
-  uct_bxi_recv_block_update_cnt_thresh(block, block->send_size);
-
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
 
@@ -91,12 +88,12 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
    * hit integer overflow problems. Since PtlCTSet is blocking, do it just 
    * before overflow happens.
    * */
-  if (uct_bxi_is_overflow(block->cnt.threshold, block->eager_limit)) {
-    status = uct_bxi_wrap(PtlCTSet(block->cnt.cth, UCT_BXI_CT_INIT));
+  if (uct_bxi_is_overflow(block->ct_value, block->eager_limit)) {
+    status = uct_bxi_wrap(PtlCTSet(block->cth, UCT_BXI_CT_INIT));
     if (status != UCS_OK) {
       ucs_fatal("BXI: could not reset counter.");
     }
-    block->cnt.threshold = 0;
+    block->ct_value = 0;
   }
 
   ucs_mpool_put(block);
