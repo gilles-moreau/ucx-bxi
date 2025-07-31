@@ -44,7 +44,6 @@ void uct_bxi_ep_get_bcopy_handler(uct_bxi_iface_send_op_t *op, const void *resp)
   uct_invoke_completion(op->user_comp, UCS_OK);
 
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 void uct_bxi_ep_get_bcopy_handler_no_completion(uct_bxi_iface_send_op_t *op,
@@ -53,14 +52,12 @@ void uct_bxi_ep_get_bcopy_handler_no_completion(uct_bxi_iface_send_op_t *op,
   op->get.unpack_cb(op->get.unpack_arg, resp, op->length);
 
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_op_no_completion(uct_bxi_iface_send_op_t *op,
                                           const void              *resp)
 {
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_ato_op_no_completion(uct_bxi_iface_send_op_t *op,
@@ -73,7 +70,6 @@ static void uct_bxi_send_ato_op_no_completion(uct_bxi_iface_send_op_t *op,
     PtlAtomicSync();
   }
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
@@ -82,7 +78,6 @@ static void uct_bxi_send_comp_op_handler(uct_bxi_iface_send_op_t *op,
   uct_invoke_completion(op->user_comp, UCS_OK);
 
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
@@ -95,9 +90,9 @@ static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
     PtlAtomicSync();
   }
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
+/* Callback of sender for rendezvous protocol. */
 static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
                                                 const void              *resp)
 {
@@ -108,7 +103,6 @@ static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
   /* Do not call user completion callback as it's been acknowledged already 
    * during the sw protocol handled by UCP. */
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
 static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
@@ -117,13 +111,20 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   uct_invoke_completion(op->user_comp, UCS_OK);
 
   uct_bxi_ep_remove_from_queue(op);
-  ucs_mpool_put_inline(op);
 }
 
+/* Callback of receiver for rendezvous protocol. */
 static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
                                           const void              *resp)
 {
   uct_bxi_recv_block_t *block = op->rndv.block;
+
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP) {
+    /* If operation was either cancelled or eager message was received, 
+     * then block release will be handled respectively by the cancel call, 
+     * see uct_bxi_iface_tag_recv_cancel, or within event handling. */
+    return;
+  }
 
   ucs_assert(block->send_size > 0);
   ucs_assert(block->size >= block->send_size);
@@ -568,7 +569,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   /* First, allocate a TAG block from the memory pool. Receive block is 
-   * used to match the remote GET operation and is posted to the CTRL RXQ. */
+   * used to match the remote GET operation and is posted to the CTRL RXQ. 
+   * In this case, OP has ownership of the block and is responsible of 
+   * releasing it. */
   UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
                                     iface->rx.ctrl.q, ptl_iov->iov_base,
                                     ptl_iov->iov_len,
@@ -780,11 +783,13 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   /* First, allocate a TAG block from the memory pool. */
-  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
-                                    iface->rx.tag.q, ptl_iov->iov_base,
-                                    ptl_iov->iov_len, tag, ctx,
-                                    status = UCS_ERR_EXCEEDS_LIMIT;
-                                    goto err_remove_hash);
+  //NOTE: iov length may be 0 and thus we loose the buffer address when filling
+  //      the ptl_iov. Block buffer is thus set using iov->buffer instead of
+  //      ptl_iov.
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
+          iface, &iface->tm.recv_block_mp, block, iface->rx.tag.q, iov->buffer,
+          ptl_iov->iov_len, tag, ctx, status = UCS_ERR_EXCEEDS_LIMIT;
+          goto err_remove_hash);
 
   if (uct_bxi_iface_available(iface) <= 0) {
     return UCS_ERR_NO_RESOURCE;
@@ -799,12 +804,15 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
    *   is not used and just released during block release,
    * - endpoint was not provided, thus the operation is used to complete the 
    *   protocol upon event handling, 
-   * - otherwise, operation will be triggered. */
-  UCT_BXI_IFACE_GET_TX_RNDV_OP(iface, &iface->tx.send_op_mp, block->op, ep,
-                               block->size, block);
-
-  /* Instruct to release the operation upon completion of either protocol. */
-  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE;
+   * - otherwise, operation will be triggered. 
+   * In this case, block has ownership of the OP and is responsible of releasing
+   * it. */
+  UCT_BXI_IFACE_GET_TX_RNDV_OP_ERR(iface, &iface->tx.send_op_mp, block->op, ep,
+                                   block->size, block,
+                                   status = UCS_ERR_NO_RESOURCE;
+                                   goto err_release_block;);
+  /* Update OP flags and interface available resources. */
+  uct_bxi_iface_op_res(iface, block->op);
 
   /* Initialise ME params with default value, they may be changed during 
    * protocol configuration. */
@@ -844,13 +852,16 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
     /* Operation will be released with block release. */
-    goto err_release_block;
+    goto err_release_op;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
   return status;
 
+err_release_op:
+  block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+  uct_bxi_iface_completion_op(block->op);
 err_release_block:
   uct_bxi_recv_block_release(block);
 err_remove_hash:
@@ -877,6 +888,11 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
                block);
     }
   }
+
+  /* Deactivate completion handler of the operation operation and
+   * return it to the pool by completing it. */
+  block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+  uct_bxi_iface_completion_op(block->op);
 
   /* Unlink block. */
   uct_bxi_recv_block_deactivate(block);

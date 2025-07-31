@@ -45,8 +45,8 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
             .length = block->size};
   }
 
-  status = uct_bxi_wrap(PtlMEAppendNB(rxq->nih, rxq->pti, &me, block->list,
-                                      block, &block->meh));
+  status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
+                                    &block->meh));
   if (status != UCS_OK) {
     return status;
   }
@@ -78,9 +78,6 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
 {
   ucs_status_t status;
 
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE) {
-    ucs_mpool_put(block->op);
-  }
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
 

@@ -61,7 +61,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          ucs_offsetof(uct_bxi_iface_config_t, rx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
-        {"NUM_RX_SEG", "32",
+        {"NUM_RX_SEG", "64",
          "Number of segments per receive block in the RX Queue (default: 32)",
          ucs_offsetof(uct_bxi_iface_config_t, rx.num_seg),
          UCS_CONFIG_TYPE_UINT},
@@ -75,11 +75,6 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          "and post_recv. (default: 8192).",
          ucs_offsetof(uct_bxi_iface_config_t, seg_size),
          UCS_CONFIG_TYPE_MEMUNITS},
-
-        {"MAX_EP_RETRIES", "16",
-         "Maximum number of send retry on a given endpoint (default: 16).",
-         ucs_offsetof(uct_bxi_iface_config_t, max_ep_retries),
-         UCS_CONFIG_TYPE_UINT},
 
         {"TM_ENABLE", "n", "Enable HW tag matching",
          ucs_offsetof(uct_bxi_iface_config_t, tm.enable), UCS_CONFIG_TYPE_BOOL},
@@ -277,7 +272,11 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start,
                               ev->mlength, UCS_OK, 0);
 
-          /* Operation is completed by HW, release block. */
+          /* Deactivate completion handler of the operation operation. */
+          block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+          uct_bxi_iface_completion_op(block->op);
+          uct_bxi_iface_available_add(iface, 1);
+
           uct_bxi_recv_block_release(block);
           break;
         default:
@@ -285,12 +284,16 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
+
+        block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+        uct_bxi_iface_completion_op(block->op);
+        uct_bxi_iface_available_add(iface, 1);
+
         block->send_size = ev->mlength;
         /* Eager expected message completion. */
         block->ctx->completed_cb(block->ctx, block->stag, ev->hdr_data,
                                  block->send_size, NULL, UCS_OK);
 
-        /* Operation is completed by HW, release block. */
         uct_bxi_recv_block_release(block);
       }
     }
@@ -577,9 +580,9 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 }
 
 static UCS_F_ALWAYS_INLINE int
-uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
+uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, ptl_size_t length)
 {
-  return op->length <= iface->config.max_inline;
+  return length <= iface->config.max_inline;
 }
 
 /* Poll tx is both used for interface progression. Only events 
@@ -607,7 +610,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
       switch (ev.type) {
       case PTL_EVENT_REPLY:
         /* This event is generated after TAG GET operation completion. */
-        if (uct_bxi_iface_op_is_inlined(iface, op)) {
+        if (uct_bxi_iface_op_is_inlined(iface, ev.mlength)) {
           //NOTE: for small size messages, host memory may not be coherent with
           //      completion of the operation, thus force NIC synchronization.
           //TODO: test with PTL_MD_VOLATILE unset

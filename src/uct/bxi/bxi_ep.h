@@ -186,6 +186,17 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
 static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op != NULL);
+  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+
+  /* Remove one available send credit from iface. */
+  uct_bxi_iface_available_add(iface, -1);
+}
+
+static UCS_F_ALWAYS_INLINE void
 uct_bxi_ep_add_flush_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op != NULL);
@@ -202,14 +213,9 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_t *iface =
           ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
 
-  ucs_assert(op != NULL);
-  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
-  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-
+  uct_bxi_iface_op_res(iface, op);
   //NOTE: Queue is used to complete flush operations.
   ucs_list_add_tail(&ep->send_ops, &op->elem);
-  /* Remove one available send credit from iface. */
-  uct_bxi_iface_available_add(iface, -1);
 
   ucs_trace_poll("ep %p add send op %p handler %s", ep, op,
                  ucs_debug_get_symbol_name((void *)op->comp.handler));

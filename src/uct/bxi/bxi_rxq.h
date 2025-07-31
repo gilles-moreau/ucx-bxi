@@ -12,7 +12,6 @@ typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
 
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD = UCS_BIT(0),
-  UCT_BXI_RECV_BLOCK_FLAG_OP_RELEASE   = UCS_BIT(1),
 };
 
 typedef struct uct_bxi_recv_block_params {

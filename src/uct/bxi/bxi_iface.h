@@ -50,9 +50,9 @@ enum {
 
 /* Operation flags */
 enum {
-  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE      = UCS_BIT(0),
-  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH      = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE = UCS_BIT(2), /* Release MD */
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE  = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH  = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP = UCS_BIT(2),
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -177,7 +177,6 @@ typedef struct uct_bxi_iface_config {
     uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX */
   } rx;
 
-  int      max_ep_retries;
   int      copyin_buf_per_block;
   int      copyout_buf_per_block;
   int      min_copyin_buf;
@@ -396,15 +395,10 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
   if (--op->comp.comp == 0) {
-    if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE) {
-      uct_bxi_md_mem_desc_fini(op->mem_desc);
-    }
-
-    /* Reset operation flags. */
-    op->flags &= ~(UCT_BXI_IFACE_SEND_OP_FLAG_INUSE |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_MD_RELEASE |
-                   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH);
     op->comp.handler(op, op + 1);
+
+    op->flags = 0;
+    ucs_mpool_put_inline(op);
   }
 }
 
@@ -500,12 +494,18 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 
 #define UCT_BXI_IFACE_GET_TX_RNDV_OP(_iface, _mp, _desc, _ep, _length, _block) \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep            = _ep;                                                \
-  (_desc)->comp.comp     = 1;                                                  \
-  (_desc)->comp.handler  = uct_bxi_recv_rndv_tag_handler;                      \
-  (_desc)->rndv.block    = _block;                                             \
-  (_desc)->flags        |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;                   \
-  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+  (_desc)->ep           = _ep;                                                 \
+  (_desc)->comp.comp    = 1;                                                   \
+  (_desc)->comp.handler = uct_bxi_recv_rndv_tag_handler;                       \
+  (_desc)->rndv.block   = _block;
+
+#define UCT_BXI_IFACE_GET_TX_RNDV_OP_ERR(_iface, _mp, _desc, _ep, _length,     \
+                                         _block, _err_code)                    \
+  UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err_code)                 \
+  (_desc)->ep           = _ep;                                                 \
+  (_desc)->comp.comp    = 1;                                                   \
+  (_desc)->comp.handler = uct_bxi_recv_rndv_tag_handler;                       \
+  (_desc)->rndv.block   = _block;
 
 #define UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
                                          _handler, _length)                    \

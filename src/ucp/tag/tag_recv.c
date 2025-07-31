@@ -154,14 +154,13 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
         /* Not found on unexpected, wait until it arrives. */
         req_queue = ucp_tag_exp_get_queue(&worker->tm, tag, tag_mask);
 
-        /* If offload supported, post this tag to transport as well. */
-        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
-            status = ucp_request_recv_op_offload(&worker->tm, req, param);
-            if (status != UCS_OK) {
-                goto out_request_put;
-            }
+        /* Check if operation can be offloaded. */
+        status = ucp_request_recv_op_offload(&worker->tm, req, param);
+        if (status != UCS_OK) {
+            goto out_request_put;
         }
 
+        /* If offload supported, post this tag to transport as well. */
         ucp_tag_offload_try_post(worker, req, req_queue);
 
         ucp_tag_exp_push(&worker->tm, req_queue, req);

@@ -68,7 +68,6 @@ static ucs_stats_class_t ucp_worker_tm_offload_stats_class = {
     .counter_names  = {
         [UCP_WORKER_STAT_TAG_OFFLOAD_POSTED]           = "posted",
         [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED]          = "matched",
-        [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED_HW_RNDV]  = "matched_hw_rndv",
         [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED_SW_RNDV]  = "matched_sw_rndv",
         [UCP_WORKER_STAT_TAG_OFFLOAD_CANCELED]         = "canceled",
         [UCP_WORKER_STAT_TAG_OFFLOAD_BLOCK_TAG_EXCEED] = "block_tag_exceed",
