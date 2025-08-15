@@ -571,12 +571,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
    * used to match the remote GET operation and is posted to the CTRL RXQ. 
    * In this case, OP has ownership of the block and is responsible of 
    * releasing it. */
-  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(iface, &iface->tm.recv_block_mp, block,
-                                    iface->rx.ctrl.q, ptl_iov->iov_base,
-                                    ptl_iov->iov_len,
-                                    UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid),
-                                    NULL, status = UCS_ERR_NO_RESOURCE;
-                                    goto err);
+  UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
+          iface, &iface->tm.recv_block_mp, block, iface->rx.ctrl.q,
+          ptl_iov->iov_base, ptl_iov->iov_len,
+          UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid), NULL,
+          status = UCS_ERR_NO_RESOURCE;
+          goto err);
 
   params.start   = block->start;
   params.size    = block->size;
