@@ -11,7 +11,8 @@ typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
                                                ptl_event_t     *ev);
 
 enum {
-  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD = UCS_BIT(0),
+  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD  = UCS_BIT(0),
+  UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER = UCS_BIT(1),
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -104,7 +105,9 @@ static UCS_F_ALWAYS_INLINE void
 uct_bxi_recv_block_update_cnt_value(uct_bxi_recv_block_t *block,
                                     ptl_size_t            mlength)
 {
-  block->ct_value += mlength;
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER) {
+    block->ct_value += mlength;
+  }
 }
 
 #endif

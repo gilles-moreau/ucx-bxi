@@ -31,7 +31,8 @@ public:
         VARIANT_RNDV_AM_BCOPY,
         VARIANT_RNDV_AM_ZCOPY,
         VARIANT_SEND_NBR,
-        VARIANT_PROTO_V1
+        VARIANT_PROTO_V1,
+        VARIANT_RECVEP
     };
 
     test_ucp_tag_xfer() {
@@ -98,6 +99,8 @@ public:
             add_variant_with_value(variants, get_ctx_params(), VARIANT_PROTO_V1,
                                    "proto_v1");
         }
+        add_variant_with_value(variants, get_ctx_params(),
+                               VARIANT_RECVEP, "reply_ep");
     }
 
     virtual ucp_ep_params_t get_ep_params() {
@@ -111,6 +114,10 @@ public:
 
     bool is_err_handling() const {
         return get_variant_value() == VARIANT_ERR_HANDLING;
+    }
+
+    bool need_reply_ep() const {
+        return get_variant_value() == VARIANT_RECVEP;
     }
 
     void skip_err_handling() const {

@@ -395,8 +395,11 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
   if (--op->comp.comp == 0) {
-    op->comp.handler(op, op + 1);
+    if (!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP)) {
+      op->comp.handler(op, op + 1);
+    }
 
+    /* Reset operation flags. */
     op->flags = 0;
     ucs_mpool_put_inline(op);
   }

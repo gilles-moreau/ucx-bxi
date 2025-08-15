@@ -254,6 +254,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           block->send_size = UCT_BXI_HDR_GET_LENGTH(ev->hdr_data);
 
           /* If rndv was not offloaded, then it must be handled in sw. */
+          //NOTE: It has been kept to preserve compatability with UCX testsuite.
           if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD)) {
             hdr    = ev->start;
             status = uct_bxi_wrap(PtlGet(
@@ -277,6 +278,18 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           uct_bxi_iface_completion_op(block->op);
           uct_bxi_iface_available_add(iface, 1);
 
+          /* In case of offloaded rendez-vous, a GET operation has been 
+           * attached. Remove all triggered operations attached to this ME. */
+          if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD) {
+            ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
+            status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
+            if (status != UCS_OK) {
+              ucs_warn("BXI: tried to cancel triggered operation attached to "
+                       "block. block=%p",
+                       block);
+            }
+          }
+
           uct_bxi_recv_block_release(block);
           break;
         default:
@@ -284,7 +297,8 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           break;
         }
       } else {
-
+        /* Release the associated operation without calling the handler. Also,
+         * increment the available credit. */
         block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
         uct_bxi_iface_completion_op(block->op);
         uct_bxi_iface_available_add(iface, 1);
@@ -682,18 +696,14 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
     return count;
   }
 
-  count = uct_bxi_iface_poll_tx(iface);
-
-  if (count < 0) {
-    ucs_debug("slip");
-  }
-
-  return count;
+  return uct_bxi_iface_poll_tx(iface);
 }
 
 //NOTE: Current flush semantic is the following: a flush operation is completed
 //      when all previous operations on the interface memory descriptor have been
 //      acked. In practice, this corresponds to UCT_FLUSH_FLAG_REMOTE.
+//      Wouldn't the event PTL_EVENT_SEND be the correct event to check in terms
+//      of semantics?
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp)
 {
@@ -898,6 +908,12 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
 static void uct_bxi_iface_recv_block_cleanup(ucs_mpool_t *mp, void *obj)
 {
   uct_bxi_recv_block_t *block = obj;
+  ptl_ct_event_t        ct_value;
+
+  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
+  if (ct_value.success != block->ct_value) {
+    ucs_error("BXI: error tracking ct value.");
+  }
 
   ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
   uct_bxi_wrap(PtlCTFree(block->cth));

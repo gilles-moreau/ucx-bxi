@@ -119,19 +119,18 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
 {
   uct_bxi_recv_block_t *block = op->rndv.block;
 
-  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP) {
-    /* If operation was either cancelled or eager message was received, 
-     * then block release will be handled respectively by the cancel call, 
-     * see uct_bxi_iface_tag_recv_cancel, or within event handling. */
-    return;
-  }
-
   ucs_assert(block->send_size > 0);
   ucs_assert(block->size >= block->send_size);
 
   /* First, invoke tag-related callback. */
   block->ctx->completed_cb(block->ctx, block->stag, 0, op->mlength, NULL,
                            UCS_OK);
+
+  /* If the rendezvous was offloaded, then the counter has been linked with 
+   * the block own MD and thus incremented at the completion of the GET. */
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD) {
+    uct_bxi_recv_block_update_cnt_value(block, 1);
+  }
 
   /* This OP is released by the block release. */
   uct_bxi_recv_block_release(block);
@@ -689,7 +688,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   //NOTE: rndv_request cannot be offloaded since the rest of the protocol has
   //      to be done in software. This is the case with generic datatype, very
-  //      large message or multiple iov since current hardwares do not support it.
+  //      large message or multiple iov since current hardwares do not support
+  //      it.
   ucs_assert(!(flags & UCT_TAG_OFFLOAD_OPERATION));
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
@@ -724,9 +724,10 @@ uct_bxi_tag_recv_is_offloaded(uct_bxi_recv_block_t *block)
   return block->ctx->gop != NULL;
 }
 
-static UCS_F_ALWAYS_INLINE void uct_bxi_iface_tag_recv_rndv_zcopy(
-        uct_bxi_iface_t *iface, uct_bxi_ep_t *ep, uct_bxi_recv_block_t *block,
-        uct_bxi_recv_block_params_t *params, ptl_size_t *thresh_p)
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                                  uct_bxi_recv_block_t        *block,
+                                  uct_bxi_recv_block_params_t *params)
 {
   ucs_status_t status = UCS_OK;
   uct_tag_t    tag;
@@ -746,12 +747,9 @@ static UCS_F_ALWAYS_INLINE void uct_bxi_iface_tag_recv_rndv_zcopy(
   /* Update block parameter and threshold in case of OP offload. */
   params->cth     = block->cth;
   params->options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
-  /* Since counter will be used by both the block ME and the MD, the next OP 
-     * must be triggered when ctrl msg have been received (+ eager_limit + 1) and 
-     * the GET has completed (+1) => iface->config.tm.eager_limit + 2. */
-  *thresh_p = block->ct_value + iface->config.tm.eager_limit + 2;
 
-  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD;
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD |
+                  UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
 }
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
@@ -815,10 +813,13 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   uct_bxi_iface_op_res(iface, block->op);
 
   /* Initialise ME params with default value, they may be changed during 
-   * protocol configuration. */
+   * protocol configuration below. For eager message and without generic 
+   * operation, no counter is needed on the ME. */
   params.cth     = PTL_CT_NONE;
   params.options = UCT_BXI_ME_OPT_RECV_ZCOPY;
-  thresh         = block->ct_value + block->size;
+
+  /* In case of operation offloading and eager message. */
+  thresh = block->ct_value + block->size;
 
   /* If receive size if lower than the eager limit, then the rendezvous can
    * never be offloaded. However, the rendezvous threshold is configurable by 
@@ -826,7 +827,12 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
    * control message even though msg_size < eager_limit. As a consequence, 
    * the protocol will be completed during event handling. */
   if (block->size > iface->config.tm.eager_limit && ep != NULL) {
-    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &params, &thresh);
+    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &params);
+
+    /* Since counter will be used by both the block ME and the MD, the next OP 
+     * must be triggered when ctrl msg have been received (+ eager_limit + 1) 
+     * and the GET has completed (+1) => iface->config.tm.eager_limit + 2. */
+    thresh = block->ct_value + iface->config.tm.eager_limit + 2;
   }
 
   if (ucs_unlikely(uct_bxi_tag_recv_is_offloaded(block))) {
@@ -841,6 +847,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     /* Update (again) ME parameters. */
     params.cth     = block->cth;
     params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
+
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
   }
 
   params.start = ptl_iov->iov_base;

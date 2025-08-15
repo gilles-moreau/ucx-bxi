@@ -44,6 +44,9 @@ void test_ucp_tag::init()
 {
     ucp_test::init();
     sender().connect(&receiver(), get_ep_params());
+    if (need_reply_ep()) {
+        receiver().connect(&sender(), get_ep_params());
+    }
 
     ctx_attr.field_mask = 0;
     ctx_attr.field_mask |= UCP_ATTR_FIELD_REQUEST_SIZE;
@@ -303,9 +306,13 @@ test_ucp_tag::recv(entity &receiver, recv_type_t type, void *buffer,
     ucs_status_t status;
     ucp_request_param_t param;
 
-    param.op_attr_mask = UCP_OP_ATTR_FIELD_DATATYPE |
-                         UCP_OP_ATTR_FLAG_NO_IMM_CMPL;
-    param.datatype     = datatype;
+    param.op_attr_mask  = UCP_OP_ATTR_FIELD_DATATYPE |
+                          UCP_OP_ATTR_FLAG_NO_IMM_CMPL;
+    if (need_reply_ep()) {
+        param.op_attr_mask |= UCP_OP_ATTR_FIELD_EPH;
+        param.reply_ep      = receiver.ep(0);
+    }
+    param.datatype      = datatype;
 
     switch (type) {
     case RECV_IMM:
@@ -418,6 +425,11 @@ bool test_ucp_tag::is_external_request()
     return false;
 }
 
+bool test_ucp_tag::need_reply_ep() const
+{
+    return false;
+}
+
 ucp_context_attr_t test_ucp_tag::ctx_attr;
 
 
@@ -427,6 +439,7 @@ public:
         m_test_offload = get_variant_value();
         if (m_test_offload) {
             m_env.push_back(new ucs::scoped_setenv("UCX_RC_TM_ENABLE", "y"));
+            m_env.push_back(new ucs::scoped_setenv("UCX_BXI_TM_ENABLE", "y"));
         }
         m_tag_min_rndv = 0;
     }

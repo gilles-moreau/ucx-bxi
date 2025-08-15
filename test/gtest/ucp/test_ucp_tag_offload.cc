@@ -23,6 +23,12 @@ extern "C" {
 
 class test_ucp_tag_offload : public test_ucp_tag {
 public:
+    enum {
+        VARIANT_OFFLOAD_DEFAULT = DEFAULT_PARAM_VARIANT,
+        VARIANT_OFFLOAD_PROTOV1,
+        VARIANT_OFFLOAD_RECVEP
+    };
+
     test_ucp_tag_offload() {
         // TODO: test offload and offload MP as different variants
         enable_tag_mp_offload();
@@ -30,12 +36,16 @@ public:
 
     static void get_test_variants(std::vector<ucp_test_variant> &variants)
     {
-        add_variant_values(variants, test_ucp_tag::get_test_variants, 0);
+        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+                           VARIANT_OFFLOAD_DEFAULT);
 
         if (!RUNNING_ON_VALGRIND) {
-            add_variant_values(variants, test_ucp_tag::get_test_variants, 1,
-                               "proto_v1");
+            add_variant_values(variants, test_ucp_tag::get_test_variants, 
+                               VARIANT_OFFLOAD_PROTOV1, "proto_v1");
         }
+
+        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+                           VARIANT_OFFLOAD_RECVEP, "reply_ep");
     }
 
     void init()
@@ -106,10 +116,15 @@ public:
         request_free(req);
     }
 
+    bool need_reply_ep() const
+    {
+        return get_variant_value(0) == VARIANT_OFFLOAD_RECVEP;
+    }
+
 private:
     bool disable_proto() const
     {
-        return get_variant_value(0);
+        return get_variant_value(0) == VARIANT_OFFLOAD_PROTOV1;
     }
 };
 
@@ -469,11 +484,11 @@ private:
 public:
     void init()
     {
-        test_ucp_tag_offload::init();
-        if (disable_proto()) {
+        if (disable_proto() || !need_reply_ep()) {
             UCS_TEST_SKIP_R("Triggered operation not supported with old "
                             "protocol.");
         }
+        test_ucp_tag_offload::init();
     }
 
     ucs_status_t make_offload_sched(entity &se, ucp_offload_sched_h *sched_p) {
@@ -527,8 +542,6 @@ err:
         std::vector<ucs_status_ptr_t> reqs;
 
         activate_offload(sender());
-
-        receiver().connect(&sender(), get_ep_params());
 
         ASSERT_UCS_OK(make_offload_sched(sender(), &send_sched));
         ASSERT_UCS_OK(make_offload_sched(receiver(), &recv_sched));
@@ -587,8 +600,6 @@ err:
         std::vector<ucs_status_ptr_t> reqs;
 
         activate_offload(sender());
-
-        receiver().connect(&sender(), get_ep_params());
 
         ASSERT_UCS_OK(make_offload_sched(sender(), &send_sched));
         ASSERT_UCS_OK(make_offload_sched(receiver(), &recv_sched));
@@ -651,8 +662,6 @@ err:
         std::vector<ucs_status_ptr_t> reqs;
 
         activate_offload(sender());
-
-        receiver().connect(&sender(), get_ep_params());
 
         ASSERT_UCS_OK(make_offload_sched(sender(), &send_sched));
         ASSERT_UCS_OK(make_offload_sched(receiver(), &recv_sched));
@@ -727,8 +736,6 @@ err:
         std::vector<ucs_status_ptr_t> reqs;
 
         activate_offload(sender());
-
-        receiver().connect(&sender(), get_ep_params());
 
         ASSERT_UCS_OK(make_offload_sched(sender(), &send_sched));
         ASSERT_UCS_OK(make_offload_sched(receiver(), &recv_sched));
