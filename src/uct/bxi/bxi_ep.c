@@ -20,6 +20,10 @@ uct_bxi_comp_cnt_t dummy_cnt = {.threshold = 0, .cth = PTL_CT_NONE};
 #define UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES                                    \
   PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
           PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
+          PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_BYTES
+#define UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES_OF                                 \
+  PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_LINK_DISABLE |                \
+          PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE |            \
           PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW |                    \
           PTL_ME_EVENT_CT_BYTES
 
@@ -735,7 +739,10 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
   tag = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
 
   /* Trigger Get at current counter value plus eager_limit + 1, as defined by 
-     * Barrett and al. */
+   * Barrett and al. */
+  //FIXME: block MD is used in all cases. Thus, whether the operation is
+  //       offloaded or not, counter will be incremented. However, it is not
+  //       absolutely necessary when operation is not offloaded.
   status = uct_bxi_wrap(PtlTriggeredGet(
           block->mdh, (ptl_size_t)block->start, block->size, ep->dev_addr.pid,
           ep->iface_addr.ctrl, tag, 0, block->op, block->cth,
@@ -752,6 +759,7 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
                   UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
 }
 
+//TODO: better handler receive completion mecanisms. It's a mess right now.
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_t        tag_mask,
                                           const uct_iov_t *iov, size_t iovcnt,
@@ -799,7 +807,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
    * MD is chosen accordingly.
    * Here are the possible paths:
    * - wrong prediction and eager msg was received instead, then the operation 
-   *   is not used and just released during block release,
+   *   is not used and just released before block release,
    * - endpoint was not provided, thus the operation is used to complete the 
    *   protocol upon event handling, 
    * - otherwise, operation will be triggered. 
@@ -811,6 +819,16 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                    goto err_release_block;);
   /* Update OP flags and interface available resources. */
   uct_bxi_iface_op_res(iface, block->op);
+  //FIXME: operation completion counter need to be incremented to support the
+  //       fact that REPLY event may be handled before the corresponding PUT
+  //       even.
+  //       We should think of a more uniform way of completing the block and
+  //       the operation... Because we don't know in advance which protocol
+  //       will be actually used, we need to prepare for the rendezvous.
+  //       Indeed, in case of rendezvous two events needs to be handled:
+  //       1) PTL_EVENT_PUT for the matching and
+  //       2) PTL_EVENT_REPLY for the completion of the rendezvous GET op.
+  block->op->comp.comp++;
 
   /* Initialise ME params with default value, they may be changed during 
    * protocol configuration below. For eager message and without generic 
@@ -846,7 +864,7 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
     /* Update (again) ME parameters. */
     params.cth     = block->cth;
-    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
+    params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES_OF;
 
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
   }
@@ -900,7 +918,12 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   /* Deactivate completion handler of the operation operation and
    * return it to the pool by completing it. */
   block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+  //FIXME: Completion counter needs to be artificially decremented for
+  //       the operation to be put back to the pool, see FIXME in
+  //       recv_zcopy.
+  block->op->comp.comp--;
   uct_bxi_iface_completion_op(block->op);
+  uct_bxi_iface_available_add(iface, 1);
 
   /* Unlink block. */
   uct_bxi_recv_block_deactivate(block);

@@ -254,7 +254,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           block->send_size = UCT_BXI_HDR_GET_LENGTH(ev->hdr_data);
 
           /* If rndv was not offloaded, then it must be handled in sw. */
-          //NOTE: It has been kept to preserve compatability with UCX testsuite.
+          //NOTE: It has been kept to preserve compatibility with UCX testsuite.
           if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD)) {
             hdr    = ev->start;
             status = uct_bxi_wrap(PtlGet(
@@ -266,15 +266,21 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
             }
           }
 
-          /* Operation is not completed, do not release block. */
+          /* Call operation completion to decrement counter, release the 
+           * block and complete recv in case REPLY event has been processed. */
+          uct_bxi_iface_completion_op(block->op);
           break;
         case UCT_BXI_TAG_PROT_RNDV_SW:
           /* UCP will proceed with a normal software rendez-vous protocol. */
           block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start,
                               ev->mlength, UCS_OK, 0);
 
-          /* Deactivate completion handler of the operation operation. */
+          /* Deactivate completion handler of the operation. */
           block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+          //FIXME: Completion counter needs to be artificially decremented for
+          //       the operation to be put back to the pool, see FIXME in
+          //       recv_zcopy.
+          block->op->comp.comp--;
           uct_bxi_iface_completion_op(block->op);
           uct_bxi_iface_available_add(iface, 1);
 
@@ -300,6 +306,10 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
         /* Release the associated operation without calling the handler. Also,
          * increment the available credit. */
         block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
+        //FIXME: Completion counter needs to be artificially decremented for
+        //       the operation to be put back to the pool, see FIXME in
+        //       recv_zcopy.
+        block->op->comp.comp--;
         uct_bxi_iface_completion_op(block->op);
         uct_bxi_iface_available_add(iface, 1);
 
