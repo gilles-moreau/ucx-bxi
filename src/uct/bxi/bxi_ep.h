@@ -130,7 +130,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_context_t *ctx);
 
 ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        iface,
-                                           uct_tag_context_t *ctx, int force);
+                                           uct_tag_context_t *ctx,
+                                           unsigned           mode);
 
 ucs_status_t uct_bxi_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                        uint32_t swap, uint64_t remote_addr,

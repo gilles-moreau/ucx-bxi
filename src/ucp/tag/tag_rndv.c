@@ -42,8 +42,12 @@ ucs_status_t ucp_tag_rndv_process_rts(ucp_worker_h worker,
     if (rreq != NULL) {
         /* Cancel req in transport if it was offloaded, because it arrived
            as unexpected */
-        ucp_tag_offload_try_cancel(worker, rreq, UCP_TAG_OFFLOAD_CANCEL_FORCE);
-        ucp_tag_rndv_matched(worker, rreq, rts_hdr, length);
+        status = ucp_tag_offload_try_cancel(worker, rreq, UCT_TAG_CANCEL_FORCE | 
+                                            UCT_TAG_CANCEL_MATCHED | 
+                                            (tl_flags & UCT_CB_PARAM_FLAG_HW_RNDV));
+        if (!(status == UCS_INPROGRESS)) {
+            ucp_tag_rndv_matched(worker, rreq, rts_hdr, length);
+        }
 
         UCP_WORKER_STAT_RNDV(worker, RX_EXP, 1);
         return UCS_OK;

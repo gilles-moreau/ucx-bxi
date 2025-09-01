@@ -29,6 +29,7 @@
     _tag;                                                                      \
   })
 
+//FIXME: not needed
 #define UCT_BXI_HDR_GET_LENGTH(_hdr)                                           \
   (size_t)((_hdr >> 4) & 0x00000ffffffffffful)
 
@@ -50,9 +51,8 @@ enum {
 
 /* Operation flags */
 enum {
-  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE  = UCS_BIT(0),
-  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH  = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP = UCS_BIT(2),
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
 };
 
 typedef enum uct_bxi_tag_prot {
@@ -82,21 +82,8 @@ typedef struct uct_bxi_hdr_rndv {
 
 typedef struct uct_bxi_pending_req {
   uct_pending_req_t super;
-  union {
-    struct {
-      uct_bxi_ep_t     *ep;
-      uct_completion_t *comp;
-    } init;
-    struct {
-      uct_bxi_iface_t   *iface; /* Back pointer to interface */
-      ptl_process_t      pid;   /* Initiator PTL identifier */
-      ptl_pt_index_t     pti;   /* Initiator PTE from which RNDV was issued */
-      uct_tag_t          send_tag; /* Initiator tag */
-      size_t             length;   /* Initiator length */
-      void              *buffer;   /* Receive buffer */
-      uct_tag_context_t *ctx;      /* Tag context from upper layer */
-    } tgt;
-  };
+  uct_bxi_ep_t     *ep;
+  uct_completion_t *comp;
 } uct_bxi_pending_req_t;
 
 typedef struct uct_bxi_pending_purge_arg {
@@ -122,6 +109,7 @@ typedef struct uct_bxi_send_op_comp {
 
 typedef struct uct_bxi_iface_send_op {
   unsigned               flags;
+  uct_bxi_iface_t       *iface;     /* Backpointer */
   uct_bxi_mem_desc_t    *mem_desc;  /* MD to be released if trig get */
   uct_bxi_send_op_comp_t comp;      /* Handler called completion */
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
@@ -390,18 +378,22 @@ uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
 }
 
 static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
+{
+  op->flags = 0;
+  uct_bxi_iface_available_add(op->iface, 1);
+
+  ucs_mpool_put_inline(op);
+}
+
+static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
 
   if (--op->comp.comp == 0) {
-    if (!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP)) {
-      op->comp.handler(op, op + 1);
-    }
-
-    /* Reset operation flags. */
-    op->flags = 0;
-    ucs_mpool_put_inline(op);
+    op->comp.handler(op, op + 1);
+    uct_bxi_iface_release_op(op);
   }
 }
 

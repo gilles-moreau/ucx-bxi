@@ -56,7 +56,16 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
 
 void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
 {
-  int ret;
+  int          ret;
+  ucs_status_t status;
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+    ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
+    status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
+    if (status != UCS_OK) {
+      ucs_warn("BXI: tried to cancel attached trig operation. block=%p", block);
+    }
+  }
 
   ret = PtlMEUnlink(block->meh);
   if (ret == PTL_IN_USE && !uct_bxi_recv_block_is_unexpected(block)) {

@@ -803,6 +803,7 @@ err:
     }
 };
 
+//FIXME: add SKIP condition to check if interface support operation offload
 UCS_TEST_P(test_ucp_tag_offload_triggered, pingpong_eager_exp, 
            "TM_THRESH=0")
 {

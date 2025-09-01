@@ -576,13 +576,26 @@ enum uct_msg_flags {
 
 /**
  * @ingroup UCT_TAG
- * @brief Flags for operation offload.
+ * @brief Flags for tag offloading.
  */
 enum uct_tag_flags {
     UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
                                                  generate an operation handle that can 
                                                  be used to enfore dependency with 
                                                  another operation. */
+    UCT_TAG_CANCEL_FORCE      = UCS_BIT(1), /**< Whether to report completions to 
+                                                 @a ctx->completed_cb when cancelling 
+                                                 a posted receive.
+                                                 If nonzero, the cancel is assumed 
+                                                 to be successful, and the callback 
+                                                 is not called. */
+    UCT_TAG_CANCEL_MATCHED    = UCS_BIT(2), /**< Inform the transport that tag has been
+                                                 matched in software. For transports
+                                                 that support unexpected hw matching, 
+                                                 posted receive does not need to be 
+                                                 explicitly cancelled on the hw. */
+    UCT_TAG_CANCEL_HW_RNDV    = UCS_BIT(3), /**< Inform the transport that message  
+                                                 received was for hw rendezvous. */
 };
 
 
@@ -1820,16 +1833,16 @@ struct uct_tag_context {
 
      /** 
       *  Offload Operation Context to setup operation dependencies. If not null, then
-      *  it will be used by the corresponding operation. 
+      *  it will be used by the corresponding operation.
       */ 
      uct_gop_h gop;
 
      /** 
-      * Reply endpoint to enable offloaded rendezvous.
+      * Reply endpoint to enable offloaded rendezvous (only needed for BXI).
       */ 
      uct_ep_h reply_ep;
 
-     /** A placeholder for the private data used by the transport */
+     /** A placeholder for the private data used by the transport. */
      char priv[UCT_TAG_PRIV_LEN];
 };
 
@@ -1837,7 +1850,7 @@ struct uct_tag_context {
  * Operation Context structure for storing generic operation information.
  */
 typedef struct uct_gop {
-    size_t size;
+    size_t size; /* Operation size */
 } uct_gop_t;
 
 
@@ -3620,7 +3633,7 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_zcopy(uct_iface_h iface,
  *                        received despite the cancel request, or
  *                        UCS_ERR_CANCELED which means the tag was successfully
  *                        canceled before it was matched.
- * @param [in]  force     Whether to report completions to @a ctx->completed_cb.
+ * @param [in]  flags     Whether to report completions to @a ctx->completed_cb.
  *                        If nonzero, the cancel is assumed to be successful,
  *                        and the callback is not called.
  *
@@ -3628,9 +3641,9 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_zcopy(uct_iface_h iface,
  */
 UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
                                                       uct_tag_context_t *ctx,
-                                                      int force)
+                                                      unsigned flags)
 {
-    return iface->ops.iface_tag_recv_cancel(iface, ctx, force);
+    return iface->ops.iface_tag_recv_cancel(iface, ctx, flags);
 }
 
 /**

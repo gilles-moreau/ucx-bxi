@@ -4,6 +4,7 @@
  * See file LICENSE for terms.
  */
 
+#include "uct/api/uct_def.h"
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -218,12 +219,13 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
                              dummy_rts + 1, uct_rkeys);
 
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_RNDV);
-        ucp_tag_rndv_process_rts(worker, dummy_rts, dummy_rts_size, 0);
+        ucp_tag_rndv_process_rts(worker, dummy_rts, dummy_rts_size, 
+                                 UCT_CB_PARAM_FLAG_HW_RNDV);
     } else {
         /* Unexpected tag offload rndv request. Sender buffer is either
            non-contig or it's length > rndv.max_zcopy capability of tag lane.
            Pass 0 as tl flags, because RTS needs to be stored in UCP mpool.
-           The header is a full SW RTS packet,
+           The header is a full SW RTS packet.
          */
         ucs_assert(hdr_length >= sizeof(ucp_rndv_rts_hdr_t));
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_SW_RNDV);
@@ -238,28 +240,33 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
     return UCS_OK;
 }
 
-UCS_PROFILE_FUNC_VOID(ucp_tag_offload_cancel, (worker, req, mode),
-                      ucp_worker_t *worker, ucp_request_t *req, unsigned mode)
+UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_cancel, (worker, req, mode),
+                 ucp_worker_t *worker, ucp_request_t *req, unsigned mode)
 {
 
     ucp_worker_iface_t *wiface = req->recv.tag.wiface;
     ucs_status_t status;
 
     ucs_assert(wiface != NULL);
+
     status = uct_iface_tag_recv_cancel(wiface->iface, &req->recv.uct_ctx,
-                                       mode & UCP_TAG_OFFLOAD_CANCEL_FORCE);
-    if (status != UCS_OK) {
+                                       mode);
+    if (status == UCS_INPROGRESS) {
+        return status; 
+    } else if (status != UCS_OK) {
         ucs_error("Failed to cancel recv in the transport: %s",
                   ucs_status_string(status));
-        return;
+        return status;
     }
     UCP_WORKER_STAT_TAG_OFFLOAD(worker, CANCELED);
 
     /* if cancel is not forced, need to wait its completion */
-    if (mode & UCP_TAG_OFFLOAD_CANCEL_FORCE) {
+    if (mode & UCT_TAG_CANCEL_FORCE) {
         ucp_tag_offload_release_buf(req);
         --wiface->post_count;
     }
+
+    return status;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t

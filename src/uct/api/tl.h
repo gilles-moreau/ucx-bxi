@@ -197,7 +197,7 @@ typedef ucs_status_t (*uct_iface_tag_recv_zcopy_func_t)(uct_iface_h iface,
 
 typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
                                                          uct_tag_context_t *ctx,
-                                                         int force);
+                                                         unsigned mode);
 
 typedef ucs_status_t (*uct_iface_tag_gop_create_func_t)(uct_iface_h iface,
                                                         uct_gop_h *gop_p);

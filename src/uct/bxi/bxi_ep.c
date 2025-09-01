@@ -126,15 +126,15 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   ucs_assert(block->send_size > 0);
   ucs_assert(block->size >= block->send_size);
 
-  /* First, invoke tag-related callback. */
-  block->ctx->completed_cb(block->ctx, block->stag, 0, op->mlength, NULL,
-                           UCS_OK);
-
   /* If the rendezvous was offloaded, then the counter has been linked with 
    * the block own MD and thus incremented at the completion of the GET. */
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD) {
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
     uct_bxi_recv_block_update_cnt_value(block, 1);
   }
+
+  /* Invoke tag-related callback. */
+  block->ctx->completed_cb(block->ctx, block->stag, 0, op->mlength, NULL,
+                           UCS_OK);
 
   /* This OP is released by the block release. */
   uct_bxi_recv_block_release(block);
@@ -622,6 +622,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->length = uct_bxi_pack_rndv(iface, op + 1, (uint64_t)ptl_iov->iov_base,
                                  ptl_iov->iov_len, header, header_length);
 
+  //FIXME: not needed, size is already in the packed hdr.
   UCT_BXI_HDR_SET(hdr, ptl_iov->iov_len, UCT_BXI_TAG_PROT_RNDV_HW);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
@@ -660,9 +661,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_bxi_iface_send_op_t *op = (uct_bxi_iface_send_op_t *)tl_op;
 
-  /* Overwrite completion handler. Operation must be completed only if
-   * PTL_EVENT_ACK from rendezvous was also processed. Also decrease 
-   * completion counter by one, if ACK has been received, then */
+  /* Overwrite completion handler. */
   op->comp.handler = uct_bxi_send_rndv_cancel_completion;
 
   // NOTE: Uncertain if PTL_EVENT_ACK from the rendezvous message has
@@ -753,9 +752,9 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 
   /* Update block parameter and threshold in case of OP offload. */
   params->cth     = block->cth;
-  params->options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES;
+  params->options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES_OF;
 
-  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD |
+  block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED |
                   UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
 }
 
@@ -801,24 +800,21 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     return UCS_ERR_NO_RESOURCE;
   }
 
-  /* An operation is needed in case a rendezvous message is received. Completion 
-   * of the OP should be tracked by a counter only if it is offloaded. Tracking 
-   * completion of the GET is only needed when operation is offloaded, thus the 
-   * MD is chosen accordingly.
+  /* An operation is needed in case a rendezvous message is received, because the
+   * rendezvous threshold is configurable at runtime, we always need to allocate it.
+   * Completion of the OP should be tracked by a counter only if it is offloaded. 
+   * Tracking completion of the GET is only needed when operation is offloaded, 
+   * thus the MD is chosen accordingly.
    * Here are the possible paths:
    * - wrong prediction and eager msg was received instead, then the operation 
    *   is not used and just released before block release,
    * - endpoint was not provided, thus the operation is used to complete the 
    *   protocol upon event handling, 
-   * - otherwise, operation will be triggered. 
-   * In this case, block has ownership of the OP and is responsible of releasing
-   * it. */
+   * - otherwise, operation will be triggered. */
   UCT_BXI_IFACE_GET_TX_RNDV_OP_ERR(iface, &iface->tx.send_op_mp, block->op, ep,
                                    block->size, block,
                                    status = UCS_ERR_NO_RESOURCE;
                                    goto err_release_block;);
-  /* Update OP flags and interface available resources. */
-  uct_bxi_iface_op_res(iface, block->op);
   //FIXME: operation completion counter need to be incremented to support the
   //       fact that REPLY event may be handled before the corresponding PUT
   //       even.
@@ -844,7 +840,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
    * the upper layer meaning that the sender may decide to send a rendezvous 
    * control message even though msg_size < eager_limit. As a consequence, 
    * the protocol will be completed during event handling. */
-  if (block->size > iface->config.tm.eager_limit && ep != NULL) {
+  if ((block->size > iface->config.tm.eager_limit) &&
+      (block->size <= iface->config.max_msg_size) && (ep != NULL)) {
     uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &params);
 
     /* Since counter will be used by both the block ME and the MD, the next OP 
@@ -866,6 +863,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     params.cth     = block->cth;
     params.options = UCT_BXI_ME_OPT_RECV_ZCOPY_CNT_BYTES_OF;
 
+    //FIXME: add block attribute for counter incrementation. It would be 0 in
+    //       case it does not need to be tracked. We wouldnt need this flag
+    //       anymore.
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER;
   }
 
@@ -881,54 +881,49 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
     goto err_release_op;
   }
 
+  /* Update interface available resources. */
+  uct_bxi_iface_op_res(iface, block->op);
+
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
   return status;
 
 err_release_op:
-  block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
-  uct_bxi_iface_completion_op(block->op);
+  uct_bxi_iface_release_op(block->op);
 err_release_block:
   uct_bxi_recv_block_release(block);
 err_remove_hash:
-  uct_bxi_iface_tag_del_from_hash(iface, ptl_iov->iov_base);
+  uct_bxi_iface_tag_del_from_hash(iface, iov->buffer);
 err:
   return status;
 }
 
 ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
-                                           uct_tag_context_t *ctx, int force)
+                                           uct_tag_context_t *ctx,
+                                           unsigned           mode)
 {
   ucs_status_t          status = UCS_OK;
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  /* In case of offloaded rendez-vous, a GET operation has been attached. 
-   * Remove all triggered operations attached to this ME. */
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD) {
-    ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
-    status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
-    if (status != UCS_OK) {
-      ucs_warn("BXI: tried to cancel triggered operation attached to block. "
-               "block=%p",
-               block);
-    }
+  /* Upper layer informs that message was treated as unexpected hw rendezvous,
+   * moreover triggered get was offloaded. This means posted receive must 
+   * have matched in the overflow list and triggered it. As a consequence, 
+   * just complete the operation by decrementing the completion counter. */
+  if ((mode & UCT_TAG_CANCEL_HW_RNDV) &
+      (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
+    uct_bxi_iface_completion_op(block->op);
+    status = UCS_INPROGRESS;
+    goto out_unexp_hdr;
   }
 
-  /* Deactivate completion handler of the operation operation and
-   * return it to the pool by completing it. */
-  block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
-  //FIXME: Completion counter needs to be artificially decremented for
-  //       the operation to be put back to the pool, see FIXME in
-  //       recv_zcopy.
-  block->op->comp.comp--;
-  uct_bxi_iface_completion_op(block->op);
-  uct_bxi_iface_available_add(iface, 1);
+  /* Only if message has not already been matched in overflow list, 
+   * unlink block. */
+  if (ucs_unlikely(!(mode & UCT_TAG_CANCEL_MATCHED))) {
+    uct_bxi_recv_block_deactivate(block);
+  }
 
-  /* Unlink block. */
-  uct_bxi_recv_block_deactivate(block);
-
-  if (force) {
+  if (mode & UCT_TAG_CANCEL_FORCE) {
     uct_bxi_iface_tag_del_from_hash(iface, block->start);
     uct_bxi_recv_block_release(block);
   } else {
@@ -938,6 +933,9 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     ucs_list_add_head(&iface->rx.tag.cancel, &block->c_elem);
   }
 
+out_unexp_hdr:
+  //TODO: add test to check recv + recv_cancel to make sure unexp_hdr_count
+  //      does not overflow. This could happen in the later.
   iface->tm.unexp_hdr_count--;
 
   return status;
@@ -1328,7 +1326,7 @@ static ucs_status_t uct_bxi_ep_check_progress(uct_pending_req_t *uct_req)
 {
   uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
 
-  return uct_bxi_ep_check_send(&req->init.ep->super.super, req->init.comp);
+  return uct_bxi_ep_check_send(&req->ep->super.super, req->comp);
 }
 
 ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
@@ -1357,8 +1355,8 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
     return UCS_ERR_NO_MEMORY;
   }
 
-  req->init.ep     = ep;
-  req->init.comp   = comp;
+  req->ep          = ep;
+  req->comp        = comp;
   req->super.func  = uct_bxi_ep_check_progress;
   ep->flags       |= UCT_BXI_EP_KEEP_ALIVE_PENDING;
   status           = uct_bxi_ep_pending_add(&ep->super.super, &req->super, 0);

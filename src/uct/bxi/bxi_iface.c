@@ -255,7 +255,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
 
           /* If rndv was not offloaded, then it must be handled in sw. */
           //NOTE: It has been kept to preserve compatibility with UCX testsuite.
-          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD)) {
+          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
             hdr    = ev->start;
             status = uct_bxi_wrap(PtlGet(
                     iface->tx.mem_desc->mdh, (ptl_size_t)block->start,
@@ -275,18 +275,13 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start,
                               ev->mlength, UCS_OK, 0);
 
-          /* Deactivate completion handler of the operation. */
-          block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
-          //FIXME: Completion counter needs to be artificially decremented for
-          //       the operation to be put back to the pool, see FIXME in
-          //       recv_zcopy.
-          block->op->comp.comp--;
-          uct_bxi_iface_completion_op(block->op);
-          uct_bxi_iface_available_add(iface, 1);
+          uct_bxi_iface_release_op(block->op);
 
           /* In case of offloaded rendez-vous, a GET operation has been 
            * attached. Remove all triggered operations attached to this ME. */
-          if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOAD) {
+          if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+            ucs_warn("BXI: rendezvous was offloaded but received sw rndv");
+
             ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
             status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
             if (status != UCS_OK) {
@@ -305,13 +300,7 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
       } else {
         /* Release the associated operation without calling the handler. Also,
          * increment the available credit. */
-        block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_NOCOMP;
-        //FIXME: Completion counter needs to be artificially decremented for
-        //       the operation to be put back to the pool, see FIXME in
-        //       recv_zcopy.
-        block->op->comp.comp--;
-        uct_bxi_iface_completion_op(block->op);
-        uct_bxi_iface_available_add(iface, 1);
+        uct_bxi_iface_release_op(block->op);
 
         block->send_size = ev->mlength;
         /* Eager expected message completion. */
@@ -688,9 +677,6 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   }
 
 out:
-  /* Update send credits. */
-  uct_bxi_iface_available_add(iface, progressed);
-
   /* With new credits available, dispatch pending queue. */
   uct_pending_queue_dispatch(priv, &iface->tx.pending_q, 1);
 
@@ -1164,7 +1150,10 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t         *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
 
+  op->iface = iface;
   op->flags = 0;
 }
 
@@ -1172,6 +1161,22 @@ static ucs_mpool_ops_t uct_bxi_send_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
         .obj_init      = uct_bxi_iface_send_init,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
+void uct_bxi_iface_send_comp_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tx.send_op_mp);
+
+  op->iface = iface;
+  op->flags = 0;
+}
+
+static ucs_mpool_ops_t uct_bxi_send_comp_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_comp_init,
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
@@ -1203,7 +1208,7 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
   mp_params.max_elems       = config->tx.max_queue_len;
   mp_params.elem_size       = sizeof(uct_bxi_iface_send_op_t);
   mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
-  mp_params.ops             = &uct_bxi_send_mpool_ops;
+  mp_params.ops             = &uct_bxi_send_comp_mpool_ops;
   mp_params.name            = "send-comp-ops";
   mp_params.grow_factor     = config->tx.mp.grow_factor;
 
