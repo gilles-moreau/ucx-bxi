@@ -380,9 +380,14 @@ uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
-  op->flags = 0;
+  //FIXME: think of avoiding this branch here.
+  if (ucs_unlikely(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH)) {
+    goto out_release;
+  }
   uct_bxi_iface_available_add(op->iface, 1);
 
+out_release:
+  op->flags = 0;
   ucs_mpool_put_inline(op);
 }
 

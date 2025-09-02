@@ -199,9 +199,9 @@ public:
                                         iov, iovcnt, &ctx.uct_ctx);
     }
 
-    ucs_status_t tag_cancel(entity &e, recv_ctx &ctx, int force)
+    ucs_status_t tag_cancel(entity &e, recv_ctx &ctx, unsigned mode)
     {
-        return uct_iface_tag_recv_cancel(e.iface(), &ctx.uct_ctx, force);
+        return uct_iface_tag_recv_cancel(e.iface(), &ctx.uct_ctx, mode);
     }
 
 
@@ -408,7 +408,7 @@ public:
         // Message should be reported as unexpected and filled with
         // recv seed (unchanged), as the incoming tag does not match the expected
         check_rx_completion(r_ctx, false, RECV_SEED);
-        ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, 1));
+        ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, UCT_TAG_CANCEL_FORCE));
         flush();
     }
 
@@ -694,7 +694,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_cancel_force,
 
     ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
     short_progress_loop(200);
-    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, 1));
+    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, UCT_TAG_CANCEL_FORCE));
 
     short_progress_loop();
 
@@ -752,7 +752,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_limit,
     EXPECT_EQ(status, UCS_ERR_EXCEEDS_LIMIT);
 
     // Cancel one of the postings
-    ASSERT_UCS_OK(tag_cancel(receiver(), rctxs.at(0), 1));
+    ASSERT_UCS_OK(tag_cancel(receiver(), rctxs.at(0), UCT_TAG_CANCEL_FORCE));
     short_progress_loop();
 
     // Check we can post again within a reasonable time
@@ -765,7 +765,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_limit,
     // remove posted tags from HW
     for (ucs::ptr_vector<recv_ctx>::const_iterator iter = rctxs.begin();
          iter != rctxs.end() - 1; ++iter) {
-        ASSERT_UCS_OK(tag_cancel(receiver(), **iter, 1));
+        ASSERT_UCS_OK(tag_cancel(receiver(), **iter, UCT_TAG_CANCEL_FORCE));
     }
 }
 
@@ -784,7 +784,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_post_same,
     EXPECT_EQ(status, UCS_ERR_ALREADY_EXISTS);
 
     // Cancel with force, should be able to re-post immediately
-    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, 1));
+    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, UCT_TAG_CANCEL_FORCE));
     ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
     // Cancel without force, should be able to re-post when receive completion
@@ -805,7 +805,7 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_post_same,
     wait_for_flag(&r_ctx.comp); // message consumed, should be able to post
     ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
-    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, 1));
+    ASSERT_UCS_OK(tag_cancel(receiver(), r_ctx, UCT_TAG_CANCEL_FORCE));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, sw_rndv_expected,

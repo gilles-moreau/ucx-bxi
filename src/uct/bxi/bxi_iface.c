@@ -9,7 +9,7 @@
 #include <ucs/sys/math.h>
 
 #define UCT_PTL_IFACE_OVERHEAD 10e-8
-#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(80e-8, 0)
+#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(800e-9, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
@@ -280,8 +280,6 @@ static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
           /* In case of offloaded rendez-vous, a GET operation has been 
            * attached. Remove all triggered operations attached to this ME. */
           if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
-            ucs_warn("BXI: rendezvous was offloaded but received sw rndv");
-
             ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
             status = uct_bxi_wrap(PtlCTCancelTriggered(block->cth));
             if (status != UCS_OK) {
@@ -423,8 +421,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
   attr->latency             = UCT_PTL_IFACE_LATENCY;
-  attr->bandwidth.dedicated = 8192 * UCS_MBYTE;
-  attr->bandwidth.shared    = 0;
+  attr->bandwidth.dedicated = 0;
+  attr->bandwidth.shared    = 10 * UCS_GBYTE;
   attr->overhead            = UCT_PTL_IFACE_OVERHEAD;
   attr->priority            = 1;
 
@@ -909,7 +907,8 @@ static void uct_bxi_iface_recv_block_cleanup(ucs_mpool_t *mp, void *obj)
 
   uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
   if (ct_value.success != block->ct_value) {
-    ucs_error("BXI: error tracking ct value.");
+    ucs_error("BXI: error tracking ct value. exp=%lu, val=%lu",
+              ct_value.success, block->ct_value);
   }
 
   ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
@@ -1180,10 +1179,20 @@ static ucs_mpool_ops_t uct_bxi_send_comp_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
+void uct_bxi_iface_send_flush_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t         *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.flush_ops_mp);
+
+  op->iface = iface;
+  op->flags = 0;
+}
+
 static ucs_mpool_ops_t uct_bxi_send_flush_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = NULL,
+        .obj_init      = uct_bxi_iface_send_flush_init,
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 

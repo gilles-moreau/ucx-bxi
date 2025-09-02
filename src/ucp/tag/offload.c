@@ -219,6 +219,7 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
                              dummy_rts + 1, uct_rkeys);
 
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_RNDV);
+        //FIXME: UCT_CB_PARAM_FLAG_HW_RNDV is not completely needed.
         ucp_tag_rndv_process_rts(worker, dummy_rts, dummy_rts_size, 
                                  UCT_CB_PARAM_FLAG_HW_RNDV);
     } else {

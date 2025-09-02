@@ -902,25 +902,35 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
                                            uct_tag_context_t *ctx,
                                            unsigned           mode)
 {
-  ucs_status_t          status = UCS_OK;
-  uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
-  uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+  uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  /* Upper layer informs that message was treated as unexpected hw rendezvous,
-   * moreover triggered get was offloaded. This means posted receive must 
-   * have matched in the overflow list and triggered it. As a consequence, 
-   * just complete the operation by decrementing the completion counter. */
-  if ((mode & UCT_TAG_CANCEL_HW_RNDV) &
-      (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
-    uct_bxi_iface_completion_op(block->op);
-    status = UCS_INPROGRESS;
-    goto out_unexp_hdr;
-  }
+  /* Posted receive was matched in overflow list, unexpected header was then 
+   * consumed and ME unlinked already. Decrement counter to notify 
+   * uct_bxi_iface_handle_tag_events. */
+  if (mode & UCT_TAG_CANCEL_MATCHED) {
+    //TODO: add test to check recv + recv_cancel to make sure unexp_hdr_count
+    //      does not overflow. This could happen in the later.
+    iface->tm.unexp_hdr_count--;
 
-  /* Only if message has not already been matched in overflow list, 
-   * unlink block. */
-  if (ucs_unlikely(!(mode & UCT_TAG_CANCEL_MATCHED))) {
+    /* Upper layer informs that message was treated as unexpected hw rendezvous,
+     * moreover triggered get was offloaded. This means posted receive must 
+     * have matched in the overflow list and triggered it. As a consequence, 
+     * just complete the operation by decrementing the completion counter. */
+    if ((mode & UCT_TAG_CANCEL_HW_RNDV) &&
+        (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
+      uct_bxi_iface_tag_del_from_hash(iface, block->start);
+      uct_bxi_recv_block_update_cnt_value(block,
+                                          iface->config.tm.eager_limit + 1);
+      uct_bxi_iface_completion_op(block->op);
+      return UCS_INPROGRESS;
+    } else {
+      uct_bxi_iface_release_op(block->op);
+    }
+  } else {
+    /* Otherwise, block needs to be explicitely unlinked. */
     uct_bxi_recv_block_deactivate(block);
+    uct_bxi_iface_release_op(block->op);
   }
 
   if (mode & UCT_TAG_CANCEL_FORCE) {
@@ -933,12 +943,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     ucs_list_add_head(&iface->rx.tag.cancel, &block->c_elem);
   }
 
-out_unexp_hdr:
-  //TODO: add test to check recv + recv_cancel to make sure unexp_hdr_count
-  //      does not overflow. This could happen in the later.
-  iface->tm.unexp_hdr_count--;
-
-  return status;
+  return UCS_OK;
 }
 
 ucs_status_t uct_bxi_iface_tag_gop_create(uct_iface_h tl_iface,

@@ -472,6 +472,42 @@ UCS_TEST_P(test_ucp_tag_offload, eager_multi_recv,
     request_wait(rreq);
 }
 
+// Test that a posted request is cancelled during the handling of the 
+// corresponding unexpected message.
+UCS_TEST_P(test_ucp_tag_offload, rndv_recv_matched_cancel)
+{
+    activate_offload(sender());
+
+    size_t length = ucp_ep_config(sender().ep())->tag.eager.max_bcopy + 1;
+    const ucp_tag_t tag = 0x11;
+    std::vector<uint8_t> sendbuf(length);
+
+    send_recv(sender(), tag, length);
+
+    ucp_request_param_t param = {};
+    ucs_status_ptr_t sreq     = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
+                                                 sendbuf.size(), tag, &param);
+
+    // Tweak progress only the sender to make sure the rndv control message 
+    // has arrived but has not been pushed to unexpected least on the receiver.
+    for (int i = 0; i < 3; ++i) {
+        progress({&sender()});
+    }
+
+    if (need_reply_ep()) {
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_EPH;
+        param.reply_ep = receiver().ep(0);
+    }
+
+    std::vector<uint8_t> recvbuf(length);
+    ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                                             length, tag, 0xffff, &param);
+    EXPECT_EQ(0u, receiver().worker()->tm.expected.sw_all_count);
+
+    request_wait(sreq);
+    request_wait(rreq);
+}
+
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload)
 
 class test_ucp_tag_offload_triggered : public test_ucp_tag_offload {
@@ -486,7 +522,8 @@ public:
     {
         if (disable_proto() || !need_reply_ep()) {
             UCS_TEST_SKIP_R("Triggered operation not supported with old "
-                            "protocol.");
+                            "protocol and only supported with reply ep "
+                            "variant.");
         }
         test_ucp_tag_offload::init();
     }
