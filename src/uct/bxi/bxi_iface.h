@@ -40,11 +40,6 @@
   _hdr  = (_hdr << 4);                                                         \
   _hdr |= ((_prot) & 0xf)
 
-static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv(ptl_hdr_data_t hdr)
-{
-  return (((hdr & 0xffff000000000000) >> 48) == UCT_BXI_RNDV_PREFIX);
-}
-
 enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
 };
@@ -54,12 +49,6 @@ enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
 };
-
-typedef enum uct_bxi_tag_prot {
-  UCT_BXI_TAG_PROT_EAGER = 0,
-  UCT_BXI_TAG_PROT_RNDV_HW,
-  UCT_BXI_TAG_PROT_RNDV_SW,
-} uct_bxi_tag_prot_t;
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
@@ -74,9 +63,8 @@ typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
 
 typedef struct uct_bxi_hdr_rndv {
-  uint64_t       remote_addr;
   size_t         length;
-  size_t         header_length;
+  unsigned int   header_length;
   ptl_pt_index_t pti;
 } uct_bxi_hdr_rndv_t;
 
@@ -224,6 +212,7 @@ typedef struct uct_bxi_iface {
       unsigned int max_gop;     /* Maximum number of generic operation */
       unsigned int max_tags;    /* Maximum number of hw matching descriptors */
       int          max_zcopy;   /* Maximum payload size for zcopy */
+      unsigned     max_hdr;     /* Maximum header size for rndv send */
     } tm;
 
     size_t iface_addr_size;
@@ -245,6 +234,7 @@ typedef struct uct_bxi_iface {
     } rndv_unexp;
     ucs_mpool_t  recv_block_mp;
     unsigned int unexp_hdr_count;
+    unsigned int rndv_hw_offset;
   } tm;
 
   struct {
@@ -380,13 +370,7 @@ uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
-  //FIXME: think of avoiding this branch here.
-  if (ucs_unlikely(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH)) {
-    goto out_release;
-  }
   uct_bxi_iface_available_add(op->iface, 1);
-
-out_release:
   op->flags = 0;
   ucs_mpool_put_inline(op);
 }
@@ -400,6 +384,22 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
     op->comp.handler(op, op + 1);
     uct_bxi_iface_release_op(op);
   }
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_release_flush_op(uct_bxi_iface_send_op_t *op)
+{
+  op->flags = 0;
+  ucs_mpool_put_inline(op);
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_completion_flush_op(uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
+
+  op->comp.handler(op, op + 1);
+  uct_bxi_iface_release_flush_op(op);
 }
 
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];

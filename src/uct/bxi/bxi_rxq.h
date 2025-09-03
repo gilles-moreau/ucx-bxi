@@ -4,11 +4,15 @@
 #include <uct/base/uct_iface.h>
 #include <uct/bxi/bxi.h>
 
-typedef struct uct_bxi_rxq    uct_bxi_rxq_t;
-typedef struct uct_bxi_op_ctx uct_bxi_op_ctx_t;
+typedef struct uct_bxi_rxq        uct_bxi_rxq_t;
+typedef struct uct_bxi_op_ctx     uct_bxi_op_ctx_t;
+typedef struct uct_bxi_recv_block uct_bxi_recv_block_t;
 
 typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
                                                ptl_event_t     *ev);
+typedef ucs_status_t (*uct_bxi_block_handler)(uct_bxi_iface_t      *iface,
+                                              uct_bxi_recv_block_t *block,
+                                              ptl_event_t          *ev);
 
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED = UCS_BIT(0),
@@ -24,27 +28,24 @@ typedef struct uct_bxi_recv_block_params {
   ptl_handle_ct_t  cth;
 } uct_bxi_recv_block_params_t;
 
-typedef struct uct_bxi_comp_cnt {
-  ptl_handle_ct_t cth;
-  ptl_size_t      threshold;
-} uct_bxi_comp_cnt_t;
-
 typedef struct uct_bxi_recv_block {
-  unsigned           flags;
-  void              *start;       /* Address of the receive block */
-  size_t             size;        /* Size of the receive block */
-  size_t             send_size;   /* Actual size sent on the receive block */
-  size_t             eager_limit; /* Eager limit */
-  uct_bxi_rxq_t     *rxq;         /* Back reference to the RX Queue */
-  ucs_list_link_t    c_elem;      /* Element in the cancel list */
-  uct_tag_t          tag;         /* Needed in case block is cancelled */
-  uct_tag_t          stag;        /* Send tag */
-  ptl_list_t         list;        /* Portals list: OVERFLOW or PRIORITY */
-  uct_tag_context_t *ctx;         /* Tag context provided by upper layer */
-  ptl_handle_me_t    meh;         /* Memory Entry handle */
-  ptl_handle_ct_t    cth;         /* Counter handle associated to the block */
-  ptl_handle_md_t    mdh;         /* Memory Descriptor used for GET */
-  ptl_size_t         ct_value;    /* SW counter tracking HW counter */
+  unsigned              flags;
+  void                 *start;       /* Address of the receive block */
+  size_t                size;        /* Size of the receive block */
+  size_t                send_size;   /* Actual size sent on the receive block */
+  size_t                eager_limit; /* Eager limit */
+  uct_bxi_rxq_t        *rxq;         /* Back reference to the RX Queue */
+  ucs_list_link_t       c_elem;      /* Element in the cancel list */
+  uct_tag_t             tag;         /* Needed in case block is cancelled */
+  uct_tag_t             stag;        /* Send tag */
+  uct_bxi_block_handler handler;     /* Receive block handler on event */
+  ptl_list_t            list;        /* Portals list: OVERFLOW or PRIORITY */
+  uct_tag_context_t    *ctx;         /* Tag context provided by upper layer */
+  ptl_handle_me_t       meh;         /* Memory Entry handle */
+  ptl_handle_ct_t       cth;      /* Counter handle associated to the block */
+  ptl_handle_md_t       mdh;      /* Memory Descriptor used for GET */
+  ptl_size_t            ct_value; /* SW counter tracking HW counter */
+  ptl_size_t            ct_inc;   /* Increment to be applied on completion */
   uct_bxi_iface_send_op_t *op;    /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
@@ -53,15 +54,16 @@ enum {
 };
 
 typedef struct uct_bxi_rxq_param {
-  unsigned                 flags;    /* Flags to influence RXQ creation */
-  uct_iface_mpool_config_t mp;       /* RX Memory pool configuration */
-  ptl_list_t               list;     /* Portals priority list */
-  char                    *name;     /* Name used of memory pool */
-  uct_bxi_rxq_ev_handler   handler;  /* Event handler called when polling RX */
-  int                      num_segs; /* Number of segment per receive block */
-  size_t                   seg_size; /* Segment size */
-  ptl_handle_ni_t          nih;
-  ptl_handle_eq_t          eqh;
+  unsigned                 flags;     /* Flags to influence RXQ creation */
+  uct_iface_mpool_config_t mp;        /* RX Memory pool configuration */
+  ptl_list_t               list;      /* Portals priority list */
+  char                    *name;      /* Name used of memory pool */
+  uct_bxi_rxq_ev_handler rxq_handler; /* Event handler called when polling RX */
+  uct_bxi_block_handler  b_handler;   /* Block handler called based on list */
+  int                    num_segs;    /* Number of segment per receive block */
+  size_t                 seg_size;    /* Segment size */
+  ptl_handle_ni_t        nih;
+  ptl_handle_eq_t        eqh;
 } uct_bxi_rxq_param_t;
 
 typedef struct uct_bxi_rxq {
@@ -108,6 +110,13 @@ uct_bxi_recv_block_update_cnt_value(uct_bxi_recv_block_t *block,
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER) {
     block->ct_value += mlength;
   }
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_recv_block_cancel_triggered(uct_bxi_recv_block_t *block)
+{
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_CT_NONE));
+  PtlCTCancelTriggered(block->cth);
 }
 
 #endif

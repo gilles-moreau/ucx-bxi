@@ -94,6 +94,7 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
    * hit integer overflow problems. Since PtlCTSet is blocking, do it just 
    * before overflow happens.
    * */
+  //TODO: add a test
   if (uct_bxi_is_overflow(block->ct_value, block->eager_limit)) {
     status = uct_bxi_wrap(PtlCTSet(block->cth, UCT_BXI_CT_INIT));
     if (status != UCS_OK) {

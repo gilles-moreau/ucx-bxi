@@ -437,7 +437,7 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
     UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                      uct_bxi_send_comp_op_handler, 0);
 
-    status = uct_bxi_wrap(PtlTriggeredPutNB(
+    status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
             ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cth,
             gop->ct_value));
@@ -501,7 +501,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
   if (flags & UCT_TAG_OFFLOAD_OPERATION) {
-    status = uct_bxi_wrap(PtlTriggeredPutNB(
+    status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
             tag, 0, op, imm, gop->cth, gop->ct_value));
@@ -606,10 +606,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Rendez-vous operation will creates two events: 
    * - PTL_EVENT_ACK: acknowledge the reception of the first control message
-   * - PTL_EVENT_GET: target GET operation has issued the GET operation and 
-   *                  has retrieved the data.
+   * - PTL_EVENT_GET/PTL_EVENT_PUT: target has issued the GET operation and 
+   *   has retrieved the data or first message was received as unexpected, 
+   *   thus initiator will receive a PUT event and rendezvous will be 
+   *   cancelled.
    * Therefore, we increment the completion counter so that the operation is 
-   * actually completed on the PTL_EVENT_GET. */
+   * actually completed when both of them were treated. */
   op->comp.comp++;
 
   /* Attach operation to block and vice versa so they can be both released, 
@@ -630,7 +632,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
      * triggered. */
     ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredPutNB(
+    status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
             PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
             gop->cth, gop->ct_value));
@@ -996,8 +998,8 @@ ucs_status_t uct_bxi_iface_tag_gop_depends_on(uct_iface_h tl_iface,
 
     ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredCTIncNB(gop->cth, (ptl_ct_event_t){1, 0},
-                                              tmp_gop->cth, tmp_gop->ct_value));
+    status = uct_bxi_wrap(PtlTriggeredCTInc(gop->cth, (ptl_ct_event_t){1, 0},
+                                            tmp_gop->cth, tmp_gop->ct_value));
     if (status != UCS_OK) {
       ucs_fatal("BXI: failed setting trig inc.");
     }
