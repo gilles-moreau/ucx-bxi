@@ -15,8 +15,8 @@ typedef ucs_status_t (*uct_bxi_block_handler)(uct_bxi_iface_t      *iface,
                                               ptl_event_t          *ev);
 
 enum {
-  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED = UCS_BIT(0),
-  UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER  = UCS_BIT(1),
+  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED  = UCS_BIT(0),
+  UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(1)
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -54,16 +54,15 @@ enum {
 };
 
 typedef struct uct_bxi_rxq_param {
-  unsigned                 flags;     /* Flags to influence RXQ creation */
-  uct_iface_mpool_config_t mp;        /* RX Memory pool configuration */
-  ptl_list_t               list;      /* Portals priority list */
-  char                    *name;      /* Name used of memory pool */
-  uct_bxi_rxq_ev_handler rxq_handler; /* Event handler called when polling RX */
-  uct_bxi_block_handler  b_handler;   /* Block handler called based on list */
-  int                    num_segs;    /* Number of segment per receive block */
-  size_t                 seg_size;    /* Segment size */
-  ptl_handle_ni_t        nih;
-  ptl_handle_eq_t        eqh;
+  unsigned                 flags;    /* Flags to influence RXQ creation */
+  uct_iface_mpool_config_t mp;       /* RX Memory pool configuration */
+  ptl_list_t               list;     /* Portals priority list */
+  char                    *name;     /* Name used of memory pool */
+  uct_bxi_block_handler    handler;  /* Block handler called based on list */
+  int                      num_segs; /* Number of segment per receive block */
+  size_t                   seg_size; /* Segment size */
+  ptl_handle_ni_t          nih;
+  ptl_handle_eq_t          eqh;
 } uct_bxi_rxq_param_t;
 
 typedef struct uct_bxi_rxq {
@@ -78,9 +77,9 @@ typedef struct uct_bxi_rxq {
     ptl_size_t   blk_min_free;
     unsigned     num_blk;
   } config;
-  ucs_mpool_t            mp;      /* Memory pool of block buffer */
-  ucs_list_link_t        bhead;   /* List of allocated blocks */
-  uct_bxi_rxq_ev_handler handler; /* Event handler when RXQ is polled. */
+  ucs_mpool_t           mp;      /* Memory pool of block buffer */
+  ucs_list_link_t       bhead;   /* List of allocated blocks */
+  uct_bxi_block_handler handler; /* Block handler called based on list */
 } uct_bxi_rxq_t;
 
 ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
@@ -104,12 +103,9 @@ uct_bxi_recv_block_is_unexpected(uct_bxi_recv_block_t *block)
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_recv_block_update_cnt_value(uct_bxi_recv_block_t *block,
-                                    ptl_size_t            mlength)
+uct_bxi_recv_block_update_cnt(uct_bxi_recv_block_t *block, ptl_size_t inc)
 {
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_TRACK_COUNTER) {
-    block->ct_value += mlength;
-  }
+  block->ct_value += inc;
 }
 
 static UCS_F_ALWAYS_INLINE void

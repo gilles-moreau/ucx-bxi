@@ -13,32 +13,18 @@
 #define UCT_BXI_RNDV_NID_MASK 0xffffff
 #define UCT_BXI_RNDV_PID_MASK 0xffffff
 
-#define UCT_BXI_RNDV_PREFIX     0xbabe
+#define UCT_BXI_RNDV_SW_HDR     0xdeadbeefdeadbeef
 #define UCT_BXI_RNDV_MAX_LENGTH (((size_t)1 << 44) - 1)
 
 /* ME match bits is based on the remote PID. */
 #define UCT_BXI_BUILD_RNDV_TAG(_pid)                                           \
   ({                                                                           \
     uint64_t _tag  = 0;                                                        \
-    _tag           = UCT_BXI_RNDV_PREFIX;                                      \
-    _tag           = _tag << 16;                                               \
     _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
-    _tag           = _tag << 24;                                               \
+    _tag           = _tag << 32;                                               \
     _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
-    _tag           = _tag << 24;                                               \
     _tag;                                                                      \
   })
-
-//FIXME: not needed
-#define UCT_BXI_HDR_GET_LENGTH(_hdr)                                           \
-  (size_t)((_hdr >> 4) & 0x00000ffffffffffful)
-
-#define UCT_BXI_HDR_SET(_hdr, _length, _prot)                                  \
-  _hdr  = UCT_BXI_RNDV_PREFIX;                                                 \
-  _hdr  = (_hdr << 44);                                                        \
-  _hdr |= ((_length) & 0xfffffffffff);                                         \
-  _hdr  = (_hdr << 4);                                                         \
-  _hdr |= ((_prot) & 0xf)
 
 enum {
   UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
@@ -234,7 +220,7 @@ typedef struct uct_bxi_iface {
     } rndv_unexp;
     ucs_mpool_t  recv_block_mp;
     unsigned int unexp_hdr_count;
-    unsigned int rndv_hw_offset;
+    unsigned int rndv_hdr_offset;
   } tm;
 
   struct {
@@ -264,7 +250,6 @@ typedef struct uct_bxi_iface {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;
     } rma;
-    khash_t(uct_bxi_rxq) queues; /* Hash table of RX Queues */
   } rx;
 
   khash_t(uct_bxi_eps) eps;
@@ -294,6 +279,8 @@ ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 void         uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
+ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
+        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev);
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
@@ -544,11 +531,12 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _rxq, _start,    \
                                           _size, _tag, _ctx, _err_code)        \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
-  (_desc)->rxq   = _rxq;                                                       \
-  (_desc)->start = _start;                                                     \
-  (_desc)->size  = _size;                                                      \
-  (_desc)->tag   = _tag;                                                       \
-  (_desc)->ctx   = _ctx
+  (_desc)->rxq    = _rxq;                                                      \
+  (_desc)->start  = _start;                                                    \
+  (_desc)->size   = _size;                                                     \
+  (_desc)->tag    = _tag;                                                      \
+  (_desc)->ctx    = _ctx;                                                      \
+  (_desc)->ct_inc = 0;
 
 #define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
   UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \

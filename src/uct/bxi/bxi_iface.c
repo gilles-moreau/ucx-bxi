@@ -13,10 +13,6 @@
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
-/* Forward function declaration. */
-static ucs_status_t uct_bxi_iface_get_rxq(uct_bxi_iface_t *iface,
-                                          ptl_pt_index_t   pti,
-                                          uct_bxi_rxq_t  **rxq_p);
 
 static char *uct_bxi_event_str[] = {
         [PTL_EVENT_GET]                   = "PTL_EVENT_GET",
@@ -117,7 +113,7 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_hw(uct_bxi_iface_t *iface,
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_sw(ptl_hdr_data_t hdr)
 {
-  return (((hdr & 0xffff000000000000) >> 48) == UCT_BXI_RNDV_PREFIX);
+  return hdr == UCT_BXI_RNDV_SW_HDR;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
@@ -150,9 +146,8 @@ uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag)
   return status;
 }
 
-static ucs_status_t
-uct_bxi_iface_block_handle_unexp(uct_bxi_iface_t      *iface,
-                                 uct_bxi_recv_block_t *block, ptl_event_t *ev)
+static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
+        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev)
 {
   ucs_status_t        status;
   uct_bxi_hdr_rndv_t *hdr;
@@ -160,11 +155,9 @@ uct_bxi_iface_block_handle_unexp(uct_bxi_iface_t      *iface,
   iface->tm.unexp_hdr_count++;
 
   if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
-    /* Header is located at the end of the message. */
-    hdr = UCS_PTR_BYTE_OFFSET(ev->start, iface->config.tm.eager_limit + 1 -
-                                                 iface->config.tm.max_hdr);
 
-    //NOTE: remote address is in hdr data.
+    hdr = UCS_PTR_BYTE_OFFSET(ev->start, iface->tm.rndv_hdr_offset);
+
     status =
             iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
                                     (const void *)(hdr + 1), hdr->header_length,
@@ -197,9 +190,9 @@ out:
   return status;
 }
 
-static ucs_status_t uct_bxi_iface_block_handle_exp(uct_bxi_iface_t      *iface,
-                                                   uct_bxi_recv_block_t *block,
-                                                   ptl_event_t          *ev)
+static ucs_status_t
+uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
+                                   uct_bxi_recv_block_t *block, ptl_event_t *ev)
 {
   ucs_status_t        status = UCS_OK;
   uct_bxi_hdr_rndv_t *hdr;
@@ -212,27 +205,29 @@ static ucs_status_t uct_bxi_iface_block_handle_exp(uct_bxi_iface_t      *iface,
   block->ctx->tag_consumed_cb(block->ctx);
   uct_bxi_iface_tag_del_from_hash(iface, block->start);
 
-  uct_bxi_recv_block_update_cnt_value(block, ev->mlength);
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
+    uct_bxi_recv_block_update_cnt(block, ev->mlength);
+  }
 
   /* Now, perform protocol specific actions. */
   if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
 
+    hdr = UCS_PTR_BYTE_OFFSET(ev->start, iface->tm.rndv_hdr_offset);
+
     /* In case of hw rendezvous, we need to save stag so it can given 
      * later during completion. */
-    block->stag = ev->match_bits;
+    block->stag      = ev->match_bits;
+    block->send_size = hdr->length;
 
     /* If rndv was not offloaded, then it must be handled in sw. */
     //NOTE: It has been kept to preserve compatibility with UCX testsuite.
     if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
-      /* Header is located at the end of the message. */
-      hdr = UCS_PTR_BYTE_OFFSET(ev->start, iface->tm.rndv_hw_offset);
-
       /* Retrieve from the GET data that was sent eagerly. */
       start = (ptl_size_t)UCS_PTR_BYTE_OFFSET(ev->start,
-                                              iface->tm.rndv_hw_offset);
+                                              iface->tm.rndv_hdr_offset);
       /* Are there still data to be fetched? 0 length does not happen, 
        * expected for unit tests. */
-      length = ucs_max(hdr->length - iface->tm.rndv_hw_offset, 0);
+      length = ucs_max(hdr->length - iface->tm.rndv_hdr_offset, 0);
 
       status = uct_bxi_wrap(PtlGet(
               iface->tx.mem_desc->mdh, start, length, ev->initiator, hdr->pti,
@@ -273,116 +268,41 @@ static ucs_status_t uct_bxi_iface_block_handle_exp(uct_bxi_iface_t      *iface,
   return status;
 }
 
+ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
+        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev)
+{
+  ucs_assert(ev->type = PTL_EVENT_PUT_OVERFLOW);
+
+  uct_bxi_iface_tag_del_from_hash(iface, block->start);
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
+    uct_bxi_recv_block_update_cnt(block, ev->mlength);
+  }
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+    /* Copy the first eager part that was sent on the first message of the 
+   * protocol and which was received in the overflow block. */
+    memcpy(block->start, ev->start, iface->tm.rndv_hdr_offset);
+
+    /* Matching is completed so decrement once the operation. */
+    uct_bxi_iface_completion_op(block->op);
+  }
+
+  return UCS_OK;
+}
+
 static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
                                                   ptl_event_t          *ev)
 {
-  ucs_status_t status = UCS_OK;
-  uint8_t      am_id  = ev->match_bits;
+  ucs_status_t status;
+  uint8_t      am_id = ev->match_bits;
 
   status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
 
   uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
                          ev->mlength);
 
-  return status;
-}
-
-static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
-                                                   ptl_event_t     *ev)
-{
-  ucs_status_t          status = UCS_OK;
-  uint8_t               am_id  = ev->match_bits;
-  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
-
-  switch (ev->type) {
-  case PTL_EVENT_PUT:
-    status = block->handler(iface, block, ev);
-    break;
-  case PTL_EVENT_AUTO_UNLINK:
-    /* One block has been unlinked since it is full. All received data has 
-       * been processed at that point. */
-    status = uct_bxi_recv_block_activate(block, NULL);
-    break;
-  case PTL_EVENT_PUT_OVERFLOW:
-  case PTL_EVENT_LINK:
-  case PTL_EVENT_GET_OVERFLOW:
-  case PTL_EVENT_GET:
-  case PTL_EVENT_AUTO_FREE:
-  case PTL_EVENT_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC:
-  case PTL_EVENT_SEARCH:
-  case PTL_EVENT_SEND:
-  case PTL_EVENT_REPLY:
-  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ACK:
-    ucs_error("BXI: event %s should not have been triggered",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    break;
-  case PTL_EVENT_PT_DISABLED:
-    ucs_error("BXI: event %s. RX Control flow not implemented.",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_OK;
-    break;
-  default:
-    break;
-  }
-
-  return status;
-}
-
-static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
-                                                    ptl_event_t     *ev)
-{
-  ucs_status_t          status = UCS_OK;
-  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
-
-  // TODO: check for truncated messages
-  switch (ev->type) {
-  case PTL_EVENT_PUT:
-  case PTL_EVENT_GET:
-    status = block->handler(iface, block, ev);
-    break;
-    /* Block was posted during rendez-vous. Event means target has successfully
-     * read data, initiator's operation can thus be completed. */
-    uct_bxi_iface_completion_op(block->op);
-    /* Block for GET has been consumed, it can be safely released and reused. */
-    uct_bxi_recv_block_release(block);
-    break;
-  case PTL_EVENT_AUTO_UNLINK:
-  case PTL_EVENT_AUTO_FREE:
-    /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
-     * Link it back, all included data has been processed already. */
-    status = uct_bxi_recv_block_activate(block, NULL);
-    break;
-  case PTL_EVENT_PT_DISABLED:
-    ucs_error("PTL: event %s. Control flow not implemented.",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    goto err;
-    break;
-  case PTL_EVENT_LINK:
-  case PTL_EVENT_PUT_OVERFLOW:
-  case PTL_EVENT_GET_OVERFLOW:
-  case PTL_EVENT_ACK:
-  case PTL_EVENT_REPLY:
-  case PTL_EVENT_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ATOMIC_OVERFLOW:
-  case PTL_EVENT_SEARCH:
-  case PTL_EVENT_SEND:
-    ucs_error("PTL: event %s should not have been triggered",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    break;
-  default:
-    break;
-  }
-
-err:
   return status;
 }
 
@@ -541,10 +461,11 @@ uct_bxi_iface_tag_flush_cancel(uct_bxi_iface_t *iface)
 
 static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 {
-  unsigned       progressed = 0;
-  ptl_event_t    ev;
-  int            ret;
-  uct_bxi_rxq_t *rxq;
+  ucs_status_t          status     = UCS_OK;
+  unsigned              progressed = 0;
+  ptl_event_t           ev;
+  int                   ret;
+  uct_bxi_recv_block_t *block;
 
   while (1) {
     ret = PtlEQGet(iface->rx.eqh, &ev);
@@ -557,12 +478,50 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
                 ev.initiator.phys.pid);
 
-      /* Get RX Queue from Portals Table Index */
-      uct_bxi_iface_get_rxq(iface, ev.pt_index, &rxq);
+      block = (uct_bxi_recv_block_t *)ev.user_ptr;
 
-      /* Handle the event. */
-      //FIXME: progressed is unused
-      progressed += rxq->handler(iface, &ev);
+      switch (ev.type) {
+      case PTL_EVENT_PUT:
+      case PTL_EVENT_GET:
+        status = block->handler(iface, block, &ev);
+        break;
+      case PTL_EVENT_AUTO_UNLINK:
+      case PTL_EVENT_AUTO_FREE:
+        /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
+     * Link it back, all included data has been processed already. */
+        status = uct_bxi_recv_block_activate(block, NULL);
+        break;
+      case PTL_EVENT_PT_DISABLED:
+        ucs_error("PTL: event %s. Control flow not implemented.",
+                  uct_bxi_event_str[ev.type]);
+        status = UCS_ERR_IO_ERROR;
+        goto out;
+        break;
+      case PTL_EVENT_LINK:
+      case PTL_EVENT_PUT_OVERFLOW:
+      case PTL_EVENT_GET_OVERFLOW:
+      case PTL_EVENT_ACK:
+      case PTL_EVENT_REPLY:
+      case PTL_EVENT_ATOMIC:
+      case PTL_EVENT_FETCH_ATOMIC:
+      case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+      case PTL_EVENT_ATOMIC_OVERFLOW:
+      case PTL_EVENT_SEARCH:
+      case PTL_EVENT_SEND:
+        ucs_error("PTL: event %s should not have been triggered",
+                  uct_bxi_event_str[ev.type]);
+        status = UCS_ERR_IO_ERROR;
+        break;
+      default:
+        break;
+      }
+
+      if (status != UCS_OK) {
+        goto out;
+      }
+
+      progressed++;
+
       break;
     case PTL_EQ_EMPTY:
       goto out;
@@ -866,37 +825,6 @@ void uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
   }
 }
 
-static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,
-                                          uct_bxi_rxq_t   *rxq)
-{
-  int            ret;
-  khiter_t       iter;
-  ptl_pt_index_t pti = uct_bxi_rxq_get_addr(rxq);
-
-  /* Enable event handling. It is retrieved on event polling
-  * using the Portals Table Index. */
-  iter = kh_put(uct_bxi_rxq, &iface->rx.queues, pti, &ret);
-  ucs_assertv((ret != UCS_KH_PUT_FAILED) && (ret != UCS_KH_PUT_KEY_PRESENT),
-              "ret %d", ret);
-  kh_value(&iface->rx.queues, iter) = rxq;
-
-  return UCS_OK;
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_get_rxq(
-        uct_bxi_iface_t *iface, ptl_pt_index_t pti, uct_bxi_rxq_t **rxq_p)
-{
-  khiter_t iter;
-
-  iter = kh_get(uct_bxi_rxq, &iface->rx.queues, pti);
-  if (iter == kh_end(&iface->rx.queues)) {
-    ucs_fatal("BXI: unknown Portals Table Index. pti=%d", pti);
-  }
-  *rxq_p = kh_val(&iface->rx.queues, iter);
-
-  return UCS_OK;
-}
-
 static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
                                           void *chunk)
 {
@@ -906,12 +834,13 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
   uct_bxi_recv_block_t *block = obj;
   ptl_md_t              md;
 
-  block->flags = 0;
-  block->size  = 0;
-  block->start = NULL;
-  block->rxq   = iface->rx.tag.q;
-  block->list  = PTL_PRIORITY_LIST;
-  block->meh   = PTL_INVALID_HANDLE;
+  block->flags   = 0;
+  block->size    = 0;
+  block->start   = NULL;
+  block->rxq     = iface->rx.tag.q;
+  block->list    = PTL_PRIORITY_LIST;
+  block->meh     = PTL_INVALID_HANDLE;
+  block->handler = uct_bxi_iface_block_handle_tag_exp;
 
   /* Initialize the byte counter for rendez-vous offload. */
   block->ct_value = 0;
@@ -1004,11 +933,6 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto out;
   }
 
-  //NOTE: Offloaded rendezvous requires the length to be transmitted within the
-  //      header data. Only 44 bits are available within Portals4 hdr, maximum
-  //      message size is thus 2^44 - 1.
-  ucs_assert(iface->config.max_msg_size < UCT_BXI_RNDV_MAX_LENGTH);
-
   /* First, initialize interface configuration. */
   iface->config.tm.max_tags  = config->tm.list_size;
   iface->config.tm.max_gop   = config->tm.max_gop;
@@ -1030,25 +954,44 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
   iface->tm.unexp_hdr_count = 0;
 
+  /*
+   * For hardware rendezvous, payload is located before the header so that 
+   * is may fit directly in the user buffer in case of match. If message 
+   * is received in the overflow list instead, the "eager" part of the 
+   * payload will be copied on PTL_EVENT_PUT_OVERFLOW.
+   *
+   * +-+ pointer to ev->start in block handlers 
+   * |
+   * |          + uct_bxi_hdr_rndv_t
+   * |          |                    
+   * |          |                    + user hdr
+   * |          |                    |
+   * v          v                    v
+   * +-----------------------------------------+
+   * | payload  | uct_bxi_hdr_rndv_t |         |
+   * |          |                    |         |
+   * +-----------------------------------------+
+   */
+  iface->tm.rndv_hdr_offset =
+          iface->config.tm.eager_limit -
+          (sizeof(uct_bxi_hdr_rndv_t) + iface->config.tm.max_hdr);
+
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
-  rxq_param.flags       = 0;
-  rxq_param.eqh         = iface->rx.eqh;
-  rxq_param.nih         = uct_bxi_iface_md(iface)->nih;
-  rxq_param.mp          = iface->config.rx.tag_mp;
-  rxq_param.num_segs    = iface->config.rx.num_seg;
-  rxq_param.seg_size    = iface->config.seg_size;
-  rxq_param.list        = PTL_OVERFLOW_LIST;
-  rxq_param.name        = "rxq-tag";
-  rxq_param.rxq_handler = uct_bxi_iface_handle_tag_events;
+  rxq_param.flags    = 0;
+  rxq_param.eqh      = iface->rx.eqh;
+  rxq_param.nih      = uct_bxi_iface_md(iface)->nih;
+  rxq_param.mp       = iface->config.rx.tag_mp;
+  rxq_param.num_segs = iface->config.rx.num_seg;
+  rxq_param.seg_size = iface->config.seg_size;
+  rxq_param.list     = PTL_OVERFLOW_LIST;
+  rxq_param.name     = "rxq-tag";
+  rxq_param.handler  = uct_bxi_iface_block_handle_tag_unexp;
 
   status = uct_bxi_rxq_create(&rxq_param, &iface->rx.tag.q);
   if (status != UCS_OK) {
     goto out;
   }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(iface, iface->rx.tag.q);
 
   /* Initialize list of cancelled blocks. */
   ucs_list_head_init(&iface->rx.tag.cancel);
@@ -1077,17 +1020,13 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   rxq_param.nih   = uct_bxi_iface_md(iface)->nih;
   rxq_param.mp    = (uct_iface_mpool_config_t){0};
   rxq_param.name  = "ctrl-tag";
-  //NOTE: Although CTRL RXQ is different, handler is the same as TAG RXQ.
-  //      It should only handle the PTL_EVENT_GET event.
-  rxq_param.handler = uct_bxi_iface_handle_tag_events;
+  //NOTE: There are no blocks associated to the RXQ, so no handler.
+  rxq_param.handler = NULL;
 
   status = uct_bxi_rxq_create(&rxq_param, &iface->rx.ctrl.q);
   if (status != UCS_OK) {
     goto out;
   }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(iface, iface->rx.ctrl.q);
 
   /* Initialize list of cancelled blocks. */
   ucs_list_head_init(&iface->rx.tag.cancel);
@@ -1325,27 +1264,21 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err;
   }
 
-  /* Initialize hash table for receive queues. */
-  kh_init_inplace(uct_bxi_rxq, &self->rx.queues);
-
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
-  rxq_param.flags       = 0;
-  rxq_param.eqh         = self->rx.eqh;
-  rxq_param.nih         = md->nih;
-  rxq_param.mp          = self->config.rx.am_mp;
-  rxq_param.list        = PTL_PRIORITY_LIST;
-  rxq_param.num_segs    = self->config.rx.num_seg;
-  rxq_param.seg_size    = self->config.seg_size;
-  rxq_param.rxq_handler = uct_bxi_iface_handle_am_events;
-  rxq_param.name        = "rxq-am";
+  rxq_param.flags    = 0;
+  rxq_param.eqh      = self->rx.eqh;
+  rxq_param.nih      = md->nih;
+  rxq_param.mp       = self->config.rx.am_mp;
+  rxq_param.list     = PTL_PRIORITY_LIST;
+  rxq_param.num_segs = self->config.rx.num_seg;
+  rxq_param.seg_size = self->config.seg_size;
+  rxq_param.handler  = uct_bxi_iface_block_handle_am;
+  rxq_param.name     = "rxq-am";
 
   status = uct_bxi_rxq_create(&rxq_param, &self->rx.am.q);
   if (status != UCS_OK) {
     goto err_clean_rxevq;
   }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(self, self->rx.am.q);
 
   /* Initialize TAG resources if enabled. */
   status = uct_bxi_iface_tag_init(self, params, config);

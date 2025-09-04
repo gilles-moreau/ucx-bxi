@@ -76,7 +76,6 @@ noinst_HEADERS = \
 	tag/tag_match.h \
 	tag/tag_match.inl \
 	tag/offload.h \
-	tag/offload/tcache.h \
 	wireup/address.h \
 	wireup/ep_match.h \
 	wireup/wireup_ep.h \
