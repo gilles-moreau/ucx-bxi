@@ -390,6 +390,7 @@ UCS_TEST_P(test_ucp_tag_offload, small_sw_rndv, "RNDV_THRESH=0", "TM_THRESH=0",
     send_recv(sender(), 0x11ul, 1ul);
 }
 
+//FIXME: with new proto, TM_SW_RNDV is not taken into account
 UCS_TEST_P(test_ucp_tag_offload, sw_rndv_rx_generic, "RNDV_THRESH=0",
                                                      "TM_THRESH=0",
                                                      "TM_SW_RNDV=y")
@@ -520,10 +521,9 @@ private:
 public:
     void init()
     {
-        if (disable_proto() || !need_reply_ep()) {
+        if (!need_reply_ep()) {
             UCS_TEST_SKIP_R("Triggered operation not supported with old "
-                            "protocol and only supported with reply ep "
-                            "variant.");
+                            "protocol or without reply ep.");
         }
         test_ucp_tag_offload::init();
     }
@@ -1136,6 +1136,7 @@ class test_ucp_tag_offload_status : public test_ucp_tag {
 public:
     test_ucp_tag_offload_status() {
         m_env.push_back(new ucs::scoped_setenv("UCX_RC_TM_ENABLE", "y"));
+        m_env.push_back(new ucs::scoped_setenv("UCX_BXI_TM_ENABLE", "y"));
     }
 
     static void get_test_variants(std::vector<ucp_test_variant>& variants) {

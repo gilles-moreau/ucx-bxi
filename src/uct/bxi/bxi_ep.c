@@ -117,12 +117,13 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_recv_block_t *block = op->rndv.block;
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
-    uct_bxi_recv_block_update_cnt(block, op->mlength);
+    uct_bxi_recv_block_update_cnt(block, 1);
   }
 
   /* Invoke tag-related callback. */
-  block->ctx->completed_cb(block->ctx, block->stag, 0, block->send_size, NULL,
-                           UCS_OK);
+  block->ctx->completed_cb(
+          block->ctx, block->stag, 0, block->send_size, NULL,
+          block->size < block->send_size ? UCS_ERR_MESSAGE_TRUNCATED : UCS_OK);
 
   /* This OP is released by the block release. */
   uct_bxi_recv_block_release(block);
@@ -230,6 +231,9 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+
+  //ucs_debug("BXI: available=%lu, desc=%d", iface->tx.available,
+  //          iface->tx.num_elems);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
 
@@ -541,11 +545,10 @@ static inline size_t uct_bxi_pack_rndv(uct_bxi_iface_t *iface, void *dest,
 
   /* First copy the payload up to buffer capacity minus size required for the 
    * rndv hdr and the user header. */
-  memcpy(dest, src, iface->tm.rndv_hdr_offset);
+  memcpy(dest, src, ucs_min(length, iface->tm.rndv_hdr_offset));
 
-  hdr->length        = length;
+  hdr->remote_addr   = (uint64_t)src;
   hdr->header_length = header_length;
-  hdr->pti           = iface->rx.ctrl.q->pti;
 
   memcpy(hdr + 1, header, header_length);
 
@@ -569,6 +572,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_iface_send_op_t    *op;
   uct_bxi_recv_block_params_t params;
   uct_bxi_recv_block_t       *block;
+  ptl_hdr_data_t              hdr = 0;
+  ssize_t                     bsize;
 
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -581,17 +586,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* First, allocate a TAG block from the memory pool. Receive block is 
    * used to match the remote GET operation and is posted to the CTRL RXQ. 
-   * In this case, OP has ownership of the block and is responsible of 
-   * releasing it. */
+   * Reduce it off of the eager size that will be sent. */
+  bsize = ucs_max((ssize_t)(ptl_iov->iov_len - iface->tm.rndv_hdr_offset), 0);
   UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
           iface, &iface->tm.recv_block_mp, block, iface->rx.ctrl.q,
-          ptl_iov->iov_base, ptl_iov->iov_len,
-          UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid), NULL,
-          status = UCS_ERR_NO_RESOURCE;
+          UCS_PTR_BYTE_OFFSET(ptl_iov->iov_base, iface->tm.rndv_hdr_offset),
+          bsize, UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid), NULL,
+          uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
           goto err);
-
-  /* Modify block handler. */
-  block->handler = uct_bxi_iface_block_handle_rndv;
 
   params.start   = block->start;
   params.size    = block->size;
@@ -635,6 +637,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->length = uct_bxi_pack_rndv(iface, op + 1, ptl_iov->iov_base,
                                  ptl_iov->iov_len, header, header_length);
 
+  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, iface->rx.ctrl.q->pti);
+
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     /* An operation context was provided, so the operation must be 
      * triggered. */
@@ -642,14 +646,13 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), op->length,
-            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op,
-            (ptl_hdr_data_t)ptl_iov->iov_base, gop->cth, gop->ct_value));
+            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
+            gop->cth, gop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op,
-                                 (ptl_hdr_data_t)ptl_iov->iov_base));
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
   }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
@@ -744,18 +747,23 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 {
   ucs_status_t status = UCS_OK;
   uct_tag_t    tag;
+  ptl_size_t   start;
+  ptl_size_t   length;
 
-  tag = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
+  tag    = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
+  start  = (ptl_size_t)UCS_PTR_BYTE_OFFSET(block->start,
+                                           iface->tm.rndv_hdr_offset);
+  length = block->size - iface->tm.rndv_hdr_offset;
 
   /* Trigger Get at current counter value plus eager_limit + 1, as defined by 
    * Barrett and al. */
   //FIXME: block MD is used in all cases. Thus, whether the operation is
   //       offloaded or not, counter will be incremented. However, it is not
   //       absolutely necessary when operation is not offloaded.
-  status = uct_bxi_wrap(PtlTriggeredGet(
-          block->mdh, (ptl_size_t)block->start, block->size, ep->dev_addr.pid,
-          ep->iface_addr.ctrl, tag, 0, block->op, block->cth,
-          block->ct_value + iface->config.tm.eager_limit + 1));
+  status = uct_bxi_wrap(
+          PtlTriggeredGet(block->mdh, start, length, ep->dev_addr.pid,
+                          ep->iface_addr.ctrl, tag, 0, block->op, block->cth,
+                          block->ct_value + iface->config.tm.eager_limit + 1));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -766,7 +774,6 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 
   block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED |
                   UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
-  block->ct_inc = iface->config.tm.eager_limit + 2;
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
@@ -804,10 +811,11 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
   //      ptl_iov.
   UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
           iface, &iface->tm.recv_block_mp, block, iface->rx.tag.q, iov->buffer,
-          ptl_iov->iov_len, tag, ctx, status = UCS_ERR_EXCEEDS_LIMIT;
+          ptl_iov->iov_len, tag, ctx, uct_bxi_iface_block_handle_tag_exp,
+          status = UCS_ERR_EXCEEDS_LIMIT;
           goto err_remove_hash);
 
-  if (uct_bxi_iface_available(iface) <= 0) {
+  if (uct_bxi_iface_has_tx_resources(iface) <= 0) {
     return UCS_ERR_NO_RESOURCE;
   }
 
@@ -1282,7 +1290,7 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
 #endif
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
-  if (uct_bxi_iface_available(iface) > 0 &&
+  if (uct_bxi_iface_has_tx_resources(iface) > 0 &&
       ((iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) ||
        !iface->tm.enabled)) {
     return UCS_ERR_BUSY;
