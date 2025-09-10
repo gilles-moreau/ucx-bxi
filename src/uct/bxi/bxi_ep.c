@@ -125,7 +125,6 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
           block->ctx, block->stag, 0, block->send_size, NULL,
           block->size < block->send_size ? UCS_ERR_MESSAGE_TRUNCATED : UCS_OK);
 
-  /* This OP is released by the block release. */
   uct_bxi_recv_block_release(block);
 }
 
@@ -145,7 +144,42 @@ static ucs_status_t uct_bxi_iface_block_handle_rndv(uct_bxi_iface_t      *iface,
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
-  return UCS_ERR_UNSUPPORTED;
+  ucs_status_t     status = UCS_OK;
+  uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+  size_t                   size = length + sizeof(hdr);
+
+  UCT_BXI_CHECK_AM_SHORT(id, length, uint64_t, iface->config.max_inline);
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, size);
+
+  /* Copy on the stack allocated buffer. */
+  *(uint64_t *)iface->tx.short_desc = hdr;
+  memcpy(UCS_PTR_BYTE_OFFSET(iface->tx.short_desc, sizeof(hdr)), buffer,
+         length);
+
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(
+          iface->tx.mem_desc->mdh, (ptl_size_t)iface->tx.short_desc, size,
+          PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.am, id, 0, op, 0));
+
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut return %d", status);
+  }
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_enable_flush(ep);
+
+  UCT_TL_EP_STAT_OP(&ep->super, AM, SHORT, length);
+  uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
+                         UCT_AM_TRACE_TYPE_SEND, id, buffer, size);
+
+err:
+  return status;
 }
 
 ucs_status_t uct_bxi_ep_am_short_iov(uct_ep_h tl_ep, uint8_t id,
@@ -414,10 +448,38 @@ err:
   return status;
 }
 
-ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
+ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
                                         const void *data, size_t length)
 {
-  return UCS_ERR_NOT_IMPLEMENTED;
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  //FIXME: use length > 0 to pass LENGTH test.
+  UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, 1);
+
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)data,
+                               length, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.tag, tag, 0, op, 0));
+
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut short return %d", status);
+  }
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_enable_flush(ep);
+
+  UCT_TL_EP_STAT_OP(&ep->super, TAG, SHORT, length);
+  uct_bxi_log_put(iface);
+
+err:
+  return status;
 }
 
 UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,

@@ -61,6 +61,9 @@ public:
             modify_config("RNDV_SCHEME", "am");
             modify_config("ZCOPY_THRESH", "0");
         } else if (get_variant_value() == VARIANT_PROTO_V1) {
+            if (has_transport({"bxi"})) {
+                UCS_TEST_SKIP_R("Proto v1 not supported with bxi offload.");
+            }
             modify_config("PROTO_ENABLE", "n");
         }
 

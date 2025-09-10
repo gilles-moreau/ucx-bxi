@@ -234,6 +234,7 @@ typedef struct uct_bxi_iface {
     ptl_handle_eq_t     eqh;          /* Event Queue for OP completion. */
     ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
     ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
+    void               *short_desc;   /* Preallocated buffer for short am */
     int                 num_elems;
     ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */
     uct_bxi_mem_desc_t *mem_desc;     /* Memory Descriptor for sending data */
@@ -411,6 +412,9 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                      ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
+#define UCT_BXI_CHECK_AM_SHORT(_am_id, _length, _header_t, _max_inline)        \
+  UCT_CHECK_AM_ID(_am_id);                                                     \
+  UCT_CHECK_LENGTH(sizeof(_header_t) + _length, 0, _max_inline, "am_short");
 
 #define UCT_BXI_CHECK_IFACE_RES(_iface, _ep)                                   \
   if (uct_bxi_iface_has_tx_resources(_iface) <= 0) {                           \

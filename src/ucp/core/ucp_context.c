@@ -587,6 +587,7 @@ static ucs_config_field_t ucp_config_table[] = {
    " - ud      : ud_v and ud_x (preferably if available).\n"
    " - dc/dc_x : dc with accelerated verbs.\n"
    " - tcp     : sockets over TCP/IP.\n"
+   " - bxi     : BXI over Portals4.\n"
    " - cuda    : CUDA (NVIDIA GPU) memory support.\n"
    " - rocm    : ROCm (AMD GPU) memory support.\n"
    " - ze      : ZE (Intel GPU) memory support.\n"

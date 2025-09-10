@@ -8,8 +8,8 @@
 
 #include <ucs/sys/math.h>
 
-#define UCT_PTL_IFACE_OVERHEAD 10e-8
-#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(800e-9, 0)
+#define UCT_PTL_IFACE_OVERHEAD 10e-4
+#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(800e-4, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
@@ -320,7 +320,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   uct_base_iface_query(&iface->super, attr);
 
-  attr->cap.am.max_short = iface->config.max_inline - sizeof(uint64_t);
+  attr->cap.am.max_short = iface->config.max_inline;
   attr->cap.am.max_bcopy = iface->config.seg_size;
   attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
@@ -345,6 +345,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->iface_addr_len  = iface->config.iface_addr_size;
   attr->device_addr_len = iface->config.device_addr_size;
 
+  //FIXME: implementing AM_SHORT requires to have one pending queue per
+  //       endpoint which implies some changes in the way resource are
+  //       managed.
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
                     UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
@@ -384,7 +387,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   attr->latency             = UCT_PTL_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
-  attr->bandwidth.shared    = 10 * UCS_GBYTE;
+  attr->bandwidth.shared    = 100 * UCS_GBYTE;
   attr->overhead            = UCT_PTL_IFACE_OVERHEAD;
   attr->priority            = 1;
 
@@ -398,6 +401,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.recv.min_recv        = 0;
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
+  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
   //FIXME: UCP layer uses ucs_alloca to allocate the receive descriptor
   //       which is limited in size (1200). This is only used in the sync
   //       path. In order to increase this threshold, we need to support the
@@ -408,7 +412,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
   //       option with MANAGE_LOCAL are not suitable has there are no way to
   //       leave space for this headroom...
-  attr->cap.tag.eager.max_bcopy = 1168;
   attr->cap.tag.eager.max_zcopy = 1168;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
@@ -416,8 +419,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
   attr->cap.flags |=
-          UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+          UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
+          UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   return UCS_OK;
 }
@@ -934,19 +938,18 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_t  mp_param;
   uct_bxi_rxq_param_t rxq_param;
 
-  if (!(params->features & UCT_IFACE_FEATURE_TAG) && !config->tm.enable) {
+  if (!(params->features & UCT_IFACE_FEATURE_TAG) || !config->tm.enable) {
+    iface->tm.enabled = 0;
     goto out;
   }
-
-  iface->tm.enabled = config->tm.enable;
+  iface->tm.enabled = 1;
 
   /* First, initialize interface configuration. */
-  iface->config.tm.max_tags  = config->tm.list_size;
-  iface->config.tm.max_gop   = config->tm.max_gop;
-  iface->config.tm.max_zcopy = config->seg_size;
-  iface->config.tm.max_hdr   = UCT_BXI_RNDV_MAX_HDR_LENGTH;
-  //FIXME: see FIXME in get_attr.
-  iface->config.tm.eager_limit = 1168;
+  iface->config.tm.max_tags    = config->tm.list_size;
+  iface->config.tm.max_gop     = config->tm.max_gop;
+  iface->config.tm.max_zcopy   = config->seg_size;
+  iface->config.tm.max_hdr     = UCT_BXI_RNDV_MAX_HDR_LENGTH;
+  iface->config.tm.eager_limit = config->seg_size;
 
   iface->config.rx.tag_mp = config->rx.tag_mp;
   //FIXME: Memory pool max elements is reset here, thus overwriting initial
@@ -1095,6 +1098,12 @@ out:
   return;
 }
 
+static UCS_F_ALWAYS_INLINE size_t uct_bxi_iface_hdr_size(size_t max_inline,
+                                                         size_t min_size)
+{
+  return (size_t)ucs_max((ssize_t)(max_inline - min_size), 0);
+}
+
 static inline void
 uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
                           const uct_bxi_iface_config_t *config)
@@ -1120,8 +1129,8 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   //TODO: implement support for scatter buffer.
   iface->config.max_iovecs   = 1;
   iface->config.max_msg_size = md->config.limits.max_msg_size;
-  iface->config.max_inline =
-          ucs_min(md->config.limits.max_volatile_size, UCS_ALLOCA_MAX_SIZE);
+  iface->config.max_inline   = uct_bxi_iface_hdr_size(
+          md->config.limits.max_volatile_size, sizeof(uint64_t));
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
@@ -1318,6 +1327,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_txevq;
   }
 
+  /* Allocate buffer for short message. */
+  self->tx.short_desc = ucs_malloc(self->config.max_inline, "short-desc");
+  if (self->tx.short_desc == NULL) {
+    status = UCS_ERR_NO_MEMORY;
+    goto err_clean_mem_desc;
+  }
+
   /* Create TX buffers mempool */
   ucs_mpool_params_reset(&mp_params);
   mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
@@ -1331,7 +1347,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
-    goto err_clean_mem_desc;
+    goto err_clean_short_desc;
   }
 
   /* Initialize operation for the TX Queue. They are not associated with 
@@ -1414,6 +1430,8 @@ err_clean_txops:
   uct_bxi_iface_tx_ops_fini(self);
 err_clean_txbuffer:
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
+err_clean_short_desc:
+  ucs_free(self->tx.short_desc);
 err_clean_mem_desc:
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
 err_clean_txevq:
@@ -1437,6 +1455,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   PtlPTFree(md->nih, self->rx.rma.pti);
 
   /* Clean TX resources. */
+  ucs_free(self->tx.short_desc);
   ucs_mpool_cleanup(&self->tx.pending_mp, 1);
   uct_bxi_iface_tx_ops_fini(self);
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
@@ -1475,7 +1494,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_tag_rndv_zcopy        = uct_bxi_ep_tag_rndv_zcopy,
         .ep_tag_eager_zcopy       = uct_bxi_ep_tag_eager_zcopy,
         .ep_tag_eager_bcopy       = uct_bxi_ep_tag_eager_bcopy,
-        .ep_tag_eager_short       = ucs_empty_function_return_unsupported,
+        .ep_tag_eager_short       = uct_bxi_ep_tag_eager_short,
         .ep_tag_rndv_cancel       = uct_bxi_ep_tag_rndv_cancel,
         .ep_tag_rndv_request      = uct_bxi_ep_tag_rndv_request,
         .ep_atomic_cswap64        = uct_bxi_ep_atomic_cswap64,
