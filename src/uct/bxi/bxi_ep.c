@@ -89,6 +89,15 @@ static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_remove_from_queue(op);
 }
 
+static void uct_bxi_send_rndv_comp_op_handler(uct_bxi_iface_send_op_t *op,
+                                              const void              *resp)
+{
+  uct_invoke_completion(op->user_comp, UCS_OK);
+
+  uct_bxi_recv_block_release(op->rndv.block);
+  uct_bxi_ep_remove_from_queue(op);
+}
+
 /* Callback of sender for rendezvous protocol. */
 static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
                                                 const void              *resp)
@@ -133,10 +142,9 @@ static ucs_status_t uct_bxi_iface_block_handle_rndv(uct_bxi_iface_t      *iface,
                                                     ptl_event_t          *ev)
 {
   /* Block was posted during rendez-vous. Event means target has successfully
-   * read data, initiator's operation can thus be completed. */
+   * read data, initiator's operation can thus be completed. Block is released 
+   * in uct_bxi_ep_tag_rndv_zcopy. */
   uct_bxi_iface_completion_op(block->op);
-  /* Block for GET has been consumed, it can be safely released and reused. */
-  uct_bxi_recv_block_release(block);
 
   return UCS_OK;
 }
@@ -639,7 +647,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
-                             "uct_bxi_ep_get_zcopy");
+                             "uct_bxi_ep_tag_rndv_zcopy");
   UCT_BXI_CHECK_IFACE_RES_PTR(iface, ep);
 
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
@@ -675,7 +683,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
-                                    comp, uct_bxi_send_comp_op_handler,
+                                    comp, uct_bxi_send_rndv_comp_op_handler,
                                     status = UCS_ERR_NO_RESOURCE;
                                     goto err_release_block;);
 

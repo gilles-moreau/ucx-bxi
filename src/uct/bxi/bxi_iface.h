@@ -549,12 +549,13 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                                           _size, _tag, _ctx, _handler,         \
                                           _err_code)                           \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
-  (_desc)->rxq     = _rxq;                                                     \
-  (_desc)->start   = _start;                                                   \
-  (_desc)->size    = _size;                                                    \
-  (_desc)->tag     = _tag;                                                     \
-  (_desc)->ctx     = _ctx;                                                     \
-  (_desc)->handler = _handler;
+  (_desc)->rxq      = _rxq;                                                    \
+  (_desc)->start    = _start;                                                  \
+  (_desc)->size     = _size;                                                   \
+  (_desc)->tag      = _tag;                                                    \
+  (_desc)->ctx      = _ctx;                                                    \
+  (_desc)->handler  = _handler;                                                \
+  (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 
 #define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
   UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \

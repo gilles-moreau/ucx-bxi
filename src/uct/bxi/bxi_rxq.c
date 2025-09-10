@@ -87,6 +87,8 @@ void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block)
 {
   ucs_status_t status;
 
+  ucs_assert(block->flags & UCT_BXI_RECV_BLOCK_FLAG_IN_USE);
+
   block->meh   = PTL_INVALID_HANDLE;
   block->flags = 0;
 
@@ -128,6 +130,8 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
     if (rc != UCS_OK) {
       goto err;
     }
+
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
   }
 
 err:
