@@ -10,31 +10,36 @@
 #include <uct/bxi/ptl_types.h>
 #include <unistd.h>
 
-#define UCT_BXI_RNDV_NID_MASK    0xffffffff
-#define UCT_BXI_RNDV_PID_MASK    0xffffffff
-#define UCT_BXI_RNDV_LENGTH_MASK 0xfffffffffffful
-#define UCT_BXI_RNDV_PTI_MASK    0xfffful
+#define UCT_BXI_RNDV_NID_MASK    0xffffff
+#define UCT_BXI_RNDV_PID_MASK    0xffffff
+#define UCT_BXI_RNDV_LENGTH_MASK 0xfffffffffful
+#define UCT_BXI_RNDV_CNT_MASK    0xfffful
+#define UCT_BXI_RNDV_PTI_MASK    0xfful
 
 #define UCT_BXI_RNDV_SW_HDR         0xdeadbeefdeadbeef
 #define UCT_BXI_RNDV_MAX_HDR_LENGTH 128 /* Bytes */
 
 #define UCT_BXI_RNDV_LENGTH_GET(_hdr)                                          \
-  (((_hdr) >> 16) & UCT_BXI_RNDV_LENGTH_MASK)
+  (((_hdr) >> 24) & UCT_BXI_RNDV_LENGTH_MASK)
+#define UCT_BXI_RNDV_CNT_GET(_hdr) (((_hdr) >> 8) & UCT_BXI_RNDV_CNT_MASK)
 #define UCT_BXI_RNDV_PTI_GET(_hdr) ((_hdr) & UCT_BXI_RNDV_PTI_MASK)
 
-#define UCT_BXI_RNDV_HDR_SET(_hdr, _length, _pti)                              \
+#define UCT_BXI_RNDV_HDR_SET(_hdr, _length, _cnt, _pti)                        \
   _hdr  = ((_length) & UCT_BXI_RNDV_LENGTH_MASK);                              \
   _hdr  = (_hdr << 16);                                                        \
+  _hdr |= ((_cnt) & UCT_BXI_RNDV_CNT_MASK);                                    \
+  _hdr  = (_hdr << 8);                                                         \
   _hdr |= ((_pti) & UCT_BXI_RNDV_PTI_MASK);
 
 /* ME match bits is based on the remote PID. */
-#define UCT_BXI_BUILD_RNDV_TAG(_pid)                                           \
+#define UCT_BXI_BUILD_RNDV_TAG(_pid, _cnt)                                     \
   ({                                                                           \
     uint64_t _tag  = 0;                                                        \
     _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
-    _tag           = _tag << 32;                                               \
+    _tag           = _tag << 24;                                               \
     _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
-    _tag;                                                                      \
+    _tag           = _tag << 24;                                               \
+    _tag          |= (_cnt) & UCT_BXI_RNDV_CNT_MASK;                           \
   })
 
 enum {
@@ -168,14 +173,13 @@ typedef struct uct_bxi_iface_config {
 KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
            kh_int64_hash_equal)
 
-#define uct_bxi_eps_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
-KHASH_INIT(uct_bxi_eps, uint64_t, uct_bxi_ep_list_t *, 1, uct_bxi_eps_hash,
+#define uct_bxi_pid_map_hash(_ptr) kh_int64_hash_func((uint64_t)(_ptr))
+KHASH_INIT(uct_bxi_pid_map, uint64_t, unsigned int, 1, uct_bxi_pid_map_hash,
            kh_int64_hash_equal)
 
 typedef struct uct_bxi_cnt {
-  uint16_t precv; /* Posted receive count */
-  uint16_t crecv; /* Completed receive count */
-  uint16_t send;  /* Send count */
+  uint16_t recv; /* Receive count */
+  uint16_t send; /* Send count */
 } uct_bxi_cnt_t;
 
 typedef struct uct_bxi_iface {
@@ -211,6 +215,7 @@ typedef struct uct_bxi_iface {
     size_t iface_addr_size;
     size_t device_addr_size;
     size_t ep_addr_size;
+    size_t max_num_eps;
   } config;
 
   struct {
@@ -225,9 +230,12 @@ typedef struct uct_bxi_iface {
       void                   *arg; /* User defined arg */
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
-    ucs_mpool_t  recv_block_mp;
-    unsigned int unexp_hdr_count;
-    unsigned int rndv_hdr_offset;
+    ucs_mpool_t    recv_block_mp;   /* MP of exp block */
+    unsigned int   unexp_hdr_count; /* Track number of unexp hdr */
+    unsigned int   rndv_hdr_offset; /* Offset of rndv hdr in payload */
+    uct_bxi_cnt_t *cnts;            /* Table of counters */
+    unsigned int   num_cnts;        /* Current number of counters */
+    khash_t(uct_bxi_pid_map) map;   /* Map pid to index counter table */
   } tm;
 
   struct {
@@ -235,7 +243,6 @@ typedef struct uct_bxi_iface {
     ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
     ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
     void               *short_desc;   /* Preallocated buffer for short am */
-    int                 num_elems;
     ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */
     uct_bxi_mem_desc_t *mem_desc;     /* Memory Descriptor for sending data */
     ucs_mpool_t         pending_mp;   /* Memory pool of pending request */
@@ -260,8 +267,8 @@ typedef struct uct_bxi_iface {
       uct_bxi_mem_entry_t entry;
     } rma;
   } rx;
-
-  khash_t(uct_bxi_eps) eps;
+  size_t          num_eps;
+  ucs_list_link_t eps;
 } uct_bxi_iface_t;
 
 UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_md_h, uct_worker_h,
@@ -286,8 +293,6 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp);
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
-ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
-void         uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
         uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev);
 ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
@@ -316,6 +321,48 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
   kh_del(uct_bxi_tag_addrs, &iface->tm.tag_addrs, iter);
+}
+
+static UCS_F_ALWAYS_INLINE unsigned int
+uct_bxi_iface_get_or_create_cnt_idx(uct_bxi_iface_t *iface, ptl_process_t pid)
+{
+  int      ret;
+  khiter_t iter;
+  uint64_t upid;
+
+  /* Cast Portals pid to uint64_t. */
+  upid = ((uint64_t)pid.phys.nid << 32) | (uint64_t)pid.phys.pid;
+
+  iter = kh_put(uct_bxi_pid_map, &iface->tm.map, upid, &ret);
+  ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
+
+  /* Cache the counter index in the endpoint. */
+  if (ret == UCS_KH_PUT_KEY_PRESENT) {
+    return kh_value(&iface->tm.map, iter);
+  } else {
+    /* Intialize it if it is new. */
+    iface->tm.cnts[iface->tm.num_cnts].recv = 0;
+    iface->tm.cnts[iface->tm.num_cnts].send = 0;
+    return kh_value(&iface->tm.map, iter)   = iface->tm.num_cnts++;
+  }
+}
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_inc_send_cnt(uct_bxi_iface_t *iface,
+                                                        unsigned int     idx)
+{
+  iface->tm.cnts[idx].send++;
+}
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_inc_recv_cnt(uct_bxi_iface_t *iface,
+                                                        unsigned int     idx)
+{
+  iface->tm.cnts[idx].recv++;
+}
+
+static UCS_F_ALWAYS_INLINE void uct_bxi_ep_dec_recv_cnt(uct_bxi_iface_t *iface,
+                                                        unsigned int     idx)
+{
+  iface->tm.cnts[idx].recv--;
 }
 
 static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
@@ -377,10 +424,9 @@ uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
-  ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE);
+  ucs_assertv(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE, "op=%p", op);
 
   if (--op->comp.comp == 0) {
-    op->iface->tx.num_elems++;
     op->comp.handler(op, op + 1);
     uct_bxi_iface_release_op(op);
   }
@@ -436,8 +482,7 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 //FIXME: rework all these macros...
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \
-                           return UCS_ERR_NO_RESOURCE);                        \
-  (_iface)->tx.num_elems--;
+                           return UCS_ERR_NO_RESOURCE);
 
 #define UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                      \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
@@ -534,11 +579,12 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 #define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _ep, _user_comp, \
                                           _handler, _err)                      \
   UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
-  (_desc)->ep        = _ep;                                                    \
-  (_desc)->comp.comp = 1;                                                      \
-  (_desc)->comp.handler =                                                      \
-          (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
-  (_desc)->user_comp = _user_comp;
+  (_desc)->ep           = _ep;                                                 \
+  (_desc)->comp.comp    = 1;                                                   \
+  (_desc)->comp.handler = (_user_comp == NULL) ?                               \
+                                  uct_bxi_send_rndv_no_comp_op_handler :       \
+                                  _handler;                                    \
+  (_desc)->user_comp    = _user_comp;
 
 #define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc, _rxq)                \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \

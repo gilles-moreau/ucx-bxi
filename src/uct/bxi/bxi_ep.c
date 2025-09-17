@@ -89,6 +89,13 @@ static void uct_bxi_send_comp_ato_op_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_remove_from_queue(op);
 }
 
+static void uct_bxi_send_rndv_no_comp_op_handler(uct_bxi_iface_send_op_t *op,
+                                                 const void              *resp)
+{
+  uct_bxi_recv_block_release(op->rndv.block);
+  uct_bxi_ep_remove_from_queue(op);
+}
+
 static void uct_bxi_send_rndv_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                               const void              *resp)
 {
@@ -98,14 +105,13 @@ static void uct_bxi_send_rndv_comp_op_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_remove_from_queue(op);
 }
 
+//TODO: consider moving uct_bxi_send_rndv_cancel_completion to
+//      uct_bxi_iface_completion_op
+
 /* Callback of sender for rendezvous protocol. */
 static void uct_bxi_send_rndv_cancel_completion(uct_bxi_iface_send_op_t *op,
                                                 const void              *resp)
 {
-  /* Deactivate block and release it to memory pool. */
-  uct_bxi_recv_block_deactivate(op->rndv.block);
-  uct_bxi_recv_block_release(op->rndv.block);
-
   /* Do not call user completion callback as it's been acknowledged already 
    * during the sw protocol handled by UCP. */
   uct_bxi_ep_remove_from_queue(op);
@@ -481,6 +487,7 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_inc_send_cnt(iface, ep->idx);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, SHORT, length);
@@ -518,7 +525,7 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
             gop->ct_value));
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
-   * an operation first, then a buffer of size seg_size. */
+     * an operation first, then a buffer of size seg_size. */
     UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                        pack_cb, arg, &size);
     if (size < 0) {
@@ -537,6 +544,7 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_inc_send_cnt(iface, ep->idx);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
@@ -575,7 +583,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
-  if (flags & UCT_TAG_OFFLOAD_OPERATION) {
+  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
@@ -596,6 +604,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_inc_send_cnt(iface, ep->idx);
   uct_bxi_ep_enable_flush(ep);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
@@ -661,8 +670,10 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(
           iface, &iface->tm.recv_block_mp, block, iface->rx.ctrl.q,
           UCS_PTR_BYTE_OFFSET(ptl_iov->iov_base, iface->tm.rndv_hdr_offset),
-          bsize, UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid), NULL,
-          uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
+          bsize,
+          UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid,
+                                 iface->tm.cnts[ep->idx].send),
+          NULL, uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
           goto err);
 
   params.start   = block->start;
@@ -678,14 +689,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
    * a GET operation on this. */
   status = uct_bxi_recv_block_activate(block, &params);
   if (status != UCS_OK) {
-    goto err;
+    goto err_release_block;
   }
 
   /* Now, allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
                                     comp, uct_bxi_send_rndv_comp_op_handler,
                                     status = UCS_ERR_NO_RESOURCE;
-                                    goto err_release_block;);
+                                    goto err_deactivate_block);
 
   /* Rendez-vous operation will creates two events: 
    * - PTL_EVENT_ACK: acknowledge the reception of the first control message
@@ -707,7 +718,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   op->length = uct_bxi_pack_rndv(iface, op + 1, ptl_iov->iov_base,
                                  ptl_iov->iov_len, header, header_length);
 
-  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, iface->rx.ctrl.q->pti);
+  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, iface->tm.cnts[ep->idx].send,
+                       iface->rx.ctrl.q->pti);
 
   if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
     /* An operation context was provided, so the operation must be 
@@ -730,12 +742,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_inc_send_cnt(iface, ep->idx);
   uct_bxi_ep_enable_flush(ep);
 
   return (ucs_status_ptr_t)op;
 
-err_release_block:
+err_deactivate_block:
   uct_bxi_recv_block_deactivate(block);
+err_release_block:
   uct_bxi_recv_block_release(block);
 err:
   return UCS_STATUS_PTR(status);
@@ -744,6 +758,10 @@ err:
 ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 {
   uct_bxi_iface_send_op_t *op = (uct_bxi_iface_send_op_t *)tl_op;
+
+  /* Deactivate and release block. */
+  uct_bxi_recv_block_deactivate(op->rndv.block);
+  uct_bxi_recv_block_release(op->rndv.block);
 
   /* Overwrite completion handler. */
   op->comp.handler = uct_bxi_send_rndv_cancel_completion;
@@ -779,10 +797,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   ucs_assert(!(flags & UCT_TAG_OFFLOAD_OPERATION));
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
-  UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(iface, &iface->tx.send_desc_mp, op, ep,
-                                    NULL, uct_bxi_send_op_no_completion,
-                                    status = UCS_ERR_NO_RESOURCE;
-                                    goto err);
+  UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_desc_mp, op, ep, NULL,
+                                   uct_bxi_send_op_no_completion, 0);
 
   memcpy(op + 1, header, header_length);
 
@@ -798,6 +814,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_inc_send_cnt(iface, ep->idx);
   uct_bxi_ep_enable_flush(ep);
 
 err:
@@ -820,7 +837,8 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
   ptl_size_t   start;
   ptl_size_t   length;
 
-  tag    = UCT_BXI_BUILD_RNDV_TAG(ep->dev_addr.pid);
+  tag    = UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid,
+                                  iface->tm.cnts[ep->idx].recv);
   start  = (ptl_size_t)UCS_PTR_BYTE_OFFSET(block->start,
                                            iface->tm.rndv_hdr_offset);
   length = block->size - iface->tm.rndv_hdr_offset;
@@ -966,6 +984,9 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
 
   /* Update interface available resources. */
   uct_bxi_iface_op_res(iface, block->op);
+  if (ep != NULL) {
+    uct_bxi_ep_inc_recv_cnt(iface, ep->idx);
+  }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
 
@@ -987,6 +1008,12 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 {
   uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+
+  /* Receive has been posted and thus counter has been incremented two 
+   * times. Only do so if reply endpoint was provided during post. */
+  if (block->op->ep != NULL) {
+    uct_bxi_ep_dec_recv_cnt(iface, block->op->ep->idx);
+  }
 
   /* Posted receive was matched in overflow list, unexpected header was then 
    * consumed and ME unlinked already. Decrement counter to notify 
@@ -1471,10 +1498,13 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
 
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
-  ucs_status_t     status;
   uct_bxi_iface_t *iface = ucs_derived_of(params->iface, uct_bxi_iface_t);
 
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
+
+  if (iface->num_eps + 1 > iface->config.max_num_eps) {
+    return UCS_ERR_NO_RESOURCE;
+  }
 
   self->dev_addr   = *(uct_bxi_device_addr_t *)params->dev_addr;
   self->iface_addr = *(uct_bxi_iface_addr_t *)params->iface_addr;
@@ -1483,10 +1513,15 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   ucs_list_head_init(&self->send_ops);
   self->flags = 0;
 
-  status = uct_bxi_iface_add_ep(iface, self);
-  ucs_assert_always(status == UCS_OK);
+  ucs_list_add_head(&iface->eps, &self->elem);
+  iface->num_eps++;
 
-  return status;
+  if (iface->tm.enabled) {
+    /* Cache counter index for fast access during send operations. */
+    self->idx = uct_bxi_iface_get_or_create_cnt_idx(iface, self->dev_addr.pid);
+  }
+
+  return UCS_OK;
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
@@ -1497,7 +1532,9 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
   uct_bxi_ep_pending_purge(&self->super.super,
                            ucs_empty_function_do_assert_void, NULL);
 
-  uct_bxi_iface_ep_remove(iface, self);
+  ucs_list_del(&self->elem);
+  iface->num_eps--;
+
   return;
 }
 

@@ -490,7 +490,7 @@ UCS_TEST_P(test_ucp_tag_offload, rndv_recv_matched_cancel)
                                                  sendbuf.size(), tag, &param);
 
     // Tweak progress only the sender to make sure the rndv control message 
-    // has arrived but has not been pushed to unexpected least on the receiver.
+    // has arrived but has not been pushed to unexpected list on the receiver.
     for (int i = 0; i < 3; ++i) {
         progress({&sender()});
     }

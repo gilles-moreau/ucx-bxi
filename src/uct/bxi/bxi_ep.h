@@ -14,27 +14,16 @@ enum {
   UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
 };
 
-typedef struct uct_bxi_ep_config {
-  int max_retries;
-} uct_bxi_ep_config_t;
-
 typedef struct uct_bxi_ep {
   uct_base_ep_t         super;
   unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
+  unsigned int          idx;        /* Index in counter table */
+  ucs_list_link_t       elem;       /* Elem in endpoint list */
   uint8_t               conn_state; /* Connection state. */
-  uint16_t              list_id;    /* ID in Portals PID list. */
-  ucs_list_link_t       elem;       /* Element in Portals PID list. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
 } uct_bxi_ep_t;
-
-typedef struct uct_bxi_ep_list {
-  ucs_list_link_t head;
-  ptl_process_t   pid;
-  unsigned        num_ep;
-  uct_bxi_cnt_t   cnt; /* Message counters for this PID */
-} uct_bxi_ep_list_t;
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
 {
