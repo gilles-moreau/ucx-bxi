@@ -61,7 +61,9 @@ typedef enum {
   ({                                                                           \
     ucs_status_t loc_rc = UCS_OK;                                              \
     int          bxi_rc;                                                       \
-    if ((bxi_rc = _bxi_call) != PTL_OK) {                                      \
+    if ((bxi_rc = _bxi_call) == PTL_TRY_AGAIN) {                               \
+      loc_rc = UCS_ERR_NO_RESOURCE;                                            \
+    } else if (bxi_rc != PTL_OK) {                                             \
       uct_bxi_rc_log(bxi_rc);                                                  \
       loc_rc = UCS_ERR_IO_ERROR;                                               \
     }                                                                          \

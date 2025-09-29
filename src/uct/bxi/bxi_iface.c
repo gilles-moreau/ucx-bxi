@@ -239,8 +239,6 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     pti          = UCT_BXI_RNDV_PTI_GET(ev->hdr_data);
     payload_size = uct_bxi_iface_rndv_payload_size(iface, block, send_size);
 
-    ucs_debug("BXI: sent cnt. cnt=%d", cnt);
-
     /* Save stag and send size for rndv completion, see 
      * uct_bxi_recv_rndv_tag_handler. */
     block->send_size = send_size;
@@ -580,9 +578,7 @@ out:
 static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
                                                    uct_bxi_iface_send_op_t *op)
 {
-  ucs_status_t status;
-
-  ucs_error("BXI: operation failed. op=%p, ep=%p", op, op->ep);
+  ucs_status_t status = UCS_ERR_ENDPOINT_TIMEOUT;
 
   /* Don't remove operation from outstanding list, it will be done later. */
 
@@ -590,7 +586,9 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
   op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
 
   status = uct_iface_handle_ep_err(&iface->super.super, &op->ep->super.super,
-                                   UCS_ERR_ENDPOINT_TIMEOUT);
+                                   status);
+
+  ucs_error("BXI: operation failed. op=%p, ep=%p", op, op->ep);
 
   ucs_assert(status == UCS_OK);
 }

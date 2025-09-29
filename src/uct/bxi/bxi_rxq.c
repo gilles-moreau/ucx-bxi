@@ -1,10 +1,12 @@
 #include "bxi_rxq.h"
 #include "bxi.h"
+#include <ucs/profile/profile.h>
 
 #define UCT_BXI_CT_INIT (ptl_ct_event_t){.success = 0, .failure = 0}
 
-ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
-                                         uct_bxi_recv_block_params_t *params)
+UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_recv_block_activate, (block, params),
+                 uct_bxi_recv_block_t        *block,
+                 uct_bxi_recv_block_params_t *params)
 {
   ucs_status_t   status;
   ptl_me_t       me;

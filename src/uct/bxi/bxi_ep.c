@@ -155,6 +155,17 @@ static ucs_status_t uct_bxi_iface_block_handle_rndv(uct_bxi_iface_t      *iface,
   return UCS_OK;
 }
 
+UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_put,
+                 (mdh, start, size, pid, pti, tag, user_ptr, imm),
+                 ptl_handle_md_t mdh, ptl_size_t start, ptl_size_t size,
+                 ptl_process_t pid, ptl_pt_index_t pti, ptl_match_bits_t tag,
+                 void *user_ptr, uint64_t imm)
+{
+  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  return uct_bxi_wrap(PtlPut(mdh, start, size, PTL_ACK_REQ, pid, pti, tag, 0,
+                             user_ptr, imm));
+}
+
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
@@ -224,11 +235,14 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.am, id, 0, op, 0));
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut return %d", status);
+  status = uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size,
+                       ep->dev_addr.pid, ep->iface_addr.am, id, op, 0);
+
+  if (status == UCS_ERR_NO_RESOURCE) {
+    size = UCS_ERR_NO_RESOURCE;
+    goto err_release_op;
+  } else if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
   /* Append operation descriptor to completion queue. */
@@ -238,6 +252,10 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, size);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
                          UCT_AM_TRACE_TYPE_SEND, id, op + 1, size);
+
+  return size;
+err_release_op:
+  ucs_mpool_put(op);
 err:
   return size;
 }
@@ -533,12 +551,14 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
     }
 
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, imm));
+    status = uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size,
+                         ep->dev_addr.pid, ep->iface_addr.tag, tag, op, imm);
   }
 
-  if (status != UCS_OK) {
+  if (status == UCS_ERR_NO_RESOURCE) {
+    size = UCS_ERR_NO_RESOURCE;
+    goto err_release_op;
+  } else if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
 
@@ -550,6 +570,10 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
   uct_bxi_log_put(iface);
 
+  return size;
+
+err_release_op:
+  ucs_mpool_put(op);
 err:
   return size;
 }
@@ -827,10 +851,10 @@ uct_bxi_tag_recv_is_offloaded(uct_bxi_recv_block_t *block)
   return block->ctx->gop != NULL;
 }
 
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
-                                  uct_bxi_recv_block_t        *block,
-                                  uct_bxi_recv_block_params_t *params)
+UCS_PROFILE_FUNC_VOID(uct_bxi_iface_tag_recv_rndv_zcopy,
+                      (iface, ep, block, params), uct_bxi_iface_t *iface,
+                      uct_bxi_ep_t *ep, uct_bxi_recv_block_t *block,
+                      uct_bxi_recv_block_params_t *params)
 {
   ucs_status_t status = UCS_OK;
   uct_tag_t    tag;
@@ -865,10 +889,10 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
-ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
-                                          uct_tag_t        tag_mask,
-                                          const uct_iov_t *iov, size_t iovcnt,
-                                          uct_tag_context_t *ctx)
+UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
+                 (tl_iface, tag, tag_mask, iov, iovcnt, ctx),
+                 uct_iface_h tl_iface, uct_tag_t tag, uct_tag_t tag_mask,
+                 const uct_iov_t *iov, size_t iovcnt, uct_tag_context_t *ctx)
 {
   ucs_status_t                status;
   ptl_iovec_t                *ptl_iov;
