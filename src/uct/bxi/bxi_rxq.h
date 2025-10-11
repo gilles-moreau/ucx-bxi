@@ -8,11 +8,11 @@ typedef struct uct_bxi_rxq        uct_bxi_rxq_t;
 typedef struct uct_bxi_op_ctx     uct_bxi_op_ctx_t;
 typedef struct uct_bxi_recv_block uct_bxi_recv_block_t;
 
-typedef ucs_status_t (*uct_bxi_rxq_ev_handler)(uct_bxi_iface_t *iface,
-                                               ptl_event_t     *ev);
 typedef ucs_status_t (*uct_bxi_block_handler)(uct_bxi_iface_t      *iface,
                                               uct_bxi_recv_block_t *block,
                                               ptl_event_t          *ev);
+typedef ucs_status_t (*uct_bxi_block_activate)(uct_bxi_iface_t      *iface,
+                                               uct_bxi_recv_block_t *block);
 
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_IN_USE          = UCS_BIT(0),
@@ -23,6 +23,7 @@ enum {
 typedef struct uct_bxi_recv_block_params {
   void            *start;
   size_t           size;
+  ptl_process_t    pid;
   ptl_match_bits_t match;
   ptl_match_bits_t ign;
   unsigned         options;
@@ -40,15 +41,15 @@ typedef struct uct_bxi_recv_block {
   ucs_list_link_t       c_elem;      /* Element in the cancel list */
   uct_tag_t             tag;         /* Needed in case block is cancelled */
   uct_tag_t             stag;        /* Send tag */
-  uct_bxi_block_handler handler;     /* Receive block handler on event */
-  ptl_list_t            list;        /* Portals list: OVERFLOW or PRIORITY */
-  uct_tag_context_t    *ctx;         /* Tag context provided by upper layer */
-  ptl_handle_me_t       meh;         /* Memory Entry handle */
-  ptl_handle_ct_t       cth;         /* Counter handle associated to 
+  ptl_list_t            list;
+  uct_bxi_block_handler handler;  /* Receive block handler on event */
+  uct_tag_context_t    *ctx;      /* Tag context provided by upper layer */
+  ptl_handle_me_t       meh;      /* Memory Entry handle */
+  ptl_handle_ct_t       cth;      /* Counter handle associated to 
                                         the block */
-  ptl_handle_md_t       mdh;         /* Memory Descriptor used for GET */
-  ptl_size_t            ct_value;    /* SW counter tracking HW counter */
-  uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
+  ptl_handle_md_t       mdh;      /* Memory Descriptor used for GET */
+  ptl_size_t            ct_value; /* SW counter tracking HW counter */
+  uct_bxi_iface_send_op_t *op;    /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 enum {
@@ -76,12 +77,12 @@ typedef struct uct_bxi_rxq {
   struct {
     size_t       blk_size;
     unsigned int blk_opts;
-    ptl_size_t   blk_min_free;
     unsigned     num_blk;
   } config;
   ucs_mpool_t           mp;      /* Memory pool of block buffer */
   ucs_list_link_t       bhead;   /* List of allocated blocks */
   uct_bxi_block_handler handler; /* Block handler called based on list */
+  ptl_me_t              unexp_me;
 } uct_bxi_rxq_t;
 
 ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
@@ -93,20 +94,57 @@ ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
 void         uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block);
 void         uct_bxi_recv_block_release(uct_bxi_recv_block_t *block);
 
-static inline ptl_pt_index_t uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
+static UCS_F_ALWAYS_INLINE ptl_pt_index_t
+uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
 {
   return rxq->pti;
 }
 
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_recv_block_is_unexpected(uct_bxi_recv_block_t *block)
+static UCS_F_ALWAYS_INLINE ucs_status_t
+uct_bxi_recv_block_exp_activate(uct_bxi_recv_block_t *block, ptl_me_t *me)
 {
-  return block->list == PTL_OVERFLOW_LIST;
+  ucs_status_t   status;
+  uct_bxi_rxq_t *rxq = block->rxq;
+
+  status = uct_bxi_wrap(
+          PtlMEAppend(rxq->nih, rxq->pti, me, block->list, block, &block->meh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not append ME");
+  }
+
+  return UCS_OK;
+}
+
+static UCS_F_ALWAYS_INLINE ucs_status_t
+uct_bxi_recv_block_unexp_activate(uct_bxi_recv_block_t *block)
+{
+  ucs_status_t   status;
+  uct_bxi_rxq_t *rxq = block->rxq;
+
+  rxq->unexp_me.start  = block->start;
+  rxq->unexp_me.length = block->size;
+
+  status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &rxq->unexp_me,
+                                    block->list, block, &block->meh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not append ME");
+  }
+
+  return UCS_OK;
 }
 
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_recv_block_update_cnt(uct_bxi_recv_block_t *block, ptl_size_t inc)
 {
+  ptl_ct_event_t ct_value;
+
+  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
+  if (ct_value.success != block->ct_value) {
+    ucs_error("BXI: error tracking ct value. exp=%lu, val=%lu",
+              ct_value.success, block->ct_value);
+  }
+  ucs_debug("BXI: update cnt. sw=%lu, hw=%lu", block->ct_value,
+            ct_value.success);
   block->ct_value += inc;
 }
 

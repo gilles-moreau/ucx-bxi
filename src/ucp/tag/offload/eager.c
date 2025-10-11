@@ -148,7 +148,6 @@ static void ucp_proto_eager_tag_offload_bcopy_probe_common(
         .super.memtype_op    = UCT_EP_OP_GET_SHORT,
         .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG |
                                UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
-                               UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
                                UCP_PROTO_COMMON_INIT_FLAG_CAP_SEG_SIZE,
         .super.exclude_map   = 0,
         .super.reg_mem_info  = ucp_mem_info_unknown,
@@ -290,16 +289,10 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
                                       const ucp_proto_single_priv_t *spriv,
                                       uct_iov_t *iov)
 {
-    unsigned flags = 0;
-
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        flags = UCT_TAG_OFFLOAD_OPERATION; 
-    }
-
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                        spriv->super.lane),
                                   req->send.msg_proto.tag, 0ul, iov, 1, 
-                                  flags, &req->send.state.uct_comp);
+                                  0, &req->send.state.uct_comp);
 }
 
 static ucs_status_t

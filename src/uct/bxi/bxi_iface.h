@@ -99,13 +99,11 @@ typedef struct uct_bxi_send_op_comp {
 typedef struct uct_bxi_iface_send_op {
   unsigned               flags;
   uct_bxi_iface_t       *iface;     /* Backpointer */
-  uct_bxi_mem_desc_t    *mem_desc;  /* MD to be released if trig get */
   uct_bxi_send_op_comp_t comp;      /* Handler called completion */
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
   uct_completion_t      *user_comp; /* User completion callback */
   uct_bxi_ep_t          *ep;        /* OP endpoint */
   size_t                 length;    /* Length of the OP */
-  size_t                 mlength;   /* Length actually sent */
 
   union {
     struct {
@@ -235,6 +233,7 @@ typedef struct uct_bxi_iface {
     unsigned int   rndv_hdr_offset; /* Offset of rndv hdr in payload */
     uct_bxi_cnt_t *cnts;            /* Table of counters */
     unsigned int   num_cnts;        /* Current number of counters */
+    int            sched_window;    /* Is scheduling window opened? */
     khash_t(uct_bxi_pid_map) map;   /* Map pid to index counter table */
   } tm;
 
@@ -309,6 +308,7 @@ uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
      * to avoid memory corruption. */
     return UCS_ERR_ALREADY_EXISTS;
   }
+  ucs_debug("BXI: add to hash. buffer=%p", buffer);
   ucs_assert(ret != UCS_KH_PUT_FAILED);
   return UCS_OK;
 }
@@ -318,6 +318,7 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   khiter_t iter;
 
+  ucs_debug("BXI: del from hash. buffer=%p", buffer);
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
   kh_del(uct_bxi_tag_addrs, &iface->tm.tag_addrs, iter);
@@ -591,11 +592,9 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                            return UCS_ERR_NO_RESOURCE);                        \
   (_desc)->rxq = _rxq;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _rxq, _start,    \
-                                          _size, _tag, _ctx, _handler,         \
-                                          _err_code)                           \
+#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _start, _size,   \
+                                          _tag, _ctx, _handler, _err_code)     \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
-  (_desc)->rxq      = _rxq;                                                    \
   (_desc)->start    = _start;                                                  \
   (_desc)->size     = _size;                                                   \
   (_desc)->tag      = _tag;                                                    \

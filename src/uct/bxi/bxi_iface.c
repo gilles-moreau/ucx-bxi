@@ -8,9 +8,11 @@
 
 #include <ucs/sys/math.h>
 
-#define UCT_PTL_IFACE_MAX_EPS  8192
-#define UCT_PTL_IFACE_OVERHEAD 10e-4
-#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(800e-4, 0)
+#define UCT_PTL_IFACE_MAX_EPS      8192
+#define UCT_PTL_IFACE_TAG_OVERHEAD 10e-4
+#define UCT_PTL_IFACE_TAG_LATENCY  ucs_linear_func_make(800e-4, 0)
+#define UCT_PTL_IFACE_AM_OVERHEAD  10e-8
+#define UCT_PTL_IFACE_AM_LATENCY   ucs_linear_func_make(80e-8, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
@@ -44,28 +46,28 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          ucs_offsetof(uct_bxi_iface_config_t, max_events),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_TX_QUEUE_LEN", "256",
-         "Maximum number of outstanding operations (default: 256).",
+        {"MAX_TX_QUEUE_LEN", "1024",
+         "Maximum number of outstanding operations (default: 1024).",
          ucs_offsetof(uct_bxi_iface_config_t, tx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "TX_", -1, 32, 128m, 1.0, "send",
+                "TX_", -1, 128, 128m, 1.0, "send",
                 ucs_offsetof(uct_bxi_iface_config_t, tx.mp), "\n"),
 
-        {"MAX_RX_QUEUE_LEN", "32",
-         "Maximum number of bounced buffer in the Receive Queue (default: "
-         "32).",
+        {"MAX_RX_QUEUE_LEN", "128",
+         "Maximum number of bounced blocks in the Receive Queue (default: "
+         "128).",
          ucs_offsetof(uct_bxi_iface_config_t, rx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
-        {"NUM_RX_SEG", "64",
-         "Number of segments per receive block in the RX Queue (default: 32)",
+        {"NUM_RX_SEG", "1024",
+         "Number of segments per receive block in the RX Queue (default: 1024)",
          ucs_offsetof(uct_bxi_iface_config_t, rx.num_seg),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "RX_AM_", -1, 32, 128m, 1.0, "recv_am",
+                "RX_AM_", -1, 128, 128m, 1.0, "recv_am",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.am_mp), "\n"),
 
         {"SEG_SIZE", "8192",
@@ -78,7 +80,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          ucs_offsetof(uct_bxi_iface_config_t, tm.enable), UCS_CONFIG_TYPE_BOOL},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "RX_TAG_", -1, 32, 128m, 1.0, "recv_tag",
+                "RX_TAG_", -1, 128, 128m, 1.0, "recv_tag",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.tag_mp),
                 "Memory pool of bounced buffers posted in the Portals overflow "
                 "list.\n"),
@@ -247,13 +249,11 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     /* If rndv was not offloaded, then it must be handled in sw. */
     //NOTE: It has been kept to preserve compatibility with UCX testsuite.
     if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
-      status = uct_bxi_wrap(
-              PtlGet(iface->tx.mem_desc->mdh,
-                     (ptl_size_t)UCS_PTR_BYTE_OFFSET(ev->start,
-                                                     iface->tm.rndv_hdr_offset),
-                     send_size - payload_size, ev->initiator, pti,
-                     UCT_BXI_BUILD_RNDV_TAG(uct_bxi_iface_md(iface)->pid, cnt),
-                     0, block->op));
+      status = uct_bxi_wrap(PtlGet(
+              iface->tx.mem_desc->mdh,
+              (ptl_size_t)UCS_PTR_BYTE_OFFSET(ev->start,
+                                              iface->tm.rndv_hdr_offset),
+              send_size - payload_size, ev->initiator, pti, cnt, 0, block->op));
       if (status != UCS_OK) {
         ucs_fatal("BXI: sw rndv get failed");
       }
@@ -278,7 +278,7 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
       status = ev->mlength < ev->rlength ? UCS_ERR_MESSAGE_TRUNCATED : UCS_OK;
       /* Eager expected message completion. */
       block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
-                               ev->mlength, NULL, UCS_OK);
+                               ev->mlength, NULL, status);
     }
 
     /* Operation will not be used, it may be released. */
@@ -287,7 +287,7 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     uct_bxi_recv_block_release(block);
   }
 
-  return status;
+  return UCS_OK;
 }
 
 ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
@@ -295,19 +295,20 @@ ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
 {
   ucs_assert(ev->type = PTL_EVENT_PUT_OVERFLOW);
 
-  uct_bxi_iface_tag_del_from_hash(iface, block->start);
-
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
     uct_bxi_recv_block_update_cnt(block, ev->mlength);
   }
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
     /* Copy the first eager part that was sent on the first message of the 
-   * protocol and which was received in the overflow block. */
+     * protocol and which was received in the overflow block. */
     memcpy(block->start, ev->start, iface->tm.rndv_hdr_offset);
 
     /* Block and operation will be released in operation handler. */
     uct_bxi_iface_completion_op(block->op);
+  } else {
+    uct_bxi_iface_release_op(block->op);
+    uct_bxi_recv_block_release(block);
   }
 
   /* Otherwise, operation and block should have been released during cancel. */
@@ -363,11 +364,11 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //FIXME: implementing AM_SHORT requires to have one pending queue per
   //       endpoint which implies some changes in the way resource are
   //       managed.
-  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
-                    UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
-                    UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
-                    UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
-                    UCT_IFACE_FLAG_INTER_NODE |
+  attr->cap.flags = UCT_IFACE_FLAG_AM_SHORT | UCT_IFACE_FLAG_AM_BCOPY |
+                    UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_GET_BCOPY |
+                    UCT_IFACE_FLAG_PUT_SHORT | UCT_IFACE_FLAG_PUT_ZCOPY |
+                    UCT_IFACE_FLAG_GET_ZCOPY | UCT_IFACE_FLAG_PENDING |
+                    UCT_IFACE_FLAG_CB_SYNC | UCT_IFACE_FLAG_INTER_NODE |
                     UCT_IFACE_FLAG_CONNECT_TO_IFACE | UCT_IFACE_FLAG_EP_CHECK;
 
   //TODO: UCT_IFACE_FLAG_ERRHANDLE_ZCOPY_BUF: currently not handled by Portals4
@@ -400,10 +401,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
-  attr->latency             = UCT_PTL_IFACE_LATENCY;
+  attr->latency             = UCT_PTL_IFACE_AM_LATENCY;
   attr->bandwidth.dedicated = 0;
   attr->bandwidth.shared    = 100 * UCS_GBYTE;
-  attr->overhead            = UCT_PTL_IFACE_OVERHEAD;
+  attr->overhead            = UCT_PTL_IFACE_AM_OVERHEAD;
   attr->priority            = 1;
 
   if (!iface->tm.enabled) {
@@ -437,6 +438,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
           UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
           UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+
+  //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
+  attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;
+  attr->overhead = UCT_PTL_IFACE_TAG_OVERHEAD;
 
   return UCS_OK;
 }
@@ -541,6 +546,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
         ucs_error("PTL: event %s should not have been triggered",
                   uct_bxi_event_str[ev.type]);
         status = UCS_ERR_IO_ERROR;
+        goto out;
         break;
       default:
         break;
@@ -653,8 +659,6 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         }
         // Fallthrough
       case PTL_EVENT_ACK:
-        op->mlength = ev.mlength;
-
         progressed++;
         if (ev.ni_fail_type != PTL_NI_OK) {
           uct_bxi_iface_handle_tx_failure(iface, op);
@@ -706,7 +710,7 @@ out:
 
 unsigned uct_bxi_iface_progress(uct_iface_t *super)
 {
-  unsigned         count = 0;
+  unsigned         count;
   uct_bxi_iface_t *iface = ucs_derived_of(super, uct_bxi_iface_t);
 
   count = uct_bxi_iface_poll_rx(iface);
@@ -800,7 +804,7 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
 
   block->eager_limit = iface->config.tm.eager_limit;
 
-  /* Initialize the byte counter for rendez-vous offload. */
+  /* Initialize the byte counter for rendez-vous offload or scheduling. */
   block->ct_value = 0;
   status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cth));
   if (status != UCS_OK) {
@@ -810,6 +814,8 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
   /* Initialize the MD for rendez-vous offload. */
   md.eq_handle = iface->tx.eqh;
   md.length    = PTL_SIZE_MAX;
+  //NOTE: We do not count bytes because we do not know in advance the
+  //      actual size that will be read by the GET operation.
   md.options   = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
   md.start     = 0;
   md.ct_handle = block->cth;
@@ -893,10 +899,11 @@ static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   iface->tm.enabled = 1;
 
   /* First, initialize interface configuration. */
-  iface->config.tm.max_tags    = config->tm.list_size;
-  iface->config.tm.max_gop     = config->tm.max_gop;
-  iface->config.tm.max_zcopy   = config->seg_size;
-  iface->config.tm.max_hdr     = UCT_BXI_RNDV_MAX_HDR_LENGTH;
+  iface->config.tm.max_tags  = config->tm.list_size;
+  iface->config.tm.max_gop   = config->tm.max_gop;
+  iface->config.tm.max_zcopy = config->seg_size;
+  iface->config.tm.max_hdr   = UCT_BXI_RNDV_MAX_HDR_LENGTH;
+  //FIXME: reset to make payload up to 8192
   iface->config.tm.eager_limit = config->seg_size;
 
   iface->config.rx.tag_mp = config->rx.tag_mp;
@@ -1308,9 +1315,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   mp_params.elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size;
   mp_params.max_elems = config->tx.max_queue_len;
   mp_params.alignment = UCS_SYS_CACHE_LINE_SIZE;
-  mp_params.ops       = &uct_bxi_send_mpool_ops;
-  mp_params.name      = "send-desc-mp";
-  mp_params.grow_factor = config->tx.mp.grow_factor;
+  mp_params.align_offset = sizeof(uct_bxi_iface_send_op_t);
+  mp_params.ops          = &uct_bxi_send_mpool_ops;
+  mp_params.name         = "send-desc-mp";
+  mp_params.grow_factor  = config->tx.mp.grow_factor;
 
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
@@ -1493,9 +1501,11 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
-        .iface_tag_gop_create     = uct_bxi_iface_tag_gop_create,
-        .iface_tag_gop_delete     = uct_bxi_iface_tag_gop_delete,
-        .iface_tag_gop_depends_on = uct_bxi_iface_tag_gop_depends_on,
+        .iface_tag_sched_enable   = uct_bxi_iface_tag_sched_enable,
+        .iface_tag_sched_disable  = uct_bxi_iface_tag_sched_disable,
+        .iface_tag_sched_recv     = uct_bxi_iface_tag_sched_recv,
+        .iface_tag_sched_send     = uct_bxi_iface_tag_sched_send,
+        .iface_tag_sched_release  = uct_bxi_iface_tag_sched_release,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {

@@ -95,7 +95,6 @@ public:
         r.mbuf                    = b;
         r.tag                     = t;
         r.tmask                   = m;
-        r.uct_ctx.gop             = NULL;
         r.uct_ctx.reply_ep        = NULL;
         r.uct_ctx.completed_cb    = completed;
         r.uct_ctx.tag_consumed_cb = tag_consumed;
@@ -306,15 +305,16 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_gop_create(receiver().iface(), &gop));
-
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.gop = gop;
+
         r_ctx.uct_ctx.reply_ep = receiver().ep(0);
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
+
+        ASSERT_UCS_OK(uct_iface_tag_sched_recv(receiver().iface(), 
+                                               &r_ctx.uct_ctx, &gop));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
@@ -333,7 +333,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_gop_delete(receiver().iface(), gop);
+        uct_iface_tag_sched_release(receiver().iface(), gop);
         flush();
     }
 
@@ -351,15 +351,16 @@ public:
         mapped_buffer sendbuf(length, SEND_SEED, sender());
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
-        ASSERT_UCS_OK(uct_iface_tag_gop_create(receiver().iface(), &gop));
-
         receiver().connect(0, sender(), 0);
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-        r_ctx.uct_ctx.gop = gop;
+
         r_ctx.uct_ctx.reply_ep = receiver().ep(0);
         ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
+
+        ASSERT_UCS_OK(uct_iface_tag_sched_recv(receiver().iface(), 
+                                               &r_ctx.uct_ctx, &gop));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
@@ -378,7 +379,7 @@ public:
 
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_gop_delete(receiver().iface(), gop);
+        uct_iface_tag_sched_release(receiver().iface(), gop);
         flush();
     }
 

@@ -4,61 +4,8 @@
 
 #define UCT_BXI_CT_INIT (ptl_ct_event_t){.success = 0, .failure = 0}
 
-UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_recv_block_activate, (block, params),
-                 uct_bxi_recv_block_t        *block,
-                 uct_bxi_recv_block_params_t *params)
-{
-  ucs_status_t   status;
-  ptl_me_t       me;
-  uct_bxi_rxq_t *rxq = block->rxq;
-
-  if (params != NULL) {
-    me = (ptl_me_t){
-            .ct_handle   = params->cth,
-            .match_bits  = params->match,
-            .ignore_bits = params->ign,
-            .min_free    = 0,
-            .match_id    = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
-            .options     = params->options,
-            .uid         = PTL_UID_ANY,
-            .start       = params->start,
-            .length      = params->size};
-  } else {
-    //NOTE: PTL_ME_UNEXPECTED_HDR_DISABLE cannot be used because an expected ME
-    //      could be posted and matched in the OVERFLOW list by another message.
-    //      Using Bull's simulator, test_ucp_tag_match.send_nb_multiple_recv_unexp
-    //      fails because worker progression makes a message from the network to
-    //      be received by the receiver before the latter post its receive. When
-    //      it does, because they are no unexp header, the receive is posted in
-    //      the priority list and will be matched by the following message
-    //      arriving from the network.
-    //      The use of unexpected header guaranties the order of operations.
-    me = (ptl_me_t){
-            .ct_handle   = PTL_CT_NONE,
-            .match_bits  = 0,
-            .ignore_bits = ~0,
-            .min_free    = rxq->config.blk_min_free,
-            .match_id    = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
-            .options     = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
-                       PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN |
-                       PTL_ME_IS_ACCESSIBLE,
-            .uid    = PTL_UID_ANY,
-            .start  = block->start,
-            .length = block->size};
-  }
-
-  status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &me, block->list, block,
-                                    &block->meh));
-  if (status != UCS_OK) {
-    return status;
-  }
-
-  return status;
-}
-
 void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
 {
-  int          ret;
   ucs_status_t status;
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
@@ -69,14 +16,7 @@ void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block)
     }
   }
 
-  ret = PtlMEUnlink(block->meh);
-  if (ret == PTL_IN_USE && !uct_bxi_recv_block_is_unexpected(block)) {
-    ucs_warn("BXI: block have ongoing operations. pti=%d, start=%p",
-             block->rxq->pti, block->start);
-  } else if (ret == PTL_IN_USE && uct_bxi_recv_block_is_unexpected(block)) {
-    ucs_warn("BXI: block have unexpected headers still. pti=%d, start=%p",
-             block->rxq->pti, block->start);
-  }
+  PtlMEUnlink(block->meh);
 }
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_is_overflow(ptl_size_t thresh,
@@ -128,7 +68,7 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
     }
 
     /* Create the ME on the card. */
-    rc = uct_bxi_recv_block_activate(block, NULL);
+    rc = uct_bxi_recv_block_unexp_activate(block);
     if (rc != UCS_OK) {
       goto err;
     }
@@ -149,7 +89,6 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   block->start   = block + 1;
   block->rxq     = rxq;
   block->meh     = PTL_INVALID_HANDLE;
-  block->list    = rxq->list;
   block->cth     = PTL_CT_NONE;
   block->handler = rxq->handler;
 }
@@ -182,14 +121,13 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
     goto err;
   }
 
-  rxq->flags               = params->flags;
-  rxq->nih                 = params->nih;
-  rxq->eqh                 = params->eqh;
-  rxq->list                = params->list;
-  rxq->handler             = params->handler;
-  rxq->config.num_blk      = params->mp.max_bufs;
-  rxq->config.blk_size     = params->num_segs * params->seg_size;
-  rxq->config.blk_min_free = params->seg_size;
+  rxq->flags           = params->flags;
+  rxq->nih             = params->nih;
+  rxq->eqh             = params->eqh;
+  rxq->list            = params->list;
+  rxq->handler         = params->handler;
+  rxq->config.num_blk  = params->mp.max_bufs;
+  rxq->config.blk_size = params->num_segs * params->seg_size;
 
   status = uct_bxi_wrap(PtlPTAlloc(params->nih, PTL_PT_FLOWCTRL, params->eqh,
                                    PTL_PT_ANY, &rxq->pti));
@@ -201,6 +139,17 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   if (params->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL) {
     goto out;
   }
+
+  rxq->unexp_me.ct_handle         = PTL_CT_NONE;
+  rxq->unexp_me.match_bits        = 0;
+  rxq->unexp_me.ignore_bits       = ~0;
+  rxq->unexp_me.min_free          = params->seg_size;
+  rxq->unexp_me.match_id.phys.nid = PTL_NID_ANY;
+  rxq->unexp_me.match_id.phys.pid = PTL_PID_ANY;
+  rxq->unexp_me.uid               = PTL_UID_ANY;
+  rxq->unexp_me.options           = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
+                          PTL_ME_NO_TRUNCATE | PTL_ME_EVENT_LINK_DISABLE |
+                          PTL_ME_MAY_ALIGN;
 
   //FIXME: we may question the use of a memory pool here since the number of
   //       buffer is fixed and everything should be posted to the NIC at init

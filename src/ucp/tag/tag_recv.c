@@ -129,6 +129,8 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
     req->recv.op_attr       = param->op_attr_mask;
     req->recv.tag.tag       = tag;
     req->recv.tag.tag_mask  = tag_mask;
+    req->recv.reply_ep      = UCP_REQUEST_PARAM_FIELD(param, EPH, 
+                                                      reply_ep, NULL);
 
     if (ucs_log_is_enabled(UCS_LOG_LEVEL_TRACE_REQ)) {
         req->recv.tag.info.sender_tag = 0;
@@ -154,14 +156,17 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
         /* Not found on unexpected, wait until it arrives. */
         req_queue = ucp_tag_exp_get_queue(&worker->tm, tag, tag_mask);
 
-        /* Check if operation can be offloaded. */
-        status = ucp_request_recv_op_offload(&worker->tm, req, param);
-        if (status != UCS_OK) {
-            goto out_request_put;
-        }
-
         /* If offload supported, post this tag to transport as well. */
         ucp_tag_offload_try_post(worker, req, req_queue);
+
+        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
+            req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+
+            status = ucp_sched_recv(req);
+            if (status != UCS_OK) {
+                goto out_request_put;
+            }
+        }
 
         ucp_tag_exp_push(&worker->tm, req_queue, req);
 

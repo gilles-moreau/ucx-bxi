@@ -16,9 +16,9 @@
 #include <ucp/proto/proto_am.inl>
 #include <ucp/core/ucp_context.h>
 #include <ucp/core/ucp_request.h>
+#include <ucp/core/ucp_sched.h>
 #include <ucp/core/ucp_mm.h>
 #include <ucp/tag/tag_match.inl>
-#include <ucp/tag/offload/sched.h>
 #include <ucs/sys/sys.h>
 
 
@@ -348,18 +348,6 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
     req->recv.uct_ctx.reply_ep        = req->recv.reply_ep != NULL ?
             ucp_ep_get_tag_uct_ep(req->recv.reply_ep) : NULL;
-    req->recv.uct_ctx.gop             = NULL;
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-        status = ucp_offload_sched_region_add(req->recv.schedh, 
-                                              req->recv.dt_iter.type.contig.buffer, 
-                                              req->recv.dt_iter.length, 
-                                              &req->recv.uct_ctx.gop);
-        if (status != UCS_OK) {
-            ucp_tag_offload_release_buf(req);
-            return status;
-        }
-    }
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,
                                       req->recv.tag.tag_mask, &iov, 1,

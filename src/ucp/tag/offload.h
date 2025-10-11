@@ -12,8 +12,6 @@
 #include <ucp/core/ucp_request.h>
 #include <ucs/datastruct/queue.h>
 
-#include "offload/sched.h"
-
 
 
 /**

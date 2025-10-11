@@ -1830,12 +1830,6 @@ struct uct_tag_context {
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
      /** 
-      *  Offload Operation Context to setup operation dependencies. If not null, then
-      *  it will be used by the corresponding operation.
-      */ 
-     uct_gop_h gop;
-
-     /** 
       * Reply endpoint to enable offloaded rendezvous (only needed for BXI).
       */ 
      uct_ep_h reply_ep;
@@ -1848,7 +1842,8 @@ struct uct_tag_context {
  * Operation Context structure for storing generic operation information.
  */
 typedef struct uct_gop {
-    size_t size; /* Operation size */
+    unsigned flags;
+    size_t   size; /* Operation size */
 } uct_gop_t;
 
 
@@ -3646,7 +3641,36 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
 
 /**
  * @ingroup UCT_TAG
- * @brief Create an Offload Operation Context to a transport interface.
+ * @brief Start a scheduling window on the interface.
+ *
+ * After this call, the interface will behave with scheduling properties.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ *
+ * @return UCS_OK -         The context is created to the transport.
+ */
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
+{
+    return iface->ops.iface_tag_sched_enable(iface);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief End a scheduling window on the interface.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ *
+ * @return UCS_OK                  - The context is created to the transport.
+ * @return UCS_ERR_NOT_IMPLEMENTED - Could not start scheduling window.
+ */
+UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
+{
+    return iface->ops.iface_tag_sched_disable(iface);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Create a completion handle on the transport for a receive operation.
  *
  * This routine creates the necessary resources on a transport interface to be 
  * able to create dependencies between communication primitives.
@@ -3658,10 +3682,31 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
  * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
  *                                 resources.
  */
-UCT_INLINE_API ucs_status_t uct_iface_tag_gop_create(uct_iface_h iface,
-                                                     uct_gop_h *gop_p)
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_recv(uct_iface_h        iface,
+                                                     uct_tag_context_t *ctx,
+                                                     uct_gop_h         *gop_p)
 {
-    return iface->ops.iface_tag_gop_create(iface, gop_p);
+    return iface->ops.iface_tag_sched_recv(iface, ctx, gop_p);
+}
+
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Create completion handle to schedue a send operation.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ * @param [in]    gop       Target Operation handle.
+ * @param [in]    gops      Table of Operation handles.
+ * @param [in]    gop_cnt   Size of Operation handle table.
+ *
+ * @return UCS_OK                - The context is created to the transport.
+ */
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_send(uct_iface_h iface,
+                                                     uct_gop_h *gop_p,
+                                                     uct_gop_h *gops,
+                                                     size_t gop_cnt)
+{
+    return iface->ops.iface_tag_sched_send(iface, gop_p, gops, gop_cnt);
 }
 
 /**
@@ -3672,30 +3717,10 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_gop_create(uct_iface_h iface,
  * @param [in]   gop       Generic operation handle.
  *
  */
-UCT_INLINE_API void uct_iface_tag_gop_delete(uct_iface_h iface,
-                                             uct_gop_h gop)
+UCT_INLINE_API void uct_iface_tag_sched_release(uct_iface_h iface,
+                                                uct_gop_h gop)
 {
-    iface->ops.iface_tag_gop_delete(iface, gop);
-}
-
-/**
- * @ingroup UCT_TAG
- * @brief Create dependencies between one Offload Operation to a table of 
- * other Offload Operations.
- *
- * @param [in]    iface     Interface to post the tag on.
- * @param [in]    gop       Target Operation handle.
- * @param [in]    gops      Table of Operation handles.
- * @param [in]    gop_cnt   Size of Operation handle table.
- *
- * @return UCS_OK                - The context is created to the transport.
- */
-UCT_INLINE_API ucs_status_t uct_iface_tag_gop_depends_on(uct_iface_h iface,
-                                                         uct_gop_h gop,
-                                                         uct_gop_h *gops,
-                                                         size_t gop_cnt)
-{
-    return iface->ops.iface_tag_gop_depends_on(iface, gop, gops, gop_cnt);
+    iface->ops.iface_tag_sched_release(iface, gop);
 }
 
 /**

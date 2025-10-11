@@ -11,6 +11,7 @@
 #include "ucp_worker.h"
 #include "ucp_ep.inl"
 #include "ucp_mm.inl"
+#include "ucp_sched.inl"
 
 #include <ucp/dt/dt.h>
 #include <ucs/profile/profile.h>
@@ -81,6 +82,9 @@ UCS_PTR_MAP_IMPL(request, 0);
         \
         if (ucs_likely((_req)->flags & UCP_REQUEST_FLAG_CALLBACK)) { \
             (_req)->_cb((_req) + 1, (_status), ## __VA_ARGS__); \
+        } \
+        if (ucs_unlikely((_req)->flags & UCP_REQUEST_FLAG_SCHEDULED)) { \
+            ucp_sched_task_complete((_req)->task); \
         } \
         if (ucs_unlikely(_flags & UCP_REQUEST_FLAG_RELEASED)) { \
             ucp_request_put(_req); \
@@ -481,54 +485,6 @@ ucp_request_send_buffer_reg(ucp_request_t *req, ucp_md_map_t md_map,
                                   req->send.datatype, &req->send.state.dt,
                                   (ucs_memory_type_t)req->send.mem_type, req,
                                   uct_flags);
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-ucp_request_send_op_offload(ucp_tag_match_t *tm,
-                            ucp_request_t *req, 
-                            const ucp_request_param_t *param)
-{
-    ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-
-    req->send.tag_offload.sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                          schedh, NULL);
-
-    if (ENABLE_PARAMS_CHECK) {
-        if (!ucp_offload_sched_exists(tm, req->send.tag_offload.sched)) {
-            /* A scheduler was provided but is not available in worker. */
-            ucs_error("req %p. provided scheduler not available. sched=%p", 
-                      req, req->send.tag_offload.sched);
-            return UCS_ERR_INVALID_PARAM;
-        }
-    }
-
-    return UCS_OK;
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-ucp_request_recv_op_offload(ucp_tag_match_t *tm,
-                            ucp_request_t *req, 
-                            const ucp_request_param_t *param)
-{
-    req->recv.schedh    = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
-    req->recv.reply_ep  = UCP_REQUEST_PARAM_FIELD(param, EPH, reply_ep, NULL);
-
-    if (ENABLE_PARAMS_CHECK) {
-        if (req->recv.schedh != NULL && 
-            !ucp_offload_sched_exists(tm, req->recv.schedh)) {
-            /* A scheduler was provided but is not available in worker. */
-            ucs_error("req %p. provided scheduler not available. sched=%p", 
-                      req, req->recv.schedh);
-            return UCS_ERR_INVALID_PARAM;
-        }
-    }
-
-    if (req->recv.schedh != NULL && req->recv.reply_ep != NULL) {
-    ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-        req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-    }
-
-    return UCS_OK;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t

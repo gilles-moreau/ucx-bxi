@@ -12,6 +12,7 @@
 
 #include "ucp_context.h"
 #include "ucp_mm.h"
+#include "ucp_sched.h"
 
 #include <ucp/api/ucp.h>
 #include <ucp/dt/datatype_iter.h>
@@ -55,10 +56,11 @@ enum {
     UCP_REQUEST_FLAG_USER_HEADER_COPIED    = UCS_BIT(19),
     UCP_REQUEST_FLAG_USAGE_TRACKED         = UCS_BIT(20),
     UCP_REQUEST_FLAG_OFFLOAD_OPERATION     = UCS_BIT(21),
+    UCP_REQUEST_FLAG_SCHEDULED             = UCS_BIT(22),
 #if UCS_ENABLE_ASSERT
-    UCP_REQUEST_FLAG_STREAM_RECV           = UCS_BIT(22),
-    UCP_REQUEST_DEBUG_FLAG_EXTERNAL        = UCS_BIT(23),
-    UCP_REQUEST_FLAG_SUPER_VALID           = UCS_BIT(24)
+    UCP_REQUEST_FLAG_STREAM_RECV           = UCS_BIT(23),
+    UCP_REQUEST_DEBUG_FLAG_EXTERNAL        = UCS_BIT(24),
+    UCP_REQUEST_FLAG_SUPER_VALID           = UCS_BIT(25)
 #else
     UCP_REQUEST_FLAG_STREAM_RECV           = 0,
     UCP_REQUEST_DEBUG_FLAG_EXTERNAL        = 0,
@@ -131,6 +133,10 @@ struct ucp_request {
     uint32_t          flags;
     /* Local request ID taken from PTR MAP */
     ucs_ptr_map_key_t id;
+    /* Schedule */
+    ucp_sched_h       schedh;
+    /* Task in schedule */
+    ucp_sched_task_t  *task;     
 
     union {
         void                      *user_data; /* Completion user data */
@@ -360,7 +366,6 @@ struct ucp_request {
                     ucp_tag_t         ssend_tag; /* Tag in offload sync send */
                     void              *rndv_op;  /* Handler of issued rndv send. Need to cancel
                                                     the operation if it is completed by SW. */
-                    ucp_offload_sched_h sched;   /* Offload scheduler for triggered operation. */
                 } tag_offload;
 
                 struct {
@@ -394,7 +399,6 @@ struct ucp_request {
             uint32_t              op_attr;  /* Operation attributes */
             ucp_datatype_iter_t   dt_iter;
             ucp_worker_t          *worker;
-            ucp_offload_sched_h   schedh;
             ucp_ep_h              reply_ep;
             uct_tag_context_t     uct_ctx;  /* Transport offload context */
 

@@ -38,6 +38,8 @@ noinst_HEADERS = \
 	core/ucp_rkey.inl \
 	core/ucp_worker.h \
 	core/ucp_worker.inl \
+	core/ucp_sched.h \
+	core/ucp_sched.inl \
 	core/ucp_thread.h \
 	core/ucp_types.h \
 	core/ucp_vfs.h \
@@ -114,6 +116,7 @@ libucp_la_SOURCES = \
 	core/ucp_version.c \
 	core/ucp_vfs.c \
 	core/ucp_worker.c \
+	core/ucp_sched.c \
 	dt/datatype_iter.c \
 	dt/dt_iov.c \
 	dt/dt_generic.c \
@@ -165,7 +168,6 @@ libucp_la_SOURCES = \
 	tag/offload.c \
 	tag/offload/eager.c \
 	tag/offload/rndv.c \
-	tag/offload/sched.c \
 	wireup/address.c \
 	wireup/ep_match.c \
 	wireup/select.c \
