@@ -676,11 +676,11 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
-  uct_bxi_iface_send_op_t    *op;
-  uct_bxi_recv_block_params_t params;
-  uct_bxi_recv_block_t       *block;
-  ptl_hdr_data_t              hdr = 0;
-  ssize_t                     bsize;
+  uct_bxi_iface_send_op_t *op;
+  ptl_me_t                 me;
+  uct_bxi_recv_block_t    *block;
+  ptl_hdr_data_t           hdr = 0;
+  ssize_t                  bsize;
 
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_IOV_SIZE_PTR(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -702,19 +702,20 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
           uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
           goto err);
 
-  params.start   = block->start;
-  params.size    = block->size;
-  params.match   = block->tag;
-  params.pid     = ep->dev_addr.pid;
-  params.cth     = PTL_CT_NONE;
-  params.ign     = 0;
-  params.options = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
-                   PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
-                   PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
+  me.start             = block->start;
+  me.length            = block->size;
+  me.match_bits        = block->tag;
+  me.match_id.phys.nid = ep->dev_addr.pid.phys.nid;
+  me.match_id.phys.pid = ep->dev_addr.pid.phys.pid;
+  me.ct_handle         = PTL_CT_NONE;
+  me.ignore_bits       = 0;
+  me.options           = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
+               PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
 
   /* Then, post the memory entry to the CTRL RXQ. Target will execute 
    * a GET operation on this. */
-  status = uct_bxi_recv_block_activate(block, &params);
+  status = uct_bxi_recv_block_exp_activate(block, &me);
   if (status != UCS_OK) {
     goto err_release_block;
   }

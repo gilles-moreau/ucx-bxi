@@ -89,10 +89,8 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
                                 uct_bxi_rxq_t      **rxq_p);
 void         uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq);
 
-ucs_status_t uct_bxi_recv_block_activate(uct_bxi_recv_block_t        *block,
-                                         uct_bxi_recv_block_params_t *params);
-void         uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block);
-void         uct_bxi_recv_block_release(uct_bxi_recv_block_t *block);
+void uct_bxi_recv_block_deactivate(uct_bxi_recv_block_t *block);
+void uct_bxi_recv_block_release(uct_bxi_recv_block_t *block);
 
 static UCS_F_ALWAYS_INLINE ptl_pt_index_t
 uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)

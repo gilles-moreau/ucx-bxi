@@ -521,7 +521,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
       case PTL_EVENT_AUTO_UNLINK:
         /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
          * Link it back, all included data has been processed already. */
-        status = uct_bxi_recv_block_activate(block, NULL);
+        status = uct_bxi_recv_block_unexp_activate(block);
         break;
       case PTL_EVENT_AUTO_FREE:
         /* AUTO_FREE are generated for on TAG RXQ because block are posted 
