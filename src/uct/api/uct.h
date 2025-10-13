@@ -579,7 +579,7 @@ enum uct_msg_flags {
  * @brief Flags for tag offloading.
  */
 enum uct_tag_flags {
-    UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
+    UCT_TAG_SCHEDULE          = UCS_BIT(0), /**< Schedule corresponding operation and 
                                                  generate an operation handle that can 
                                                  be used to enfore dependency with 
                                                  another operation. */

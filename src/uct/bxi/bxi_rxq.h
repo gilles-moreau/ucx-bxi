@@ -98,11 +98,10 @@ uct_bxi_rxq_get_addr(uct_bxi_rxq_t *rxq)
   return rxq->pti;
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_t
-uct_bxi_recv_block_exp_activate(uct_bxi_recv_block_t *block, ptl_me_t *me)
+static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_recv_block_exp_activate(
+        uct_bxi_rxq_t *rxq, uct_bxi_recv_block_t *block, ptl_me_t *me)
 {
-  ucs_status_t   status;
-  uct_bxi_rxq_t *rxq = block->rxq;
+  ucs_status_t status;
 
   status = uct_bxi_wrap(
           PtlMEAppend(rxq->nih, rxq->pti, me, block->list, block, &block->meh));
@@ -137,12 +136,9 @@ uct_bxi_recv_block_update_cnt(uct_bxi_recv_block_t *block, ptl_size_t inc)
   ptl_ct_event_t ct_value;
 
   uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
-  if (ct_value.success != block->ct_value) {
-    ucs_error("BXI: error tracking ct value. exp=%lu, val=%lu",
-              ct_value.success, block->ct_value);
-  }
-  ucs_debug("BXI: update cnt. sw=%lu, hw=%lu", block->ct_value,
-            ct_value.success);
+  ucs_debug("BXI: ct value. hw=%lu, sw=%lu", ct_value.success,
+            block->ct_value + inc);
+
   block->ct_value += inc;
 }
 

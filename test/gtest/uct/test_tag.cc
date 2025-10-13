@@ -127,8 +127,7 @@ public:
 
     ucs_status_t tag_eager_zcopy(entity &e, send_ctx &ctx)
     {
-        unsigned offload = ctx.uct_comp.gop == NULL ? 
-            0:UCT_TAG_OFFLOAD_OPERATION;
+        unsigned offload = ctx.uct_comp.gop == NULL ? 0 : UCT_TAG_SCHEDULE;
 
         UCS_TEST_GET_BUFFER_IOV(iov, iovcnt, ctx.mbuf->ptr(),
                                 ctx.mbuf->length(), ctx.mbuf->memh(),

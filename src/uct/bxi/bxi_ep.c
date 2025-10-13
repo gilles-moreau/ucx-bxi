@@ -534,7 +534,7 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
-  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     gop  = arg;
     size = gop->super.size;
 
@@ -611,7 +611,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
-  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
@@ -707,6 +707,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   me.match_bits        = block->tag;
   me.match_id.phys.nid = ep->dev_addr.pid.phys.nid;
   me.match_id.phys.pid = ep->dev_addr.pid.phys.pid;
+  me.uid               = PTL_UID_ANY;
   me.ct_handle         = PTL_CT_NONE;
   me.ignore_bits       = 0;
   me.options           = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
@@ -715,7 +716,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
 
   /* Then, post the memory entry to the CTRL RXQ. Target will execute 
    * a GET operation on this. */
-  status = uct_bxi_recv_block_exp_activate(block, &me);
+  status = uct_bxi_recv_block_exp_activate(iface->rx.ctrl.q, block, &me);
   if (status != UCS_OK) {
     goto err_release_block;
   }
@@ -749,7 +750,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, iface->tm.cnts[ep->idx].send,
                        iface->rx.ctrl.q->pti);
 
-  if (ucs_unlikely(flags & UCT_TAG_OFFLOAD_OPERATION)) {
+  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     /* An operation context was provided, so the operation must be 
      * triggered. */
     ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
@@ -822,7 +823,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   //      to be done in software. This is the case with generic datatype, very
   //      large message or multiple iov since current hardwares do not support
   //      it.
-  ucs_assert(!(flags & UCT_TAG_OFFLOAD_OPERATION));
+  ucs_assert(!(flags & UCT_TAG_SCHEDULE));
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(iface, &iface->tx.send_desc_mp, op, ep, NULL,
@@ -954,6 +955,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   me.options           = UCT_BXI_ME_OPT_RECV_ZCOPY;
   me.match_id.phys.nid = PTL_NID_ANY;
   me.match_id.phys.pid = PTL_PID_ANY;
+  me.uid               = PTL_UID_ANY;
 
   /* If receive size if lower than the eager limit, then the rendezvous can
    * never be offloaded. However, the rendezvous threshold is configurable by 
@@ -968,7 +970,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
     me.ct_handle = block->cth;
     me.options   = UCT_BXI_ME_OPT_RECV_ZCOPY_OFFLOADED;
 
-    if (!iface->tm.sched_window) {
+    if (uct_bxi_tag_recv_offload_rndv(iface, block, ep)) {
       /* Then is means the rendezvous will be offloaded. */
       block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED;
     }
@@ -980,20 +982,20 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   me.ignore_bits = ~tag_mask;
 
   /* Then, post the memory entry. */
-  status = uct_bxi_recv_block_exp_activate(block, &me);
+  status = uct_bxi_recv_block_exp_activate(iface->rx.tag.q, block, &me);
   if (status != UCS_OK) {
     /* Operation will be released with block release. */
     goto err_release_op;
+  }
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &me);
   }
 
   /* Update interface available resources. */
   uct_bxi_iface_op_res(iface, block->op);
   if (ep != NULL) {
     uct_bxi_ep_inc_recv_cnt(iface, ep->idx);
-  }
-
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
-    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &me);
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
@@ -1017,14 +1019,15 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  /* Receive has been posted and thus counter has been incremented two 
-   * times. Only do so if reply endpoint was provided during post. */
-  if (block->op->ep != NULL) {
-    uct_bxi_ep_dec_recv_cnt(iface, block->op->ep->idx);
-  }
-
   if (mode & UCT_TAG_CANCEL_FORCE) {
     uct_bxi_iface_tag_del_from_hash(iface, block->start);
+  }
+
+  /* Receive has been posted and thus counter has been incremented two 
+   * times (either through MATCHED or CANCEL). Only do so if reply 
+   * endpoint was provided during post. */
+  if (block->op->ep != NULL) {
+    uct_bxi_ep_dec_recv_cnt(iface, block->op->ep->idx);
   }
 
   /* Posted receive was matched in overflow list, unexpected header was then 
@@ -1447,12 +1450,17 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
 #endif
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
+  if (flags) {
+    goto add_to_pending;
+  }
+
   if (uct_bxi_iface_has_tx_resources(iface) > 0 &&
       ((iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) ||
        !iface->tm.enabled)) {
     return UCS_ERR_BUSY;
   }
 
+add_to_pending:
   uct_pending_req_queue_push(&iface->tx.pending_q, req);
   UCT_TL_EP_STAT_PEND(&ep->super);
   return UCS_OK;

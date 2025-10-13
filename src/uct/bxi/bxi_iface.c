@@ -120,34 +120,37 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_sw(ptl_hdr_data_t hdr)
   return hdr == UCT_BXI_RNDV_SW_HDR;
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_t
-uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag)
+ptl_me_t consume_me = {
+        .ct_handle         = PTL_CT_NONE,
+        .ignore_bits       = 0,
+        .min_free          = 0,
+        .length            = 0,
+        .match_id.phys.nid = PTL_NID_ANY,
+        .match_id.phys.pid = PTL_PID_ANY,
+        .start             = NULL,
+        .uid               = PTL_UID_ANY,
+        .options = PTL_ME_OP_PUT | PTL_ME_USE_ONCE | PTL_ME_EVENT_COMM_DISABLE |
+                   PTL_ME_EVENT_OVER_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
+                   PTL_ME_EVENT_FLOWCTRL_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE,
+};
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag,
+                                ptl_process_t pid)
 {
   ucs_status_t    status;
   ptl_handle_me_t dummy;
-  ptl_me_t        me = {
-                 .ct_handle   = PTL_CT_NONE,
-                 .ignore_bits = 0,
-                 .match_bits  = tag,
-                 .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
-                 .min_free = 0,
-                 .length   = 0,
-                 .start    = NULL,
-                 .uid      = PTL_UID_ANY,
-                 .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
-                     PTL_ME_EVENT_COMM_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
-                     PTL_ME_EVENT_FLOWCTRL_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
-                     PTL_ME_EVENT_UNLINK_DISABLE,
-  };
+  consume_me.match_bits        = tag;
+  consume_me.match_id.phys.nid = pid.phys.nid;
+  consume_me.match_id.phys.pid = pid.phys.pid;
 
   status = uct_bxi_wrap(PtlMEAppend(uct_bxi_iface_md(iface)->nih,
-                                    iface->rx.tag.q->pti, &me,
+                                    iface->rx.tag.q->pti, &consume_me,
                                     PTL_PRIORITY_LIST, NULL, &dummy));
-  if (status == UCS_OK) {
-    iface->tm.unexp_hdr_count--;
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not consume unexpected ME");
   }
-
-  return status;
+  iface->tm.unexp_hdr_count--;
 }
 
 static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
@@ -198,7 +201,7 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
      * Portals4 unexpected header consumed. Its removal is needed 
      * otherwise, the next posted receive will match in the overflow 
      * list. */
-    status = uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits);
+    uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits, ev->initiator);
     ucs_assert(iface->tm.unexp_hdr_count == 0);
   }
 
@@ -364,11 +367,11 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //FIXME: implementing AM_SHORT requires to have one pending queue per
   //       endpoint which implies some changes in the way resource are
   //       managed.
-  attr->cap.flags = UCT_IFACE_FLAG_AM_SHORT | UCT_IFACE_FLAG_AM_BCOPY |
-                    UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_GET_BCOPY |
-                    UCT_IFACE_FLAG_PUT_SHORT | UCT_IFACE_FLAG_PUT_ZCOPY |
-                    UCT_IFACE_FLAG_GET_ZCOPY | UCT_IFACE_FLAG_PENDING |
-                    UCT_IFACE_FLAG_CB_SYNC | UCT_IFACE_FLAG_INTER_NODE |
+  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
+                    UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
+                    UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
+                    UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
+                    UCT_IFACE_FLAG_INTER_NODE |
                     UCT_IFACE_FLAG_CONNECT_TO_IFACE | UCT_IFACE_FLAG_EP_CHECK;
 
   //TODO: UCT_IFACE_FLAG_ERRHANDLE_ZCOPY_BUF: currently not handled by Portals4
@@ -435,9 +438,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
   attr->cap.flags |=
-          UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
-          UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+          UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
+          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
   attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;

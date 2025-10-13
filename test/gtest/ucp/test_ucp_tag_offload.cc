@@ -91,6 +91,10 @@ public:
         request *rreq = recv_nb_exp(&recvbuf[0], length, rx_dt, tag,
                                     UCP_TAG_MASK_FULL);
 
+        for (int i = 0; i < 3; ++i) {
+            progress({&receiver()});
+        }
+
         request *sreq = (request*)ucp_tag_send_nb(se.ep(), &sendbuf[0], length,
                                                   DATATYPE, tag, send_callback);
         if (UCS_PTR_IS_ERR(sreq)) {
@@ -603,6 +607,8 @@ err:
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
+        //FIXME: add counter check or progress to make sure no operation has 
+        //       completed.
 
         // Prepare the receive operation of the sender. In case of rndv, 
         // it must be offloaded so offload it anyway.

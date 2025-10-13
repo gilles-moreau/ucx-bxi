@@ -308,7 +308,6 @@ uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
      * to avoid memory corruption. */
     return UCS_ERR_ALREADY_EXISTS;
   }
-  ucs_debug("BXI: add to hash. buffer=%p", buffer);
   ucs_assert(ret != UCS_KH_PUT_FAILED);
   return UCS_OK;
 }
@@ -318,7 +317,6 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   khiter_t iter;
 
-  ucs_debug("BXI: del from hash. buffer=%p", buffer);
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
   kh_del(uct_bxi_tag_addrs, &iface->tm.tag_addrs, iter);

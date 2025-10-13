@@ -88,6 +88,7 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   block->size    = rxq->config.blk_size;
   block->start   = block + 1;
   block->rxq     = rxq;
+  block->list    = rxq->list;
   block->meh     = PTL_INVALID_HANDLE;
   block->cth     = PTL_CT_NONE;
   block->handler = rxq->handler;
@@ -154,7 +155,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   //FIXME: we may question the use of a memory pool here since the number of
   //       buffer is fixed and everything should be posted to the NIC at init
   //       time. To implement a dynamic behavior then block initialization
-  //       should be moved to the memory bool init callback.
+  //       should be moved to the memory pool init callback.
 
   /* First, initialize memory pool of receive buffers. */
   ucs_mpool_params_reset(&mp_block_params);
@@ -162,11 +163,12 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   mp_block_params.elems_per_chunk = params->mp.bufs_grow;
   mp_block_params.elem_size =
           sizeof(uct_bxi_recv_block_t) + rxq->config.blk_size;
-  mp_block_params.max_elems   = params->mp.max_bufs;
-  mp_block_params.alignment   = UCS_SYS_CACHE_LINE_SIZE;
-  mp_block_params.ops         = &uct_bxi_rxq_mpool_ops;
-  mp_block_params.name        = params->name;
-  mp_block_params.grow_factor = params->mp.grow_factor;
+  mp_block_params.max_elems    = params->mp.max_bufs;
+  mp_block_params.alignment    = UCS_SYS_CACHE_LINE_SIZE;
+  mp_block_params.align_offset = sizeof(uct_bxi_recv_block_t);
+  mp_block_params.ops          = &uct_bxi_rxq_mpool_ops;
+  mp_block_params.name         = params->name;
+  mp_block_params.grow_factor  = params->mp.grow_factor;
 
   status = ucs_mpool_init(&mp_block_params, &rxq->mp);
   if (status != UCS_OK) {

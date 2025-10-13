@@ -111,11 +111,6 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
     unsigned flags = 0;
     void *arg = req;
 
-    if (ucs_unlikely(req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION)) {
-        flags = UCT_TAG_OFFLOAD_OPERATION; 
-        arg = req->send.state.uct_comp.gop;
-    }
-
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
@@ -289,10 +284,17 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
                                       const ucp_proto_single_priv_t *spriv,
                                       uct_iov_t *iov)
 {
+    unsigned flags = 0;
+
+    if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
+        req->send.state.uct_comp.gop = req->task->comph;
+        flags = UCT_TAG_SCHEDULE;
+    }
+
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                        spriv->super.lane),
                                   req->send.msg_proto.tag, 0ul, iov, 1, 
-                                  0, &req->send.state.uct_comp);
+                                  flags, &req->send.state.uct_comp);
 }
 
 static ucs_status_t
