@@ -94,15 +94,13 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_gop",
                 ucs_offsetof(uct_bxi_iface_config_t, tm.gop_mp), "\n"),
 
-        {"TM_LIST_SIZE", "128",
-         "Limits the number of tags posted to the HW for matching. The actual "
-         "limit is a minimum between this value and the maximum value "
-         "supported by the HW. \n -1 means no limit.",
+        {"TM_LIST_SIZE", "256",
+         "Limits the number of tags posted to the HW for matching.",
          ucs_offsetof(uct_bxi_iface_config_t, tm.list_size),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_OPERATION_CONTEXT", "32",
-         "Number of operation context allocable (default: 32)",
+        {"MAX_OPERATION_CONTEXT", "1024",
+         "Number of operation context allocable (default: 128)",
          ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
 
@@ -297,6 +295,9 @@ ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
         uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev)
 {
   ucs_assert(ev->type = PTL_EVENT_PUT_OVERFLOW);
+
+  block->send_size = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
+  block->stag      = ev->match_bits;
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
     uct_bxi_recv_block_update_cnt(block, ev->mlength);

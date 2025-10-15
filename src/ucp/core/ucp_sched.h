@@ -8,26 +8,27 @@
 
 typedef struct ucp_request ucp_request_t;
 
-#define UCP_SCHED_MAX_SCHEDULE_SIZE 16
+#define UCP_SCHED_MAX_SCHEDULE_SIZE 256
+#define UCP_SCHED_MAX_DEPS          32
 
 enum {
   UCP_SCHED_OFFLOAD_ENABLED = UCS_BIT(0),
 };
 
 enum {
-  UCP_SCHED_TASK_OFFLOADED = UCS_BIT(0),
-  UCP_SCHED_TASK_READY     = UCS_BIT(1),
-  UCP_SCHED_TASK_COMPLETED = UCS_BIT(2),
+  UCP_SCHED_TASK_OFFLOADED     = UCS_BIT(0),
+  UCP_SCHED_TASK_RELEASE_SCHED = UCS_BIT(1),
+  UCP_SCHED_TASK_COMPLETED     = UCS_BIT(2),
 };
 
 typedef struct ucp_sched_task {
-  unsigned        flags;
-  void           *buffer;
-  size_t          size;
-  uct_gop_h       comph; /* Transport completion handle */
-  ucs_list_link_t elem;  /* Element in the schedule list */
-  ucs_list_link_t delem; /* Element in the dependency list */
-  ucs_list_link_t deps;  /* List of dependencies */
+  unsigned               flags;
+  void                  *buffer;
+  size_t                 size;
+  uct_gop_h              comph; /* Transport completion handle */
+  ucs_list_link_t        elem;  /* Element in the schedule list */
+  struct ucp_sched_task *deps[UCP_SCHED_MAX_DEPS];
+  size_t                 num_deps;
 } ucp_sched_task_t;
 
 typedef struct ucp_sched {

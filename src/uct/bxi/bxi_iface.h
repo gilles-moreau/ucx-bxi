@@ -302,6 +302,8 @@ static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   int ret;
+
+  return UCS_OK;
   kh_put(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer, &ret);
   if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
     /* Do not post the same buffer more than once (even with different tags)
@@ -316,6 +318,7 @@ static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   khiter_t iter;
+  return;
 
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));

@@ -1842,8 +1842,9 @@ struct uct_tag_context {
  * Operation Context structure for storing generic operation information.
  */
 typedef struct uct_gop {
-    unsigned flags;
-    size_t   size; /* Operation size */
+    unsigned  flags;
+    void     *buffer; /* Operation buffer */
+    size_t    size;   /* Operation size */
 } uct_gop_t;
 
 

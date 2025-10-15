@@ -28,7 +28,7 @@ UCS_PTR_MAP_IMPL(request, 0);
 
 
 #define UCP_REQUEST_FLAGS_FMT \
-    "%c%c%c%c%c%c"
+    "%c%c%c%c%c%c%c"
 
 #define UCP_REQUEST_FLAGS_ARG(_flags) \
     (((_flags) & UCP_REQUEST_FLAG_COMPLETED)       ? 'd' : '-'), \
@@ -37,7 +37,8 @@ UCS_PTR_MAP_IMPL(request, 0);
     (((_flags) & UCP_REQUEST_FLAG_CALLBACK)        ? 'c' : '-'), \
     (((_flags) & (UCP_REQUEST_FLAG_RECV_TAG | \
                   UCP_REQUEST_FLAG_RECV_AM))       ? 'r' : '-'), \
-    (((_flags) & UCP_REQUEST_FLAG_SYNC)            ? 's' : '-')
+    (((_flags) & UCP_REQUEST_FLAG_SYNC)            ? 's' : '-'), \
+    (((_flags) & UCP_REQUEST_FLAG_SCHEDULED)       ? 'o' : '-')
 
 #define UCP_RECV_DESC_FMT \
     "rdesc %p %c%c%c%c%c%c len %u+%u"
@@ -263,10 +264,10 @@ static UCS_F_ALWAYS_INLINE void
 ucp_request_complete_tag_recv(ucp_request_t *req, ucs_status_t status)
 {
     ucs_trace_req("completing receive request %p (%p) " UCP_REQUEST_FLAGS_FMT
-                  " stag 0x%" PRIx64" len %zu, %s",
+                  " stag 0x%" PRIx64" len %zu, %s, task %p ",
                   req, req + 1, UCP_REQUEST_FLAGS_ARG(req->flags),
                   req->recv.tag.info.sender_tag, req->recv.tag.info.length,
-                  ucs_status_string(status));
+                  ucs_status_string(status), req->task);
     UCS_PROFILE_REQUEST_EVENT(req, "complete_tag_recv", status);
     /* coverity[address_free] */
     /* coverity[offset_free] */

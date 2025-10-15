@@ -3,6 +3,7 @@
 #include <ucp/core/ucp_ep.h>
 #include <ucp/core/ucp_request.h>
 #include <ucp/core/ucp_worker.h>
+#include <ucp/proto/proto_common.h>
 #include <ucs/datastruct/khash.h>
 #include <ucs/datastruct/list.h>
 #include <ucs/profile/profile.h>
@@ -10,7 +11,7 @@
 #include <uct/base/uct_iface.h>
 
 // Add a region to the sched
-ucs_status_t ucp_sched_recv(ucp_request_t *req)
+UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
 {
   ucs_status_t        status = UCS_OK;
   ucp_sched_h         sched  = req->schedh;
@@ -19,6 +20,11 @@ ucs_status_t ucp_sched_recv(ucp_request_t *req)
   ucs_assert(sched != NULL);
   ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
 
+  if (sched->count >= UCP_SCHED_MAX_SCHEDULE_SIZE) {
+    ucs_error("schedule size overflow. count=%lu, max=%d", sched->count,
+              UCP_SCHED_MAX_SCHEDULE_SIZE);
+    return UCS_ERR_NO_MEMORY;
+  }
   /* Assign task from the schedule pool. */
   req->task         = &sched->tasks_mp[sched->count++];
   req->task->buffer = req->recv.dt_iter.type.contig.buffer;
@@ -38,7 +44,8 @@ ucs_status_t ucp_sched_recv(ucp_request_t *req)
       return status;
     }
 
-    req->task->flags = UCP_SCHED_TASK_OFFLOADED;
+    //FIXME: how do we know when to release a gop?
+    req->task->flags |= UCP_SCHED_TASK_OFFLOADED | UCP_SCHED_TASK_RELEASE_SCHED;
   }
 
   ucp_trace_req(req, "scheduled recv task %p. offloaded ? %d", req->task,
@@ -72,14 +79,16 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 {
   ucp_request_t     *req   = ucs_container_of(self, ucp_request_t, send.uct);
   const ucp_proto_t *proto = req->send.proto_config->proto;
-  ucp_sched_task_t  *stask = req->task, *task;
+  const ucp_proto_common_lane_priv_t *spriv = req->send.proto_config->priv;
+  ucp_sched_task_t                   *stask = req->task;
 
   if (stask->flags & UCP_SCHED_TASK_OFFLOADED) {
     goto start_send;
   }
 
-  ucs_list_for_each (task, &stask->deps, delem) {
-    if (!(task->flags & UCP_SCHED_TASK_COMPLETED)) {
+  for (int i = 0; i < stask->num_deps; i++) {
+    if (!(stask->deps[i]->flags & UCP_SCHED_TASK_COMPLETED)) {
+      req->send.lane = spriv->lane; /* Save for pending_add */
       /* Return no resource so request can be added to pending list. */
       return UCS_ERR_NO_RESOURCE;
     }
@@ -87,7 +96,11 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 
 start_send:
   ucp_trace_req(req, "scheduled send task %p can be progressed", req->task);
-  req->send.uct.func = proto->progress[req->send.proto_stage];
+  if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
+    req->send.uct.func = ucp_request_progress_wrapper;
+  } else {
+    req->send.uct.func = proto->progress[req->send.proto_stage];
+  }
   return req->send.uct.func(self);
 }
 
@@ -96,20 +109,25 @@ ucp_sched_offload_send(ucp_sched_h sched, ucp_sched_task_t *stask)
 {
   int                 length = 0;
   ucp_worker_iface_t *wiface;
-  ucp_sched_task_t   *task;
   uct_gop_h           gops[UCP_SCHED_MAX_SCHEDULE_SIZE];
 
   /* All dependent tasks were offloaded, this one must also be offloaded. */
   wiface = sched->worker->tm.offload.iface;
 
-  ucs_list_for_each (task, &stask->deps, delem) {
-    gops[length++] = task->comph;
+  for (int i = 0; i < stask->num_deps; i++) {
+    gops[length++] = stask->deps[i]->comph;
+  }
+
+  //FIXME: not good since it makes assumption on how the transport
+  //       has allocated the gop.
+  if (stask->num_deps > 1) {
+    stask->flags |= UCP_SCHED_TASK_RELEASE_SCHED;
   }
 
   return uct_iface_tag_sched_send(wiface->iface, &stask->comph, gops, length);
 }
 
-ucs_status_t ucp_sched_send(ucp_request_t *req)
+UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
 {
   ucs_status_t      status = UCS_OK;
   ucp_sched_h       sched  = req->schedh;
@@ -119,14 +137,20 @@ ucs_status_t ucp_sched_send(ucp_request_t *req)
   ucs_assert(sched != NULL);
   ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
 
-  /* Init task from the scheduler. */
-  stask         = &sched->tasks_mp[sched->count++];
-  stask->buffer = req->send.state.dt_iter.type.contig.buffer;
-  stask->size   = req->send.state.dt_iter.length;
-  stask->flags  = 0;
-  ucs_list_head_init(&stask->deps);
+  if (sched->count >= UCP_SCHED_MAX_SCHEDULE_SIZE) {
+    ucs_error("schedule size overflow. count=%lu, max=%d", sched->count,
+              UCP_SCHED_MAX_SCHEDULE_SIZE);
+    return UCS_ERR_NO_MEMORY;
+  }
 
-  /* Loop over tasks in the schedule to find dependencies. */
+  /* Init task from the scheduler. */
+  stask           = &sched->tasks_mp[sched->count++];
+  stask->buffer   = req->send.state.dt_iter.type.contig.buffer;
+  stask->size     = req->send.state.dt_iter.length;
+  stask->flags    = 0;
+  stask->num_deps = 0;
+
+  /* Loop over tasks in the recv schedule to find dependencies. */
   ucs_list_for_each (task, &sched->schedule, elem) {
     if (ucp_sched_check_overlap(stask->buffer, stask->size, task->buffer,
                                 task->size) &&
@@ -135,7 +159,7 @@ ucs_status_t ucp_sched_send(ucp_request_t *req)
        * add it to the list of dependencies. */
 
       /* Add task to the list of dependencies. */
-      ucs_list_add_head(&stask->deps, &task->delem);
+      stask->deps[stask->num_deps++] = task;
 
       /* Task may be offloaded only if all dependent tasks have been 
        * offloaded. */
@@ -143,7 +167,7 @@ ucs_status_t ucp_sched_send(ucp_request_t *req)
     }
   }
 
-  if (!ucs_list_is_empty(&stask->deps)) {
+  if (stask->num_deps > 0) {
     if (offloaded & UCP_SCHED_TASK_OFFLOADED) {
       /* Task may be scheduled using tranport own scheduler. */
       status = ucp_sched_offload_send(sched, stask);
@@ -155,8 +179,8 @@ ucs_status_t ucp_sched_send(ucp_request_t *req)
     req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
   }
 
-  ucp_trace_req(req, "scheduled send task %p, has dependencies %d", stask,
-                !!(req->flags & UCP_REQUEST_FLAG_SCHEDULED));
+  ucp_trace_req(req, "scheduled send task %p, has %lu dependencies", stask,
+                stask->num_deps);
   req->task = stask;
 
 err:
@@ -202,14 +226,11 @@ err:
 
 void ucp_sched_fini(ucp_sched_h sched)
 {
-  ucp_sched_task_t *task;
-
-  ucs_list_for_each (task, &sched->schedule, elem) {
-    if (task->flags & UCP_SCHED_TASK_OFFLOADED) {
+  for (int i = 0; i < sched->count; i++) {
+    if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_RELEASE_SCHED) {
       uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
-                                  task->comph);
+                                  sched->tasks_mp[i].comph);
     }
-    task->flags = 0;
   }
 
   if (sched->worker->tm.offload.iface != NULL) {

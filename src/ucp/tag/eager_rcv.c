@@ -78,15 +78,15 @@ ucp_eager_offload_handler(void *arg, void *data, size_t length,
     ucp_tag_t *rdesc_hdr;
     ucs_status_t status;
 
-    req = ucp_tag_exp_search_prof(&worker->tm, recv_tag);
+    req = ucp_tag_exp_search(&worker->tm, recv_tag);
     if (req != NULL) {
         ucp_eager_common_matched(worker, req, data, length, recv_tag, flags);
         req->recv.tag.info.length = length;
-        status = ucp_request_recv_data_unpack_prof(req, data, length, 0, 0, 1);
+        status = ucp_request_recv_data_unpack(req, data, length, 0, 0, 1);
         ucp_request_complete_tag_recv(req, status);
         status = UCS_OK;
     } else {
-        status = ucp_recv_desc_init_prof(worker, data, length, sizeof(ucp_tag_t),
+        status = ucp_recv_desc_init(worker, data, length, sizeof(ucp_tag_t),
                                     tl_flags, sizeof(ucp_tag_t), flags,
                                     sizeof(ucp_tag_t), 1, name, &rdesc);
         if (!UCS_STATUS_IS_ERR(status)) {

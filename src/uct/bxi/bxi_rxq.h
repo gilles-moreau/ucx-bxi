@@ -133,12 +133,6 @@ uct_bxi_recv_block_unexp_activate(uct_bxi_recv_block_t *block)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_recv_block_update_cnt(uct_bxi_recv_block_t *block, ptl_size_t inc)
 {
-  ptl_ct_event_t ct_value;
-
-  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
-  ucs_debug("BXI: ct value. hw=%lu, sw=%lu", ct_value.success,
-            block->ct_value + inc);
-
   block->ct_value += inc;
 }
 

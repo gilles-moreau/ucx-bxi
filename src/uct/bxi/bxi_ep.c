@@ -155,17 +155,6 @@ static ucs_status_t uct_bxi_iface_block_handle_rndv(uct_bxi_iface_t      *iface,
   return UCS_OK;
 }
 
-UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_put,
-                 (mdh, start, size, pid, pti, tag, user_ptr, imm),
-                 ptl_handle_md_t mdh, ptl_size_t start, ptl_size_t size,
-                 ptl_process_t pid, ptl_pt_index_t pti, ptl_match_bits_t tag,
-                 void *user_ptr, uint64_t imm)
-{
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  return uct_bxi_wrap(PtlPut(mdh, start, size, PTL_ACK_REQ, pid, pti, tag, 0,
-                             user_ptr, imm));
-}
-
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
@@ -187,9 +176,9 @@ ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
          length);
 
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status =
-          uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)iface->tx.short_desc,
-                      size, ep->dev_addr.pid, ep->iface_addr.am, id, op, 0);
+  status = uct_bxi_wrap(PtlPut(
+          iface->tx.mem_desc->mdh, (ptl_size_t)iface->tx.short_desc, size,
+          PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.am, id, 0, op, 0));
 
   if (status == UCS_ERR_NO_RESOURCE) {
     goto err_release_op;
@@ -240,8 +229,9 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size,
-                       ep->dev_addr.pid, ep->iface_addr.am, id, op, 0);
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                               size, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.am, id, 0, op, 0));
 
   if (status == UCS_ERR_NO_RESOURCE) {
     size = UCS_ERR_NO_RESOURCE;
@@ -500,8 +490,9 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_IFACE_GET_TX_OP(iface, &iface->tx.send_op_mp, op, ep, 1);
 
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)data, length,
-                       ep->dev_addr.pid, ep->iface_addr.tag, tag, op, 0);
+  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)data,
+                               length, PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.tag, tag, 0, op, 0));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
@@ -519,10 +510,9 @@ err:
   return status;
 }
 
-UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
-                 (tl_ep, tag, imm, pack_cb, arg, flags), uct_ep_h tl_ep,
-                 uct_tag_t tag, uint64_t imm, uct_pack_callback_t pack_cb,
-                 void *arg, unsigned flags)
+ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
+                                   uct_pack_callback_t pack_cb, void *arg,
+                                   unsigned flags)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
@@ -555,8 +545,9 @@ UCS_PROFILE_FUNC(ssize_t, uct_bxi_ep_tag_eager_bcopy,
     }
 
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-    status = uct_bxi_put(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size,
-                         ep->dev_addr.pid, ep->iface_addr.tag, tag, op, imm);
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, imm));
   }
 
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -858,9 +849,9 @@ uct_bxi_tag_recv_offload_rndv(uct_bxi_iface_t      *iface,
          (block->size <= iface->config.max_msg_size) && (ep != NULL);
 }
 
-UCS_PROFILE_FUNC_VOID(uct_bxi_iface_tag_recv_rndv_zcopy, (iface, ep, block, me),
-                      uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
-                      uct_bxi_recv_block_t *block, ptl_me_t *me)
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                                  uct_bxi_recv_block_t *block, ptl_me_t *me)
 {
   ucs_status_t status = UCS_OK;
   ptl_size_t   start;
@@ -1094,6 +1085,7 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
 
   gop = ucs_mpool_get(&iface->tm.gop_mp);
   if (gop == NULL) {
+    ucs_debug("BXI: no more counter");
     status = UCS_ERR_NO_RESOURCE;
     goto err;
   }
