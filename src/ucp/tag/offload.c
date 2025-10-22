@@ -220,7 +220,6 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
                              dummy_rts + 1, uct_rkeys);
 
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_RNDV);
-        //FIXME: UCT_CB_PARAM_FLAG_HW_RNDV is not completely needed.
         ucp_tag_rndv_process_rts(worker, dummy_rts, dummy_rts_size, 0);
     } else {
         /* Unexpected tag offload rndv request. Sender buffer is either
@@ -230,7 +229,10 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
          */
         ucs_assert(hdr_length >= sizeof(ucp_rndv_rts_hdr_t));
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_SW_RNDV);
-        ucp_tag_rndv_process_rts(worker, (void*)hdr, hdr_length, 0);
+        //FIXME: find a way to remove this flag. It is used to support SW 
+        //       rndv when a offloaded rndv has been setup. 
+        ucp_tag_rndv_process_rts(worker, (void*)hdr, hdr_length, 
+                                 UCT_CB_PARAM_FLAG_RNDV);
     }
 
     /* Unexpected RNDV (both SW and HW) need to enable offload capabilities.

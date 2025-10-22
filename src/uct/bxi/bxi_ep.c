@@ -1040,11 +1040,13 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     //      does not overflow. This could happen in the later.
     iface->tm.unexp_hdr_count--;
 
-    /* Rendezvous was offloaded, thus an PTL_EVENT_PUT_OVERFLOW will be 
+    /* Rendezvous was offloaded, thus a PTL_EVENT_PUT_OVERFLOW will be 
      * generated. Overwrite the block handler to handle it during which the 
-     * block will be released */
+     * block will be released. */
     block->handler = uct_bxi_iface_block_handle_tag_overflow;
-    if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+    if (mode & UCT_TAG_CANCEL_SW_RNDV) {
+      return UCS_OK;
+    } else if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
       return UCS_INPROGRESS;
     } else if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
       return UCS_OK;

@@ -594,6 +594,8 @@ enum uct_tag_flags {
                                                  that support unexpected hw matching, 
                                                  posted receive does not need to be 
                                                  explicitly cancelled on the hw. */
+    UCT_TAG_CANCEL_SW_RNDV    = UCS_BIT(3), /**< Inform the transport that initiator's 
+                                                 request was a sw rendezvous. */
 };
 
 

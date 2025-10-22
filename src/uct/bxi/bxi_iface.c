@@ -305,14 +305,18 @@ ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
 {
   ucs_assert(ev->type = PTL_EVENT_PUT_OVERFLOW);
 
-  block->send_size = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
-  block->stag      = ev->match_bits;
-
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
     uct_bxi_recv_block_update_cnt(block, ev->mlength);
   }
 
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+  /* Now, perform protocol specific actions. */
+  if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
+
+    /* Save stag and send size for rndv completion, see 
+     * uct_bxi_recv_rndv_tag_handler. */
+    block->send_size = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
+    block->stag      = ev->match_bits;
+
     /* Copy the first eager part that was sent on the first message of the 
      * protocol and which was received in the overflow block. */
     memcpy(block->start, ev->start, iface->tm.rndv_hdr_offset);
@@ -320,6 +324,9 @@ ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
     /* Block and operation will be released in operation handler. */
     uct_bxi_iface_completion_op(block->op);
   } else {
+    if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+      uct_bxi_recv_block_cancel_triggered(block);
+    }
     uct_bxi_iface_release_op(block->op);
     uct_bxi_recv_block_release(block);
   }
