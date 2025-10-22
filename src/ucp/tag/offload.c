@@ -18,6 +18,7 @@
 #include <ucp/core/ucp_request.h>
 #include <ucp/core/ucp_sched.h>
 #include <ucp/core/ucp_mm.h>
+#include <ucp/wireup/wireup_ep.h>
 #include <ucp/tag/tag_match.inl>
 #include <ucs/sys/sys.h>
 
@@ -276,6 +277,7 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     ucp_context_t *context = worker->context;
     size_t length          = req->recv.dt_iter.length;
     ucp_mem_desc_t *rdesc  = NULL;
+    uct_ep_h reply_ep      = NULL;
     ucp_worker_iface_t *wiface;
     ucs_status_t status;
     ucp_md_index_t mdi;
@@ -346,8 +348,13 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
-    req->recv.uct_ctx.reply_ep        = req->recv.reply_ep != NULL ?
-            ucp_ep_get_tag_uct_ep(req->recv.reply_ep) : NULL;
+    req->recv.uct_ctx.reply_ep = NULL;
+    if (req->recv.reply_ep != NULL) {
+        reply_ep = ucp_ep_get_tag_uct_ep(req->recv.reply_ep);
+        if (reply_ep != NULL && !ucp_wireup_ep_test(reply_ep)) {
+            req->recv.uct_ctx.reply_ep = reply_ep;
+        }
+    }
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,
                                       req->recv.tag.tag_mask, &iov, 1,

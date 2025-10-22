@@ -16,8 +16,12 @@ typedef ucs_status_t (*uct_bxi_block_activate)(uct_bxi_iface_t      *iface,
 
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_IN_USE          = UCS_BIT(0),
-  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED  = UCS_BIT(1),
-  UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(2)
+  UCT_BXI_RECV_BLOCK_FLAG_RNDV            = UCS_BIT(1),
+  UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED  = UCS_BIT(2),
+  UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(3),
+  UCT_BXI_RECV_BLOCK_FLAG_EXP_INC_RECV    = UCS_BIT(4), /* Increment rndv recv 
+                                                           counter in expected 
+                                                           handler. */
 };
 
 typedef struct uct_bxi_recv_block_params {

@@ -222,6 +222,7 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
   ssize_t        send_size, payload_size;
   ptl_pt_index_t pti;
   uint16_t       cnt;
+  unsigned int   cnt_idx;
 
   /* Receive block has been consumed, notify UCP layer so it can remove 
    * the tag from its expected queues. Buffer may also be removed from 
@@ -231,6 +232,12 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
     uct_bxi_recv_block_update_cnt(block, ev->mlength);
+  }
+
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_EXP_INC_RECV) {
+    /* Increment receive counter for this PID. */
+    cnt_idx = uct_bxi_iface_get_or_create_cnt_idx(iface, ev->initiator);
+    uct_bxi_ep_inc_recv_cnt(iface, cnt_idx);
   }
 
   /* Now, perform protocol specific actions. */
@@ -250,8 +257,10 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     /* If rndv was not offloaded, then it must be handled in sw. */
     //NOTE: It has been kept to preserve compatibility with UCX testsuite.
     if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
+      //FIXME: get has to be performed on the block MD in order for the hw counter
+      //       to be incremented and for the sw counter to keep track of it.
       status = uct_bxi_wrap(PtlGet(
-              iface->tx.mem_desc->mdh,
+              block->mdh,
               (ptl_size_t)UCS_PTR_BYTE_OFFSET(ev->start,
                                               iface->tm.rndv_hdr_offset),
               send_size - payload_size, ev->initiator, pti, cnt, 0, block->op));

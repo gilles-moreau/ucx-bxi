@@ -842,11 +842,10 @@ err:
 }
 
 static UCS_F_ALWAYS_INLINE int
-uct_bxi_tag_recv_offload_rndv(uct_bxi_iface_t      *iface,
-                              uct_bxi_recv_block_t *block, uct_bxi_ep_t *ep)
+uct_bxi_tag_recv_is_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block)
 {
   return (block->size > iface->config.tm.eager_limit) &&
-         (block->size <= iface->config.max_msg_size) && (ep != NULL);
+         (block->size <= iface->config.max_msg_size);
 }
 
 static UCS_F_ALWAYS_INLINE void
@@ -876,6 +875,8 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
+//TODO: improve logic. Support for both offloaded and non-offloaded rndv
+//      make the implementation complicated.
 UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
                  (tl_iface, tag, tag_mask, iov, iovcnt, ctx),
                  uct_iface_h tl_iface, uct_tag_t tag, uct_tag_t tag_mask,
@@ -953,7 +954,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
    * the upper layer meaning that the sender may decide to send a rendezvous 
    * control message even though msg_size < eager_limit. As a consequence, 
    * the protocol will be completed during event handling. */
-  if (ucs_unlikely(uct_bxi_tag_recv_offload_rndv(iface, block, ep) ||
+  if (ucs_unlikely(uct_bxi_tag_recv_is_rndv(iface, block) ||
                    iface->tm.sched_window)) {
     /* Counter is needed. */
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
@@ -961,9 +962,13 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
     me.ct_handle = block->cth;
     me.options   = UCT_BXI_ME_OPT_RECV_ZCOPY_OFFLOADED;
 
-    if (uct_bxi_tag_recv_offload_rndv(iface, block, ep)) {
-      /* Then is means the rendezvous will be offloaded. */
-      block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED;
+    if (uct_bxi_tag_recv_is_rndv(iface, block)) {
+      block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV;
+
+      if ((ep != NULL) && (ep->conn_state & UCT_BXI_EP_CONN_CONNECTED)) {
+        /* Then is means the rendezvous will be offloaded. */
+        block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED;
+      }
     }
   }
 
@@ -975,11 +980,12 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   /* Then, post the memory entry. */
   status = uct_bxi_recv_block_exp_activate(iface->rx.tag.q, block, &me);
   if (status != UCS_OK) {
-    /* Operation will be released with block release. */
     goto err_release_op;
   }
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
+    /* Post the triggered get after to increase the chance of hw expected 
+     * match. */
     uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &me);
   }
 
@@ -987,6 +993,11 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   uct_bxi_iface_op_res(iface, block->op);
   if (ep != NULL) {
     uct_bxi_ep_inc_recv_cnt(iface, ep->idx);
+  } else {
+    //FIXME: since endpoint was not provided, set the flag for the counter
+    //       needs to be incremented during expected handler. It is already
+    //       incremented during unexpected handler.
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_EXP_INC_RECV;
   }
 
   *(uct_bxi_recv_block_t **)ctx->priv = block;
@@ -1083,6 +1094,8 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
   size_t                thresh;
 
+  ucs_assert(block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED);
+
   gop = ucs_mpool_get(&iface->tm.gop_mp);
   if (gop == NULL) {
     ucs_debug("BXI: no more counter");
@@ -1090,7 +1103,7 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
     goto err;
   }
 
-  if (ucs_unlikely(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
+  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV) {
     /* thresh = current counter value + eager limit + 1 + 
      * completion of get (+1) */
     thresh = block->ct_value + iface->config.tm.eager_limit + 2;
