@@ -59,6 +59,7 @@ typedef struct uct_bxi_md {
   ptl_handle_ni_t nih;
   ptl_process_t   pid;
   size_t          rkey_size;
+  uint64_t        reg_mem_types;
 } uct_bxi_md_t;
 
 ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);

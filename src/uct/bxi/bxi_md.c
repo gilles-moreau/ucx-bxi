@@ -139,11 +139,10 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
   md_attr->flags =
           UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_MEMH | UCT_MD_FLAG_NEED_RKEY;
   md_attr->access_mem_types       = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->reg_mem_types          = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->reg_mem_types          = md->reg_mem_types;
   md_attr->gva_mem_types          = 0;
   md_attr->reg_nonblock_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->cache_mem_types        = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->access_mem_types       = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->cache_mem_types        = UCS_MASK(UCS_MEMORY_TYPE_LAST);
   md_attr->rkey_packed_size       = 0;
   md_attr->reg_cost               = ucs_linear_func_make(9e-9, 0);
 
@@ -303,6 +302,9 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   if (rc != UCS_OK) {
     goto err_freedev;
   }
+
+  md->reg_mem_types |=
+          UCS_BIT(UCS_MEMORY_TYPE_HOST) | UCS_BIT(UCS_MEMORY_TYPE_CUDA);
 
   md->super.ops       = &uct_bxi_md_ops;
   md->super.component = component;
