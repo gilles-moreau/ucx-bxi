@@ -42,6 +42,8 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_ep_is_intra_node(uct_bxi_ep_t *ep)
   return ep->dev_addr.pid.phys.nid == uct_bxi_iface_md(iface)->pid.phys.nid;
 }
 
+void uct_bxi_send_op_handler(uct_bxi_iface_send_op_t *op, const void *resp);
+
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
                                   uct_rkey_t rkey);

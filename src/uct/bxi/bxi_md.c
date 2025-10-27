@@ -76,7 +76,7 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
           .options   = params->options,
   };
 
-  status = uct_ptl_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
+  status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
   if (status != UCS_OK) {
     goto err_free_memdesc;
   }

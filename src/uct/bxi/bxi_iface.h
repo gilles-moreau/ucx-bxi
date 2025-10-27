@@ -4,14 +4,8 @@
 #include "bxi_md.h"
 #include "bxi_rxq.h"
 
-#include <ucs/type/status.h>
-#include <uct/base/uct_iface.h>
 #include <uct/base/uct_iov.inl>
-#include <uct/bxi/ptl_types.h>
-#include <unistd.h>
 
-#define UCT_BXI_RNDV_NID_MASK    0xffffff
-#define UCT_BXI_RNDV_PID_MASK    0xffffff
 #define UCT_BXI_RNDV_LENGTH_MASK 0xfffffffffful
 #define UCT_BXI_RNDV_CNT_MASK    0xfffful
 #define UCT_BXI_RNDV_PTI_MASK    0xfful
@@ -31,35 +25,16 @@
   _hdr  = (_hdr << 8);                                                         \
   _hdr |= ((_pti) & UCT_BXI_RNDV_PTI_MASK);
 
-/* ME match bits is based on the remote PID. */
-#define UCT_BXI_BUILD_RNDV_TAG(_pid, _cnt)                                     \
-  ({                                                                           \
-    uint64_t _tag  = 0;                                                        \
-    _tag          |= (_pid).phys.nid & UCT_BXI_RNDV_NID_MASK;                  \
-    _tag           = _tag << 24;                                               \
-    _tag          |= (_pid).phys.pid & UCT_BXI_RNDV_PID_MASK;                  \
-    _tag           = _tag << 24;                                               \
-    _tag          |= (_cnt) & UCT_BXI_RNDV_CNT_MASK;                           \
-  })
-
-enum {
-  UCT_ERR_BXI_CT_FAILURE = UCS_ERR_FIRST_ENDPOINT_FAILURE,
-};
-
 /* Operation flags */
 enum {
-  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE = UCS_BIT(0),
-  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_INUSE     = UCS_BIT(0),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH     = UCS_BIT(1),
+  UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(2),
 };
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
 typedef struct uct_bxi_ep            uct_bxi_ep_t;
-typedef struct uct_bxi_ep_list       uct_bxi_ep_list_t;
-
-typedef void (*handle_failure_func_t)(uct_bxi_iface_t         *iface,
-                                      uct_bxi_iface_send_op_t *op,
-                                      ptl_ni_fail_t            fail);
 
 typedef void (*uct_bxi_send_op_handler_t)(uct_bxi_iface_send_op_t *op,
                                           const void              *resp);
@@ -176,8 +151,8 @@ KHASH_INIT(uct_bxi_pid_map, uint64_t, unsigned int, 1, uct_bxi_pid_map_hash,
            kh_int64_hash_equal)
 
 typedef struct uct_bxi_cnt {
-  uint16_t recv; /* Receive count */
-  uint16_t send; /* Send count */
+  uint16_t recv; /* Number of receive rndv request */
+  uint16_t send; /* Number of sent rndv request */
 } uct_bxi_cnt_t;
 
 typedef struct uct_bxi_iface {
@@ -229,12 +204,12 @@ typedef struct uct_bxi_iface {
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
     ucs_mpool_t    recv_block_mp;   /* MP of exp block */
-    unsigned int   unexp_hdr_count; /* Track number of unexp hdr */
+    ptl_event_t   *unexp_ev;        /* Cached unexp event, used for cancel */
     unsigned int   rndv_hdr_offset; /* Offset of rndv hdr in payload */
-    uct_bxi_cnt_t *cnts;            /* Table of counters */
-    unsigned int   num_cnts;        /* Current number of counters */
+    uct_bxi_cnt_t *cnts;            /* Table of rndv counters */
+    unsigned int   num_cnts;        /* Current number of rndv counters */
     int            sched_window;    /* Is scheduling window opened? */
-    khash_t(uct_bxi_pid_map) map;   /* Map pid to index counter table */
+    khash_t(uct_bxi_pid_map) map;   /* Pid map to ep index in counter table */
   } tm;
 
   struct {
@@ -255,8 +230,7 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t *q;
     } am;
     struct {
-      uct_bxi_rxq_t  *q;
-      ucs_list_link_t cancel; /* List of cancelled block */
+      uct_bxi_rxq_t *q;
     } tag;
     struct {
       uct_bxi_rxq_t *q;
@@ -288,22 +262,27 @@ uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
          dev1->pid.phys.nid == dev2->pid.phys.nid;
 }
 
+unsigned uct_bxi_iface_progress(uct_iface_t *super);
+
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp);
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
-ucs_status_t uct_bxi_iface_block_handle_tag_overflow(
-        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev);
 ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
                                                 uct_bxi_recv_block_t *block,
                                                 ptl_event_t          *ev);
+
+ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
+                                    const uct_iface_params_t     *params,
+                                    const uct_bxi_iface_config_t *config);
+
+void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface);
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   int ret;
 
-  return UCS_OK;
   kh_put(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer, &ret);
   if (ucs_unlikely(ret == UCS_KH_PUT_KEY_PRESENT)) {
     /* Do not post the same buffer more than once (even with different tags)
@@ -318,7 +297,6 @@ static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   khiter_t iter;
-  return;
 
   iter = kh_get(uct_bxi_tag_addrs, &iface->tm.tag_addrs, buffer);
   ucs_assert(iter != kh_end(&iface->tm.tag_addrs));
@@ -347,6 +325,17 @@ uct_bxi_iface_get_or_create_cnt_idx(uct_bxi_iface_t *iface, ptl_process_t pid)
     iface->tm.cnts[iface->tm.num_cnts].send = 0;
     return kh_value(&iface->tm.map, iter)   = iface->tm.num_cnts++;
   }
+}
+
+static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_hw(uct_bxi_iface_t *iface,
+                                                        ptl_event_t     *ev)
+{
+  return ev->rlength == iface->config.tm.eager_limit + 1;
+}
+
+static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_sw(ptl_hdr_data_t hdr)
+{
+  return hdr == UCT_BXI_RNDV_SW_HDR;
 }
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_inc_send_cnt(uct_bxi_iface_t *iface,
@@ -416,6 +405,12 @@ uct_bxi_iface_available_set(uct_bxi_iface_t *iface, uint64_t count)
 }
 
 static UCS_F_ALWAYS_INLINE void
+uct_bxi_ep_remove_from_queue(uct_bxi_iface_send_op_t *op)
+{
+  ucs_list_del(&op->elem);
+}
+
+static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
   uct_bxi_iface_available_add(op->iface, 1);
@@ -450,6 +445,40 @@ uct_bxi_iface_completion_flush_op(uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_release_flush_op(op);
 }
 
+static UCS_F_ALWAYS_INLINE ssize_t uct_bxi_iface_rndv_payload_size(
+        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ssize_t send_size)
+{
+  ssize_t tmp = ucs_min(block->size, iface->tm.rndv_hdr_offset);
+  return ucs_min(send_size, tmp);
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_iface_complete_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
+                            ptl_hdr_data_t hdr, ptl_process_t initiator,
+                            size_t send_size)
+{
+  ucs_status_t   status;
+  uint16_t       cnt;
+  ptl_pt_index_t pti;
+  ssize_t        payload_size;
+
+  /* Retrieve protocol data. */
+  cnt          = UCT_BXI_RNDV_CNT_GET(hdr);
+  pti          = UCT_BXI_RNDV_PTI_GET(hdr);
+  payload_size = uct_bxi_iface_rndv_payload_size(iface, block, send_size);
+
+  //FIXME: get has to be performed on the block MD in order for the hw counter
+  //       to be incremented and for the sw counter to keep track of it.
+  status = uct_bxi_wrap(
+          PtlGet(block->mdh,
+                 (ptl_size_t)UCS_PTR_BYTE_OFFSET(block->start,
+                                                 iface->tm.rndv_hdr_offset),
+                 send_size - payload_size, initiator, pti, cnt, 0, block->op));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: sw rndv get failed");
+  }
+}
+
 extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 
@@ -460,9 +489,30 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
                      ((_type) == UCT_AM_TRACE_TYPE_RECV) ? 'R' :               \
                      ((_type) == UCT_AM_TRACE_TYPE_SEND) ? 'T' :               \
                                                            '?')
+// Check macros
+#define UCT_BXI_CHECK_LENGTH_PTR(_length, _min_length, _max_length, _name)     \
+  {                                                                            \
+    typeof(_length) __length = _length;                                        \
+    UCT_CHECK_PARAM_PTR((_length) <= (_max_length),                            \
+                        "Invalid %s length: %zu (expected: <= %zu)", _name,    \
+                        (size_t)(__length), (size_t)(_max_length));            \
+    UCT_CHECK_PARAM_PTR((ssize_t)(_length) >= (_min_length),                   \
+                        "Invalid %s length: %zu (expected: >= %zu)", _name,    \
+                        (size_t)(__length), (size_t)(_min_length));            \
+  }
+
 #define UCT_BXI_CHECK_AM_SHORT(_am_id, _length, _header_t, _max_inline)        \
   UCT_CHECK_AM_ID(_am_id);                                                     \
   UCT_CHECK_LENGTH(sizeof(_header_t) + _length, 0, _max_inline, "am_short");
+
+#define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
+  UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \
+                      "iovcnt(%lu) should be limited by %lu in %s", _iovcnt,   \
+                      _max_iov, _name)
+
+#define UCT_BXI_CHECK_RNDV_DATA(_iovcnt, _max_iov, _length, _max_len)          \
+  UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, "uct_bxi_ep_tag_rndv_zcopy");  \
+  UCT_BXI_CHECK_LENGTH_PTR(_length, 0, _max_len, "rndv_zcopy");
 
 #define UCT_BXI_CHECK_IFACE_RES(_iface, _ep)                                   \
   if (uct_bxi_iface_has_tx_resources(_iface) <= 0) {                           \
@@ -470,131 +520,81 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
     return UCS_ERR_NO_RESOURCE;                                                \
   }
 
-#define UCT_BXI_CHECK_ZCOPY_DATA(_iovcnt, _max_iov, _func_name, _length,       \
-                                 _seg_size)                                    \
-  UCT_CHECK_IOV_SIZE(_iovcnt, _max_iov, _func_name);                           \
-  UCT_CHECK_LENGTH(_length, 0, _seg_size, "zcopy payload");
-
 #define UCT_BXI_CHECK_IFACE_RES_PTR(_iface, _ep)                               \
   if (uct_bxi_iface_has_tx_resources(_iface) <= 0) {                           \
     UCS_STATS_UPDATE_COUNTER((_ep)->super.stats, UCT_EP_STAT_NO_RES, 1);       \
     return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE);                                \
   }
 
-//FIXME: rework all these macros...
+// Get descriptor macros
 #define UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                          \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \
                            return UCS_ERR_NO_RESOURCE);
 
-#define UCT_BXI_IFACE_GET_TX_DESC_PTR(_iface, _mp, _desc)                      \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super.super, _mp, _desc,                 \
-                           return UCS_STATUS_PTR(UCS_ERR_NO_RESOURCE));
-
 #define UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err);
 
-#define UCT_BXI_IFACE_GET_TX_AM_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb,  \
-                                           _arg, _length)                      \
+#define UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                       \
+  (_desc)->comp.comp    = 1;                                                   \
+  (_desc)->comp.handler = _handler;                                            \
+  (_desc)->ep           = _ep;
+
+#define UCT_BXI_IFACE_GET_TX_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb,     \
+                                        _arg, _handler, _length)               \
   ({                                                                           \
     UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                              \
-    (_desc)->comp.comp    = 1;                                                 \
-    (_desc)->comp.handler = uct_bxi_send_op_no_completion;                     \
-    (_desc)->ep           = _ep;                                               \
-    *(_length)            = _pack_cb(_desc + 1, _arg);                         \
+    UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                           \
+    (_desc)->user_comp = NULL;                                                 \
+    *(_length)         = _pack_cb(_desc + 1, _arg);                            \
   })
 
-#define UCT_BXI_IFACE_GET_TX_PUT_BCOPY_DESC(_iface, _mp, _desc, _ep, _pack_cb, \
-                                            _arg, _length)                     \
+#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(                                   \
+        _iface, _mp, _desc, _ep, _unpack_cb, _handler, _comp, _arg, _length)   \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->comp.comp    = 1;                                                   \
-  (_desc)->comp.handler = uct_bxi_send_op_no_completion;                       \
-  (_desc)->ep           = _ep;                                                 \
-  _length               = _pack_cb(_desc + 1, _arg);                           \
-  UCT_SKIP_ZERO_LENGTH(_length, _desc);
-
-#define UCT_BXI_IFACE_GET_TX_GET_BCOPY_DESC(_iface, _mp, _desc, _ep,             \
-                                            _unpack_cb, _comp, _arg, _length)    \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                  \
-  ucs_assert(_length <= (_iface)->config.seg_size);                              \
-  (_desc)->ep             = _ep;                                                 \
-  (_desc)->comp.comp      = 1;                                                   \
-  (_desc)->comp.handler   = (_comp == NULL) ?                                    \
-                                    uct_bxi_ep_get_bcopy_handler_no_completion : \
-                                    uct_bxi_ep_get_bcopy_handler;                \
-  (_desc)->user_comp      = _comp;                                               \
-  (_desc)->length         = _length;                                             \
-  (_desc)->get.unpack_arg = _arg;                                                \
+  ucs_assert(_length <= (_iface)->config.seg_size);                            \
+  UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                             \
+  (_desc)->user_comp      = _comp;                                             \
+  (_desc)->length         = _length;                                           \
+  (_desc)->get.unpack_arg = _arg;                                              \
   (_desc)->get.unpack_cb  = _unpack_cb;
 
-#define UCT_BXI_IFACE_GET_TX_OP(_iface, _mp, _desc, _ep, _length)              \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep           = _ep;                                                 \
-  (_desc)->comp.comp    = 1;                                                   \
-  (_desc)->comp.handler = uct_bxi_send_op_no_completion;                       \
-  UCT_SKIP_ZERO_LENGTH(_length, _desc);
+#define UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(                                 \
+        _iface, _mp, _desc, _ep, _user_comp, _handler, _pack_cb, _src, _len,     \
+        _hdr, _hdrlen, _pack_length, _err)                                       \
+  ({                                                                             \
+    UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
+    UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                             \
+    (_desc)->user_comp = _user_comp;                                             \
+    *(_pack_length)    = _pack_cb(_iface, _desc + 1, _src, _len, _hdr, _hdrlen); \
+  })
 
 #define UCT_BXI_IFACE_GET_TX_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,      \
                                      _handler, _length)                        \
   UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep        = _ep;                                                    \
-  (_desc)->comp.comp = 1;                                                      \
-  (_desc)->comp.handler =                                                      \
-          (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
+  UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                             \
   (_desc)->user_comp = _user_comp;                                             \
   UCT_SKIP_ZERO_LENGTH(_length, _desc);
 
-#define UCT_BXI_IFACE_GET_TX_RNDV_OP(_iface, _mp, _desc, _ep, _length, _block) \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep           = _ep;                                                 \
-  (_desc)->comp.comp    = 1;                                                   \
-  (_desc)->comp.handler = uct_bxi_recv_rndv_tag_handler;                       \
-  (_desc)->rndv.block   = _block;
-
-#define UCT_BXI_IFACE_GET_TX_RNDV_OP_ERR(_iface, _mp, _desc, _ep, _length,     \
-                                         _block, _err_code)                    \
-  UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err_code)                 \
-  (_desc)->ep           = _ep;                                                 \
-  (_desc)->comp.comp    = 1;                                                   \
-  (_desc)->comp.handler = uct_bxi_recv_rndv_tag_handler;                       \
-  (_desc)->rndv.block   = _block;
-
-#define UCT_BXI_IFACE_GET_TX_ATO_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
-                                         _handler, _length)                    \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep        = _ep;                                                    \
-  (_desc)->comp.comp = 1;                                                      \
-  (_desc)->comp.handler =                                                      \
-          (_user_comp == NULL) ? uct_bxi_send_ato_op_no_completion : _handler; \
-  (_desc)->user_comp = _user_comp;                                             \
-  UCT_SKIP_ZERO_LENGTH(_length, _desc);
-
-//TODO: _length argument is not used.
-#define UCT_BXI_IFACE_GET_TX_TAG_OP_COMP(_iface, _mp, _desc, _ep, _user_comp,  \
-                                         _handler, _length)                    \
-  UCT_BXI_IFACE_GET_TX_DESC(_iface, _mp, _desc)                                \
-  (_desc)->ep        = _ep;                                                    \
-  (_desc)->comp.comp = 1;                                                      \
-  (_desc)->comp.handler =                                                      \
-          (_user_comp == NULL) ? uct_bxi_send_op_no_completion : _handler;     \
+#define UCT_BXI_IFACE_GET_TX_OP_COMP_ERR(_iface, _mp, _desc, _ep, _user_comp,  \
+                                         _handler, _err)                       \
+  UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
+  UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                             \
   (_desc)->user_comp = _user_comp;
 
-#define UCT_BXI_IFACE_GET_TX_TAG_DESC_ERR(_iface, _mp, _desc, _ep, _user_comp, \
-                                          _handler, _err)                      \
-  UCT_BXI_IFACE_GET_TX_DESC_ERR(_iface, _mp, _desc, _err)                      \
-  (_desc)->ep           = _ep;                                                 \
-  (_desc)->comp.comp    = 1;                                                   \
-  (_desc)->comp.handler = (_user_comp == NULL) ?                               \
-                                  uct_bxi_send_rndv_no_comp_op_handler :       \
-                                  _handler;                                    \
-  (_desc)->user_comp    = _user_comp;
+/* Size of block is reduced by the payload size that is sent during the first 
+ * control message of the sender, see uct_bxi_iface_tag_init to check how 
+ * rndv_hdr_offset is computed. */
+#define UCT_BXI_IFACE_GET_RX_RNDV_DESC(_iface, _mp, _desc, _start, _size,       \
+                                       _tag, _handler, _err_code)               \
+  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);            \
+  (_desc)->start = UCS_PTR_BYTE_OFFSET(_start, (_iface)->tm.rndv_hdr_offset);   \
+  (_desc)->size  = ucs_max((ssize_t)(_size - (_iface)->tm.rndv_hdr_offset), 0); \
+  (_desc)->tag   = _tag;                                                        \
+  (_desc)->handler  = _handler;                                                 \
+  (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC(_iface, _mp, _desc, _rxq)                \
-  UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc,                       \
-                           return UCS_ERR_NO_RESOURCE);                        \
-  (_desc)->rxq = _rxq;
-
-#define UCT_BXI_IFACE_GET_RX_TAG_DESC_ERR(_iface, _mp, _desc, _start, _size,   \
-                                          _tag, _ctx, _handler, _err_code)     \
+#define UCT_BXI_IFACE_GET_RX_DESC(_iface, _mp, _desc, _start, _size, _tag,     \
+                                  _ctx, _handler, _err_code)                   \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
   (_desc)->start    = _start;                                                  \
   (_desc)->size     = _size;                                                   \
@@ -602,10 +602,5 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->ctx      = _ctx;                                                    \
   (_desc)->handler  = _handler;                                                \
   (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
-
-#define UCT_BXI_CHECK_IOV_SIZE_PTR(_iovcnt, _max_iov, _name)                   \
-  UCT_CHECK_PARAM_PTR((_iovcnt) <= (_max_iov),                                 \
-                      "iovcnt(%lu) should be limited by %lu in %s", _iovcnt,   \
-                      _max_iov, _name)
 
 #endif

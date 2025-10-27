@@ -35,7 +35,6 @@ ucs_status_t ucp_tag_rndv_process_rts(ucp_worker_h worker,
     ucp_recv_desc_t *rdesc;
     ucp_request_t *rreq;
     ucs_status_t status;
-    unsigned flag;
 
     ucs_assert(ucp_rndv_rts_is_tag(rts_hdr));
 
@@ -43,9 +42,8 @@ ucs_status_t ucp_tag_rndv_process_rts(ucp_worker_h worker,
     if (rreq != NULL) {
         /* Cancel req in transport if it was offloaded, because it arrived
            as unexpected */
-        flag = tl_flags & UCT_CB_PARAM_FLAG_RNDV ? UCT_TAG_CANCEL_SW_RNDV : 0;
         status = ucp_tag_offload_try_cancel(worker, rreq, UCT_TAG_CANCEL_FORCE | 
-                                            UCT_TAG_CANCEL_MATCHED | flag);
+                                            UCT_TAG_CANCEL_MATCHED);
         if (!(status == UCS_INPROGRESS)) {
             ucp_tag_rndv_matched(worker, rreq, rts_hdr, length);
         }

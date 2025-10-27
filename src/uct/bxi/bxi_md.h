@@ -1,10 +1,10 @@
 #ifndef BXI_MD_H
 #define BXI_MD_H
 
+#include "bxi.h"
+
 #include <uct/base/uct_iface.h>
 #include <uct/base/uct_md.h>
-
-#include <uct/bxi/ptl_types.h>
 
 #define UCT_BXI_CONFIG_PREFIX "BXI_"
 

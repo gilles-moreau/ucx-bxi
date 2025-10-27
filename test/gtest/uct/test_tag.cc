@@ -144,6 +144,8 @@ public:
 
     ucs_status_t tag_rndv_zcopy(entity &e, send_ctx &ctx)
     {
+         unsigned offload = ctx.uct_comp.gop == NULL ? 0 : UCT_TAG_SCHEDULE;
+
          rndv_hdr hdr = {{ctx.imm_data,
                           reinterpret_cast<uint64_t>(&ctx)
                          },
@@ -154,8 +156,8 @@ public:
                                  ctx.mbuf->length(), ctx.mbuf->memh(), 1);
 
          ctx.rndv_op = uct_ep_tag_rndv_zcopy(e.ep(0), ctx.tag, &hdr,
-                                             sizeof(hdr), iov, iovcnt, 0,
-                                             &ctx.uct_comp);
+                                             sizeof(hdr), iov, iovcnt,
+                                             offload, &ctx.uct_comp);
 
          return  (UCS_PTR_IS_ERR(ctx.rndv_op)) ? UCS_PTR_STATUS(ctx.rndv_op) :
                                                  UCS_OK;
@@ -290,8 +292,8 @@ public:
         flush();
     }
 
-    void test_tag_offload_operation_expected(send_func sfunc, size_t length = 75,
-                                             bool take_uct_desc = false)
+    void test_tag_sched_recv_expected(send_func sfunc, size_t length = 75,
+                                      bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
         uct_gop_h gop;
@@ -305,6 +307,8 @@ public:
         mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
 
         receiver().connect(0, sender(), 0);
+
+        ASSERT_UCS_OK(uct_iface_tag_sched_enable(receiver().iface()));
 
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
@@ -330,56 +334,14 @@ public:
 
         wait_for_flag(&st_ctx.comp);
 
+        check_rx_completion(r_ctx, true, SEND_SEED);
         check_rx_completion(st_ctx, true, SEND_SEED);
 
         uct_iface_tag_sched_release(receiver().iface(), gop);
+
         flush();
-    }
 
-    void test_tag_offload_operation_unexpected(send_func sfunc, size_t length = 75,
-                                               bool take_uct_desc = false)
-    {
-        uct_tag_t ftag = 11, btag = 22;
-        uct_gop_h gop;
-
-        if (RUNNING_ON_VALGRIND) {
-            length = ucs_min(length, 128U);
-        }
-
-        mapped_buffer recvbuf(length, RECV_SEED, receiver());
-        mapped_buffer sendbuf(length, SEND_SEED, sender());
-        mapped_buffer sendrecvbuf(length, RECV_SEED, sender());
-
-        receiver().connect(0, sender(), 0);
-
-        recv_ctx r_ctx;
-        init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
-
-        r_ctx.uct_ctx.reply_ep = receiver().ep(0);
-        ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
-
-        ASSERT_UCS_OK(uct_iface_tag_sched_recv(receiver().iface(), 
-                                               &r_ctx.uct_ctx, &gop));
-
-        send_ctx rt_ctx; // Triggered context.
-        init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        rt_ctx.uct_comp.gop = gop;
-        ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
-
-        recv_ctx st_ctx;
-        init_recv_ctx(st_ctx, &sendrecvbuf, btag, MASK, take_uct_desc);
-        ASSERT_UCS_OK(tag_post(sender(), st_ctx));
-
-        send_ctx s_ctx;
-        init_send_ctx(s_ctx, &sendbuf, ftag, reinterpret_cast<uint64_t>(&r_ctx));
-        ASSERT_UCS_OK((this->*sfunc)(sender(), s_ctx));
-
-        wait_for_flag(&st_ctx.comp);
-
-        check_rx_completion(st_ctx, true, SEND_SEED);
-
-        uct_iface_tag_sched_release(receiver().iface(), gop);
-        flush();
+        uct_iface_tag_sched_disable(receiver().iface());
     }
 
     void test_tag_wrong_tag(send_func sfunc)
@@ -710,7 +672,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_cancel_force,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_cancel_noforce,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY) || 
+                     has_transport("bxi"))
 {
     const size_t length = 128;
     mapped_buffer recvbuf(length, RECV_SEED, receiver());
@@ -855,12 +818,21 @@ UCS_TEST_SKIP_COND_P(test_tag, sw_rndv_unexpected,
     test_tag_unexpected(static_cast<send_func>(&test_tag::tag_rndv_request));
 }
 
-UCS_TEST_SKIP_COND_P(test_tag, tag_offload_operation_expected,
+UCS_TEST_SKIP_COND_P(test_tag, tag_sched_recv_expected,
                      !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
                                  UCT_IFACE_FLAG_TAG_OFFLOAD_OP))
 {
-    test_tag_offload_operation_expected(static_cast<send_func>(&test_tag::tag_eager_zcopy));
+    test_tag_sched_recv_expected(static_cast<send_func>(&test_tag::tag_eager_zcopy));
 }
+
+UCS_TEST_SKIP_COND_P(test_tag, tag_rndv_sched_recv_expected,
+                     !check_caps(UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
+                                 UCT_IFACE_FLAG_TAG_OFFLOAD_OP))
+{
+    test_tag_sched_recv_expected(static_cast<send_func>(&test_tag::tag_rndv_zcopy), 
+                                 sender().iface_attr().cap.tag.rndv.max_zcopy);
+}
+
 
 //TODO: add unpexected test case
 
