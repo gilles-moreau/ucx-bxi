@@ -23,9 +23,6 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
                                           const void              *resp)
 {
   uct_bxi_recv_block_t *block = op->rndv.block;
-  ptl_ct_event_t        ct_value;
-
-  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
 
   /* Whether rendezvous was offloaded or not, handler is called after the 
    * completion of GET which is always performed on MD with counter,  so 

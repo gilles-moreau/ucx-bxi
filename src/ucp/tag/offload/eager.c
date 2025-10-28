@@ -108,14 +108,12 @@ ucp_proto_eager_tag_offload_bcopy_common(ucp_request_t *req,
                                          uint64_t imm_data)
 {
     ssize_t packed_len;
-    unsigned flags = 0;
-    void *arg = req;
 
     packed_len = uct_ep_tag_eager_bcopy(ucp_ep_get_fast_lane(req->send.ep,
                                                              spriv->super.lane),
                                         req->send.msg_proto.tag, imm_data,
-                                        ucp_eager_tag_offload_pack, arg, 
-                                        flags);
+                                        ucp_eager_tag_offload_pack, req, 
+                                        0);
 
     return ucs_likely(packed_len >= 0) ? UCS_OK : packed_len;
 }

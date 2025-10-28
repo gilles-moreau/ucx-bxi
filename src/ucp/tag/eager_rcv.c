@@ -41,31 +41,6 @@ ucp_eager_common_matched(ucp_worker_t *worker, ucp_request_t *req, void *data,
                                UCT_TAG_CANCEL_MATCHED);
 }
 
-UCS_PROFILE_FUNC(ucs_status_t, ucp_recv_desc_init_prof, (worker, data, length,
-                 data_offset, am_flags, hdr_len,
-                 rdesc_flags, priv_length, 
-                 alignment, name, rdesc_p), 
-                 ucp_worker_h worker, void *data, size_t length,
-                 int data_offset, unsigned am_flags, uint16_t hdr_len,
-                 uint16_t rdesc_flags, int priv_length, size_t alignment,
-                 const char *name, ucp_recv_desc_t **rdesc_p) {
-  return ucp_recv_desc_init(worker, data, length, data_offset, am_flags,
-                            hdr_len, rdesc_flags, priv_length, alignment, name,
-                            rdesc_p);
-}
-
-UCS_PROFILE_FUNC(ucs_status_t, ucp_request_recv_data_unpack_prof,
-                 (req, data, length, offset, dereg, last), ucp_request_t *req,
-                 const void *data, size_t length, size_t offset, int dereg,
-                 int last) {
-    return ucp_request_recv_data_unpack(req, data, length, offset, dereg, last);
-}
-
-UCS_PROFILE_FUNC(ucp_request_t *, ucp_tag_exp_search_prof, (tm, tag),
-                 ucp_tag_match_t *tm, ucp_tag_t tag)
-{
-  return ucp_tag_exp_search(tm, tag);
-}
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 ucp_eager_offload_handler(void *arg, void *data, size_t length,
