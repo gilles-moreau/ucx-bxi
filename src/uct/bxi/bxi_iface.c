@@ -8,15 +8,14 @@
 
 #include <ucs/sys/math.h>
 
-#define UCT_PTL_IFACE_OVERHEAD 10e-8
-#define UCT_PTL_IFACE_LATENCY  ucs_linear_func_make(80e-8, 0)
+#define UCT_PTL_IFACE_MAX_EPS      8192
+#define UCT_PTL_IFACE_TAG_OVERHEAD 10e-4
+#define UCT_PTL_IFACE_TAG_LATENCY  ucs_linear_func_make(800e-4, 0)
+#define UCT_PTL_IFACE_AM_OVERHEAD  10e-8
+#define UCT_PTL_IFACE_AM_LATENCY   ucs_linear_func_make(80e-8, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
-/* Forward function declaration. */
-static ucs_status_t uct_bxi_iface_get_rxq(uct_bxi_iface_t *iface,
-                                          ptl_pt_index_t   pti,
-                                          uct_bxi_rxq_t  **rxq_p);
 
 static char *uct_bxi_event_str[] = {
         [PTL_EVENT_GET]                   = "PTL_EVENT_GET",
@@ -38,7 +37,8 @@ static char *uct_bxi_event_str[] = {
 };
 
 ucs_config_field_t uct_bxi_iface_config_table[] = {
-        {"", "ALLOC=heap", NULL, ucs_offsetof(uct_bxi_iface_config_t, super),
+        {"", "ALLOC=heap;MAX_NUM_EPS=1024", NULL,
+         ucs_offsetof(uct_bxi_iface_config_t, super),
          UCS_CONFIG_TYPE_TABLE(uct_iface_config_table)},
 
         {"MAX_EVENTS", "2048",
@@ -46,28 +46,28 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          ucs_offsetof(uct_bxi_iface_config_t, max_events),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_TX_QUEUE_LEN", "256",
-         "Maximum number of outstanding operations (default: 256).",
+        {"MAX_TX_QUEUE_LEN", "1024",
+         "Maximum number of outstanding operations (default: 1024).",
          ucs_offsetof(uct_bxi_iface_config_t, tx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "TX_", -1, 32, 128m, 1.0, "send",
+                "TX_", -1, 128, 128m, 1.0, "send",
                 ucs_offsetof(uct_bxi_iface_config_t, tx.mp), "\n"),
 
-        {"MAX_RX_QUEUE_LEN", "32",
-         "Maximum number of bounced buffer in the Receive Queue (default: "
-         "32).",
+        {"MAX_RX_QUEUE_LEN", "128",
+         "Maximum number of bounced blocks in the Receive Queue (default: "
+         "128).",
          ucs_offsetof(uct_bxi_iface_config_t, rx.max_queue_len),
          UCS_CONFIG_TYPE_UINT},
 
-        {"NUM_RX_SEG", "32",
-         "Number of segments per receive block in the RX Queue (default: 32)",
+        {"NUM_RX_SEG", "1024",
+         "Number of segments per receive block in the RX Queue (default: 1024)",
          ucs_offsetof(uct_bxi_iface_config_t, rx.num_seg),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "RX_AM_", -1, 32, 128m, 1.0, "recv_am",
+                "RX_AM_", -1, 128, 128m, 1.0, "recv_am",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.am_mp), "\n"),
 
         {"SEG_SIZE", "8192",
@@ -76,16 +76,11 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          ucs_offsetof(uct_bxi_iface_config_t, seg_size),
          UCS_CONFIG_TYPE_MEMUNITS},
 
-        {"MAX_EP_RETRIES", "16",
-         "Maximum number of send retry on a given endpoint (default: 16).",
-         ucs_offsetof(uct_bxi_iface_config_t, max_ep_retries),
-         UCS_CONFIG_TYPE_UINT},
-
         {"TM_ENABLE", "n", "Enable HW tag matching",
          ucs_offsetof(uct_bxi_iface_config_t, tm.enable), UCS_CONFIG_TYPE_BOOL},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "RX_TAG_", -1, 32, 128m, 1.0, "recv_tag",
+                "RX_TAG_", -1, 128, 128m, 1.0, "recv_tag",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.tag_mp),
                 "Memory pool of bounced buffers posted in the Portals overflow "
                 "list.\n"),
@@ -99,347 +94,117 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_gop",
                 ucs_offsetof(uct_bxi_iface_config_t, tm.gop_mp), "\n"),
 
-        {"TM_LIST_SIZE", "32",
-         "Limits the number of tags posted to the HW for matching. The actual "
-         "limit is a minimum between this value and the maximum value "
-         "supported by the HW. \n -1 means no limit.",
+        {"TM_LIST_SIZE", "256",
+         "Limits the number of tags posted to the HW for matching.",
          ucs_offsetof(uct_bxi_iface_config_t, tm.list_size),
          UCS_CONFIG_TYPE_UINT},
 
-        {"MAX_OPERATION_CONTEXT", "32",
-         "Number of operation context allocable (default: 32)",
+        {"MAX_OPERATION_CONTEXT", "1024",
+         "Number of operation context allocable (default: 128)",
          ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
 
         {NULL},
 };
 
-static ucs_status_t uct_bxi_iface_handle_am_events(uct_bxi_iface_t *iface,
-                                                   ptl_event_t     *ev)
+static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
+                                                  uct_bxi_recv_block_t *block,
+                                                  ptl_event_t          *ev)
 {
-  ucs_status_t          status = UCS_OK;
-  uint8_t               am_id  = ev->match_bits;
-  uct_bxi_recv_block_t *block  = (uct_bxi_recv_block_t *)ev->user_ptr;
+  ucs_status_t status;
+  uint8_t      am_id = ev->match_bits;
 
-  switch (ev->type) {
-  case PTL_EVENT_PUT:
-    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
-                                 0);
+  status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
 
-    uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
-                           ev->mlength);
-    break;
-  case PTL_EVENT_AUTO_UNLINK:
-    /* One block has been unlinked since it is full. All received data has 
-       * been processed at that point. */
-    status = uct_bxi_recv_block_activate(block, NULL);
-    break;
-  case PTL_EVENT_PUT_OVERFLOW:
-  case PTL_EVENT_LINK:
-  case PTL_EVENT_GET_OVERFLOW:
-  case PTL_EVENT_GET:
-  case PTL_EVENT_AUTO_FREE:
-  case PTL_EVENT_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC:
-  case PTL_EVENT_SEARCH:
-  case PTL_EVENT_SEND:
-  case PTL_EVENT_REPLY:
-  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ACK:
-    ucs_error("BXI: event %s should not have been triggered",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    break;
-  case PTL_EVENT_PT_DISABLED:
-    ucs_error("BXI: event %s. RX Control flow not implemented.",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_OK;
-    break;
-  default:
-    break;
-  }
+  uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
+                         ev->mlength);
 
   return status;
 }
 
-static void uct_bxi_get_rndv_handler(uct_bxi_iface_send_op_t *op,
-                                     const void              *resp)
+static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 {
-  /* First, invoke tag-related callback. */
-  op->rndv.ctx->completed_cb(op->rndv.ctx, op->rndv.tag, 0, op->length, NULL,
-                             UCS_OK);
+  ucs_status_t          status     = UCS_OK;
+  unsigned              progressed = 0;
+  ptl_event_t           ev;
+  int                   ret;
+  uct_bxi_recv_block_t *block;
 
-  /* Then, we may push OP back to the memory pool. */
-  ucs_mpool_put_inline(op);
-}
+  while (1) {
+    ret = PtlEQGet(iface->rx.eqh, &ev);
 
-//NOTE: internal rendez-vous protocol could be removed in favor of using only
-//      the software protocol. In any case, it is already software-based since
-//      it requires the interface to be (sw) polled to be able to complete.
-ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(
-        uct_bxi_iface_t *iface, ptl_process_t pid, ptl_pt_index_t pti,
-        uct_tag_t send_tag, void *buffer, size_t length, uct_tag_context_t *ctx)
-{
-  ucs_status_t             status;
-  uct_bxi_iface_send_op_t *op;
-  uint64_t                 get_tag;
+    switch (ret) {
+    case PTL_OK:
+      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+                "block=%p, nid=%d, pid=%d",
+                iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
+                ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
+                ev.initiator.phys.pid);
 
-  if (uct_bxi_iface_available(iface) <= 0) {
-    return UCS_ERR_NO_RESOURCE;
-  }
+      block = (uct_bxi_recv_block_t *)ev.user_ptr;
 
-  /* First, get OP while setting appropriate completion callback */
-  UCT_BXI_IFACE_GET_TX_DESC(iface, &iface->tx.send_op_mp, op);
-  op->comp.comp    = 1;
-  op->comp.handler = uct_bxi_get_rndv_handler;
-  op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-  UCT_SKIP_ZERO_LENGTH(length, op);
-
-  /* Associate iface and the tag context of the receive block so that 
-   * the completion callback may be called. This enables the block 
-   * to be released by caller. */
-  op->length   = length;
-  op->rndv.ctx = ctx;
-  op->rndv.tag = send_tag;
-
-  /* Internal GET operation needs to be handled particularly, they 
-   * are not attached to a endpoint. */
-  op->ep = NULL;
-
-  //NOTE: remote address is the remote offset here since the operation
-  //      will match the specific GET ME posted by initiator.
-  get_tag = UCT_BXI_BUILD_RNDV_CTRL_TAG(uct_bxi_iface_md(iface)->pid);
-  status  = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                                length, pid, pti, get_tag, 0, op));
-
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlGet rndv zcopy return %d", status);
-  }
-
-  //NOTE: These GET operation are not appended to any endpoint queue. As a
-  //      consequence, they cant be flushed.
-  uct_bxi_iface_available_add(iface, -1);
-
-  return status;
-}
-
-static ucs_status_t
-uct_bxi_iface_tag_rndv_get_progress(uct_pending_req_t *uct_req)
-{
-  ucs_status_t           status;
-  uct_bxi_pending_req_t *req = ucs_derived_of(uct_req, uct_bxi_pending_req_t);
-
-  status = uct_bxi_iface_tag_rndv_zcopy_get(
-          req->tgt.iface, req->tgt.pid, req->tgt.pti, req->tgt.send_tag,
-          req->tgt.buffer, req->tgt.length, req->tgt.ctx);
-  if (status == UCS_OK) {
-    ucs_mpool_put(req);
-  } else {
-    ucs_assert(status == UCS_ERR_NO_RESOURCE);
-  }
-
-  return status;
-}
-
-ucs_status_t uct_bxi_iface_pending_get_add(uct_bxi_iface_t      *iface,
-                                           ptl_process_t         pid,
-                                           ptl_pt_index_t        pti,
-                                           uct_tag_t             send_tag,
-                                           uct_bxi_recv_block_t *block)
-{
-  uct_bxi_pending_req_t *req;
-
-  req = ucs_mpool_get(&iface->tx.pending_mp);
-  if (req == NULL) {
-    return UCS_ERR_NO_MEMORY;
-  }
-
-  req->tgt.iface    = iface;
-  req->tgt.pid      = pid;
-  req->tgt.pti      = pti;
-  req->tgt.send_tag = send_tag;
-  req->tgt.length   = block->size;
-  req->tgt.ctx      = block->ctx;
-  req->tgt.buffer   = block->start;
-  req->super.func   = uct_bxi_iface_tag_rndv_get_progress;
-
-  uct_pending_req_queue_push(&iface->tx.pending_q, &req->super);
-
-  return UCS_OK;
-}
-
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_iface_is_unexpected(uct_bxi_recv_block_t *block)
-{
-  return block->list == PTL_OVERFLOW_LIST;
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag)
-{
-  ucs_status_t    status;
-  ptl_handle_me_t dummy;
-  ptl_me_t        me = {
-                 .ct_handle   = PTL_CT_NONE,
-                 .ignore_bits = 0,
-                 .match_bits  = tag,
-                 .match_id = {.phys.nid = PTL_NID_ANY, .phys.pid = PTL_PID_ANY},
-                 .min_free = 0,
-                 .length   = 0,
-                 .start    = NULL,
-                 .uid      = PTL_UID_ANY,
-                 .options  = PTL_ME_OP_PUT | PTL_ME_USE_ONCE |
-                     PTL_ME_EVENT_COMM_DISABLE | PTL_ME_EVENT_LINK_DISABLE |
-                     PTL_ME_EVENT_FLOWCTRL_DISABLE | PTL_ME_EVENT_OVER_DISABLE |
-                     PTL_ME_EVENT_UNLINK_DISABLE,
-  };
-
-  status = uct_bxi_wrap(PtlMEAppend(uct_bxi_iface_md(iface)->nih,
-                                    iface->rx.tag.q->pti, &me,
-                                    PTL_PRIORITY_LIST, NULL, &dummy));
-  if (status == UCS_OK) {
-    iface->tm.unexp_hdr_count--;
-  }
-
-  return status;
-}
-
-static ucs_status_t uct_bxi_iface_handle_tag_events(uct_bxi_iface_t *iface,
-                                                    ptl_event_t     *ev)
-{
-  ucs_status_t          status = UCS_OK;
-  uct_bxi_hdr_rndv_t   *hdr;
-  uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)ev->user_ptr;
-
-  // TODO: check for truncated messages
-  switch (ev->type) {
-  case PTL_EVENT_PUT:
-    if (uct_bxi_iface_is_unexpected(block)) {
-
-      iface->tm.unexp_hdr_count++;
-
-      if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
-        /* In this case, the protocol will always be continued by UCP. */
-        switch (ev->hdr_data & 0xful) {
-        case UCT_BXI_TAG_PROT_RNDV_HW:
-          hdr    = ev->start;
-          status = iface->tm.rndv_unexp.cb(
-                  iface->tm.rndv_unexp.arg, 0, ev->match_bits,
-                  (const void *)(hdr + 1), hdr->header_length, hdr->remote_addr,
-                  hdr->length, NULL);
-          break;
-        case UCT_BXI_TAG_PROT_RNDV_SW:
-          status = iface->tm.rndv_unexp.cb(
-                  iface->tm.rndv_unexp.arg, 0, ev->match_bits,
-                  (const void *)ev->start, ev->mlength, 0, 0, NULL);
-          break;
-        default:
-          ucs_fatal("BXI: unrecognized rndv protocol.");
-          break;
-        }
-      } else {
-        status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
-                                          ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
-                                          ev->match_bits, ev->hdr_data, NULL);
+      switch (ev.type) {
+      case PTL_EVENT_PUT:
+      case PTL_EVENT_PUT_OVERFLOW:
+      case PTL_EVENT_GET:
+        status = block->handler(iface, block, &ev);
+        break;
+      case PTL_EVENT_AUTO_UNLINK:
+        /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
+         * Link it back, all included data has been processed already. */
+        status = uct_bxi_recv_block_unexp_activate(block);
+        break;
+      case PTL_EVENT_AUTO_FREE:
+        /* AUTO_FREE are generated for on TAG RXQ because block are posted 
+         * on the OVERFLOW_LIST. However, there is nothing to do here. */
+        break;
+      case PTL_EVENT_PT_DISABLED:
+        ucs_error("BXI: event %s. Control flow not implemented.",
+                  uct_bxi_event_str[ev.type]);
+        status = UCS_ERR_IO_ERROR;
+        goto out;
+        break;
+      case PTL_EVENT_LINK:
+      case PTL_EVENT_GET_OVERFLOW:
+      case PTL_EVENT_ACK:
+      case PTL_EVENT_REPLY:
+      case PTL_EVENT_ATOMIC:
+      case PTL_EVENT_FETCH_ATOMIC:
+      case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
+      case PTL_EVENT_ATOMIC_OVERFLOW:
+      case PTL_EVENT_SEARCH:
+      case PTL_EVENT_SEND:
+        ucs_error("PTL: event %s should not have been triggered",
+                  uct_bxi_event_str[ev.type]);
+        status = UCS_ERR_IO_ERROR;
+        goto out;
+        break;
+      default:
+        break;
       }
 
-      if (iface->tm.unexp_hdr_count > 0) {
-        status = uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits);
-        ucs_assert(iface->tm.unexp_hdr_count == 0);
-      }
-    } else {
-      /* Receive block has been consumed, notify UCP layer so it can remove 
-       * the tag from its expected queues. Buffer may also be removed from 
-       * hash table. */
-      block->ctx->tag_consumed_cb(block->ctx);
-      uct_bxi_iface_tag_del_from_hash(iface, block->start);
-
-      /* Now, perform protocol specific actions. */
-      if (uct_bxi_iface_is_rndv(ev->hdr_data)) {
-        switch (ev->hdr_data & 0xful) {
-        case UCT_BXI_TAG_PROT_RNDV_HW:
-          /* BXI internal get protocol is initiated when no triggered get has 
-           * been set up already. This would be the case when the protocol 
-           * has not been offloaded. */
-          if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_HAS_TRIGOP)) {
-            hdr = ev->start;
-
-            /* Then, perform the GET operation. Add to pending queue if no resource 
-           * are available. Use length from hdr since sender size may be different 
-           * from receiver side. */
-            status = uct_bxi_iface_tag_rndv_zcopy_get(
-                    iface, ev->initiator, hdr->pti, ev->match_bits,
-                    block->start, hdr->length, block->ctx);
-            if (status == UCS_ERR_NO_RESOURCE) {
-              status = uct_bxi_iface_pending_get_add(
-                      iface, ev->initiator, hdr->pti, ev->match_bits, block);
-              ucs_assert_always(status == UCS_OK);
-            }
-          }
-
-          break;
-        case UCT_BXI_TAG_PROT_RNDV_SW:
-          /* UCP will proceed with a normal software rendez-vous protocol. */
-          block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start,
-                              ev->mlength, UCS_OK, 0);
-          break;
-        default:
-          ucs_fatal("BXI: unrecognized rndv protocol.");
-          break;
-        }
-      } else {
-        /* Eager expected message completion. */
-        block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
-                                 ev->mlength, NULL, UCS_OK);
+      if (status != UCS_OK) {
+        goto out;
       }
 
-      /* At this point, receive block may safely be released back to the memory 
-       * pool. */
-      uct_bxi_recv_block_release(block);
+      progressed++;
+
+      break;
+    case PTL_EQ_EMPTY:
+      goto out;
+      break;
+    case PTL_EQ_DROPPED:
+      ucs_error("BXI: EQ event dropped.");
+      goto out;
+      break;
+    default:
+      uct_bxi_rc_log(ret);
+      goto out;
     }
-    break;
-  case PTL_EVENT_GET:
-    /* Block was posted during rendez-vous. Event means target has successfully
-     * read data, initiator's operation can thus be completed. */
-    uct_bxi_iface_completion_op(block->op);
-    /* Block for GET has been consumed, it can be safely released and reused. */
-    uct_bxi_recv_block_release(block);
-    break;
-  case PTL_EVENT_PT_DISABLED:
-    ucs_error("PTL: event %s. Control flow not implemented.",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    goto err;
-    break;
-  case PTL_EVENT_AUTO_UNLINK:
-    break;
-  case PTL_EVENT_AUTO_FREE:
-    /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
-     * Link it back, all included data has been processed already. */
-    status = uct_bxi_recv_block_activate(block, NULL);
-    break;
-  case PTL_EVENT_LINK:
-  case PTL_EVENT_PUT_OVERFLOW:
-  case PTL_EVENT_GET_OVERFLOW:
-  case PTL_EVENT_ACK:
-  case PTL_EVENT_REPLY:
-  case PTL_EVENT_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC:
-  case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
-  case PTL_EVENT_ATOMIC_OVERFLOW:
-  case PTL_EVENT_SEARCH:
-  case PTL_EVENT_SEND:
-    ucs_error("PTL: event %s should not have been triggered",
-              uct_bxi_event_str[ev->type]);
-    status = UCS_ERR_IO_ERROR;
-    break;
-  default:
-    break;
   }
 
-err:
-  return status;
+out:
+  return progressed;
 }
 
 ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
@@ -448,7 +213,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   uct_base_iface_query(&iface->super, attr);
 
-  attr->cap.am.max_short = iface->config.max_inline - sizeof(uint64_t);
+  attr->cap.am.max_short = iface->config.max_inline;
   attr->cap.am.max_bcopy = iface->config.seg_size;
   attr->cap.am.max_zcopy = 0;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
@@ -473,6 +238,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->iface_addr_len  = iface->config.iface_addr_size;
   attr->device_addr_len = iface->config.device_addr_size;
 
+  //FIXME: implementing AM_SHORT requires to have one pending queue per
+  //       endpoint which implies some changes in the way resource are
+  //       managed.
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
                     UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
@@ -510,10 +278,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
-  attr->latency             = UCT_PTL_IFACE_LATENCY;
-  attr->bandwidth.dedicated = 8192 * UCS_MBYTE;
-  attr->bandwidth.shared    = 0;
-  attr->overhead            = UCT_PTL_IFACE_OVERHEAD;
+  attr->latency             = UCT_PTL_IFACE_AM_LATENCY;
+  attr->bandwidth.dedicated = 0;
+  attr->bandwidth.shared    = 100 * UCS_GBYTE;
+  attr->overhead            = UCT_PTL_IFACE_AM_OVERHEAD;
   attr->priority            = 1;
 
   if (!iface->tm.enabled) {
@@ -526,6 +294,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.tag.recv.min_recv        = 0;
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
+  attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
   //FIXME: UCP layer uses ucs_alloca to allocate the receive descriptor
   //       which is limited in size (1200). This is only used in the sync
   //       path. In order to increase this threshold, we need to support the
@@ -533,18 +302,23 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       kept by UCP to save protocol information in it. Indeed, the ack needs
   //       to be sent only when the match happened. One requirement
   //       is to leave a headroom in the receive descriptors and support
-  //       UCS_INPROGRESS return call from invoke_am_callback.
-  attr->cap.tag.eager.max_bcopy = 1168;
+  //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
+  //       option with MANAGE_LOCAL are not suitable has there are no way to
+  //       leave space for this headroom...
   attr->cap.tag.eager.max_zcopy = 1168;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
-  attr->cap.tag.rndv.max_hdr    = 128;
-  attr->cap.tag.rndv.max_iov    = 1;
+  attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
+  attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_zcopy  = iface->config.max_msg_size;
 
   attr->cap.flags |=
-          UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-          UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | UCT_IFACE_FLAG_TAG_GET_ZCOPY |
+          UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
+          UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
           UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+
+  //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
+  attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;
+  attr->overhead = UCT_PTL_IFACE_TAG_OVERHEAD;
 
   return UCS_OK;
 }
@@ -576,76 +350,10 @@ ucs_status_t uct_bxi_iface_get_device_address(uct_iface_h        tl_iface,
   return UCS_OK;
 }
 
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_iface_tag_flush_cancel(uct_bxi_iface_t *iface)
-{
-  uct_bxi_recv_block_t *block;
-
-  /* Flush list of cancelled blocks. */
-  while (!ucs_list_is_empty(&iface->rx.tag.cancel)) {
-    block = ucs_list_extract_head(&iface->rx.tag.cancel, uct_bxi_recv_block_t,
-                                  c_elem);
-
-    uct_bxi_iface_tag_del_from_hash(iface, block->start);
-    block->ctx->completed_cb(block->ctx, block->tag, 0, block->size, NULL,
-                             UCS_ERR_CANCELED);
-
-    uct_bxi_recv_block_release(block);
-  }
-}
-
-static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
-{
-  unsigned       progressed = 0;
-  ptl_event_t    ev;
-  int            ret;
-  uct_bxi_rxq_t *rxq;
-
-  while (1) {
-    ret = PtlEQGet(iface->rx.eqh, &ev);
-
-    switch (ret) {
-    case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d "
-                "block=%p",
-                iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
-                ev.pt_index, ev.user_ptr);
-
-      /* Get RX Queue from Portals Table Index */
-      uct_bxi_iface_get_rxq(iface, ev.pt_index, &rxq);
-
-      /* Handle the event. */
-      //FIXME: progressed is unused
-      progressed += rxq->handler(iface, &ev);
-      break;
-    case PTL_EQ_EMPTY:
-      goto out;
-      break;
-    case PTL_EQ_DROPPED:
-      ucs_error("BXI: EQ event dropped.");
-      goto out;
-      break;
-    default:
-      uct_bxi_rc_log(ret);
-      goto out;
-    }
-  }
-
-out:
-  if (iface->tm.enabled) {
-    /* Check if blocks need to be flushed. */
-    uct_bxi_iface_tag_flush_cancel(iface);
-  }
-
-  return progressed;
-}
-
 static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
                                                    uct_bxi_iface_send_op_t *op)
 {
-  ucs_status_t status;
-
-  ucs_error("BXI: operation failed. op=%p, sn=%lu, ep=%p", op, op->sn, op->ep);
+  ucs_status_t status = UCS_ERR_ENDPOINT_TIMEOUT;
 
   /* Don't remove operation from outstanding list, it will be done later. */
 
@@ -653,7 +361,9 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
   op->ep->conn_state = UCT_BXI_EP_CONN_CLOSED;
 
   status = uct_iface_handle_ep_err(&iface->super.super, &op->ep->super.super,
-                                   UCS_ERR_ENDPOINT_TIMEOUT);
+                                   status);
+
+  ucs_error("BXI: operation failed. op=%p, ep=%p", op, op->ep);
 
   ucs_assert(status == UCS_OK);
 }
@@ -662,8 +372,7 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 {
   uct_bxi_iface_send_op_t *op, *tmp;
 
-  /* Endpoint may be NULL if previously completed operation was a GET 
-   * resulting from the TAG RNDV protocol. */
+  /* Endpoint may be null for rndv get operation. */
   if (ep == NULL) {
     return;
   }
@@ -673,7 +382,7 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
   ucs_list_for_each_safe (op, tmp, &ep->send_ops, elem) {
     if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
       UCT_TL_EP_STAT_FLUSH(&ep->super);
-      uct_bxi_iface_completion_op(op);
+      uct_bxi_iface_completion_flush_op(op);
     } else {
       break;
     }
@@ -681,9 +390,9 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 }
 
 static UCS_F_ALWAYS_INLINE int
-uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
+uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, ptl_size_t length)
 {
-  return op->length <= iface->config.max_inline;
+  return length <= iface->config.max_inline;
 }
 
 /* Poll tx is both used for interface progression. Only events 
@@ -695,6 +404,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   uct_bxi_iface_send_op_t      *op;
   int                           ret;
   ptl_event_t                   ev;
+  uct_bxi_ep_t                 *ep;
   uct_pending_req_priv_queue_t *priv;
 
   while (1) {
@@ -704,19 +414,20 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, outstanding=%lu, "
-                "start=%p, pti=%d, op=%p",
+      ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, available=%lu, "
+                "op=%p",
                 iface, uct_bxi_event_str[ev.type], ev.mlength,
-                iface->tx.available, ev.start, ev.pt_index, ev.user_ptr);
+                iface->tx.available, ev.user_ptr);
       switch (ev.type) {
       case PTL_EVENT_REPLY:
         /* This event is generated after TAG GET operation completion. */
-        if (uct_bxi_iface_op_is_inlined(iface, op)) {
+        if (uct_bxi_iface_op_is_inlined(iface, ev.mlength)) {
           //NOTE: for small size messages, host memory may not be coherent with
           //      completion of the operation, thus force NIC synchronization.
           //TODO: test with PTL_MD_VOLATILE unset
           PtlAtomicSync();
         }
+        // Fallthrough
       case PTL_EVENT_ACK:
         progressed++;
         if (ev.ni_fail_type != PTL_NI_OK) {
@@ -724,6 +435,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         }
         uct_bxi_iface_completion_op(op);
         uct_bxi_iface_check_flush(op->ep);
+
         break;
       case PTL_EVENT_SEND:
       case PTL_EVENT_PUT:
@@ -761,18 +473,17 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   }
 
 out:
-  /* Update send credits. */
-  uct_bxi_iface_available_add(iface, progressed);
-
-  /* With new credits available, dispatch pending queue. */
-  uct_pending_queue_dispatch(priv, &iface->tx.pending_q, 1);
+  ucs_list_for_each (ep, &iface->eps, elem) {
+    /* With new credits available, dispatch pending queue. */
+    uct_pending_queue_dispatch(priv, &ep->pending_q, 1);
+  }
 
   return progressed;
 }
 
 unsigned uct_bxi_iface_progress(uct_iface_t *super)
 {
-  unsigned         count = 0;
+  unsigned         count;
   uct_bxi_iface_t *iface = ucs_derived_of(super, uct_bxi_iface_t);
 
   count = uct_bxi_iface_poll_rx(iface);
@@ -780,51 +491,42 @@ unsigned uct_bxi_iface_progress(uct_iface_t *super)
     return count;
   }
 
-  count = uct_bxi_iface_poll_tx(iface);
-
-  if (count < 0) {
-    ucs_debug("slip");
-  }
-
-  return count;
+  return uct_bxi_iface_poll_tx(iface);
 }
 
 //NOTE: Current flush semantic is the following: a flush operation is completed
 //      when all previous operations on the interface memory descriptor have been
 //      acked. In practice, this corresponds to UCT_FLUSH_FLAG_REMOTE.
+//      Wouldn't the event PTL_EVENT_SEND be the correct event to check in terms
+//      of semantics?
 ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
                                  uct_completion_t *comp)
 {
-  ucs_status_t          status;
-  unsigned              count = 0;
-  uint64_t UCS_V_UNUSED pid;
-  uct_bxi_ep_list_t    *ep_list;
-  uct_bxi_ep_t         *ep;
-  uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+  ucs_status_t     status;
+  unsigned         count = 0;
+  uct_bxi_ep_t    *ep;
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
   if (comp != NULL) {
     return UCS_ERR_UNSUPPORTED;
   }
 
-  kh_foreach (&iface->eps, pid, ep_list, {
-    ucs_list_for_each(ep, &ep_list->head, elem) {
-      status = uct_bxi_ep_flush(&ep->super.super, 0, NULL);
-      if ((status == UCS_ERR_NO_RESOURCE) || (status == UCS_INPROGRESS)) {
-    count++;
-      } else if (status != UCS_OK) {
-    return status;
-      }
-}
-})
+  ucs_list_for_each (ep, &iface->eps, elem) {
+    status = uct_bxi_ep_flush(&ep->super.super, 0, NULL);
+    if ((status == UCS_ERR_NO_RESOURCE) || (status == UCS_INPROGRESS)) {
+      count++;
+    } else if (status != UCS_OK) {
+      return status;
+    }
+  }
 
-  if (count != 0)
-{
-  UCT_TL_IFACE_STAT_FLUSH_WAIT(&iface->super);
-  return UCS_INPROGRESS;
-}
+  if (count != 0) {
+    UCT_TL_IFACE_STAT_FLUSH_WAIT(&iface->super);
+    return UCS_INPROGRESS;
+  }
 
-UCT_TL_IFACE_STAT_FLUSH(&iface->super);
-return UCS_OK;
+  UCT_TL_IFACE_STAT_FLUSH(&iface->super);
+  return UCS_OK;
 }
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
@@ -854,287 +556,13 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
 
 ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
 {
-  int                ret;
-  khiter_t           iter;
-  uint64_t           pid;
-  uct_bxi_ep_list_t *list;
-
-  /* Transform Portals pid to uint64_t. */
-  pid  = ep->dev_addr.pid.phys.nid;
-  pid  = pid << 32;
-  pid |= ep->dev_addr.pid.phys.pid;
-
-  /* Add endpoint to interface hash table. Key is Portals PID, value is 
-   * list of endpoints pointer for this key. */
-  //NOTE: UCT allows to have multiple endpoints to the same remote PID.
-  //      For example, IB allows to have multiple Queue Pair targeting
-  //      the same node.
-  iter = kh_put(uct_bxi_eps, &iface->eps, pid, &ret);
-  ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
-
-  /* Either get the list if it exists, or create it. */
-  if (ret == UCS_KH_PUT_KEY_PRESENT) {
-    list = kh_value(&iface->eps, iter);
-  } else {
-    list = kh_value(&iface->eps, iter) =
-            ucs_malloc(sizeof(uct_bxi_ep_list_t), "bxi ep list");
-    if (list == NULL) {
-      return UCS_ERR_NO_MEMORY;
-    }
-    ucs_list_head_init(&list->head);
-    list->num_ep = 0;
-    list->pid    = ep->dev_addr.pid;
-  }
-
-  ucs_list_add_tail(&list->head, &ep->elem);
-  ep->list_id = list->num_ep++;
-
   return UCS_OK;
 }
 
-void uct_bxi_iface_ep_remove(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
+static UCS_F_ALWAYS_INLINE size_t uct_bxi_iface_hdr_size(size_t max_inline,
+                                                         size_t min_size)
 {
-  khiter_t           iter;
-  uint64_t           pid;
-  uct_bxi_ep_list_t *list;
-
-  /* Transform Portals pid to uint64_t. */
-  pid  = ep->dev_addr.pid.phys.nid;
-  pid  = pid << 32;
-  pid |= ep->dev_addr.pid.phys.pid;
-
-  /* First, get the BXI endpoint list. */
-  iter = kh_get(uct_bxi_eps, &iface->eps, pid);
-  if (iter == kh_end(&iface->eps)) {
-    ucs_fatal("BXI: list of endpoints not found. nid=%d, pid=%d",
-              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid);
-  }
-  list = kh_val(&iface->eps, iter);
-
-  /* Remove endpoint from list. */
-  ucs_list_del(&ep->elem);
-
-  /* If there are no other endpoint in the list, remove it from the 
-   * hash table. */
-  if (ucs_list_is_empty(&list->head)) {
-    ucs_free(list);
-    kh_del(uct_bxi_eps, &iface->eps, iter);
-  }
-}
-
-//FIXME: move this to bxi_rxq.c
-static ucs_status_t uct_bxi_iface_add_rxq(uct_bxi_iface_t *iface,
-                                          uct_bxi_rxq_t   *rxq)
-{
-  int            ret;
-  khiter_t       iter;
-  ptl_pt_index_t pti = uct_bxi_rxq_get_addr(rxq);
-
-  /* Enable event handling. It is retrieved on event polling
-  * using the Portals Table Index. */
-  iter = kh_put(uct_bxi_rxq, &iface->rx.queues, pti, &ret);
-  ucs_assertv((ret != UCS_KH_PUT_FAILED) && (ret != UCS_KH_PUT_KEY_PRESENT),
-              "ret %d", ret);
-  kh_value(&iface->rx.queues, iter) = rxq;
-
-  return UCS_OK;
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_iface_get_rxq(
-        uct_bxi_iface_t *iface, ptl_pt_index_t pti, uct_bxi_rxq_t **rxq_p)
-{
-  khiter_t iter;
-
-  iter = kh_get(uct_bxi_rxq, &iface->rx.queues, pti);
-  if (iter == kh_end(&iface->rx.queues)) {
-    ucs_fatal("BXI: unknown Portals Table Index. pti=%d", pti);
-  }
-  *rxq_p = kh_val(&iface->rx.queues, iter);
-
-  return UCS_OK;
-}
-
-static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
-                                          void *chunk)
-{
-  uct_bxi_iface_t *iface =
-          ucs_container_of(mp, uct_bxi_iface_t, tm.recv_block_mp);
-  uct_bxi_recv_block_t *block = obj;
-
-  block->flags = 0;
-  block->unexp = 0;
-  block->size  = 0;
-  block->start = NULL;
-  block->rxq   = iface->rx.tag.q;
-  block->list  = PTL_PRIORITY_LIST;
-  block->meh   = PTL_INVALID_HANDLE;
-  block->cth   = PTL_CT_NONE;
-}
-
-static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
-        .chunk_alloc   = ucs_mpool_chunk_malloc,
-        .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = uct_bxi_iface_recv_block_init,
-        .obj_cleanup   = NULL,
-        .obj_str       = NULL};
-
-//NOTE: Think of preallocating all the counters associated with the
-//      operation contexts during memory pool initialization.
-static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
-        .chunk_alloc   = ucs_mpool_chunk_malloc,
-        .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = NULL,
-        .obj_cleanup   = NULL,
-        .obj_str       = NULL};
-
-static ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
-                                           const uct_iface_params_t     *params,
-                                           const uct_bxi_iface_config_t *config)
-{
-  ucs_status_t        status = UCS_OK;
-  ucs_mpool_params_t  mp_param;
-  uct_bxi_rxq_param_t rxq_param;
-
-  iface->tm.enabled = config->tm.enable;
-
-  if (!iface->tm.enabled) {
-    goto out;
-  }
-
-  /* First, initialize interface configuration. */
-  iface->config.tm.max_tags  = config->tm.list_size;
-  iface->config.tm.max_gop   = config->tm.max_gop;
-  iface->config.tm.max_zcopy = config->seg_size;
-
-  iface->config.rx.tag_mp = config->rx.tag_mp;
-  //FIXME: Memory pool max elements is reset here, thus overwriting initial
-  //       configuration. See FIXME comment in rxq_create about Memory Pool
-  //       usage.
-  iface->config.rx.tag_mp.max_bufs = config->rx.max_queue_len;
-
-  iface->tm.eager_unexp.cb = params->eager_cb;
-  iface->tm.rndv_unexp.cb  = params->rndv_cb;
-  iface->tm.eager_unexp.arg =
-          UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
-  iface->tm.rndv_unexp.arg =
-          UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
-  iface->tm.unexp_hdr_count = 0;
-
-  kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
-
-  rxq_param.flags   = 0;
-  rxq_param.eqh     = iface->rx.eqh;
-  rxq_param.nih     = uct_bxi_iface_md(iface)->nih;
-  rxq_param.mp      = iface->config.rx.tag_mp;
-  rxq_param.list    = PTL_OVERFLOW_LIST;
-  rxq_param.name    = "rxq-tag";
-  rxq_param.handler = uct_bxi_iface_handle_tag_events;
-
-  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.tag.q);
-  if (status != UCS_OK) {
-    goto out;
-  }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(iface, iface->rx.tag.q);
-
-  /* Initialize list of cancelled blocks. */
-  ucs_list_head_init(&iface->rx.tag.cancel);
-
-  /* Pool of receive blocks for receiving expected messages. */
-  ucs_mpool_params_reset(&mp_param);
-  mp_param.max_chunk_size =
-          iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t);
-  mp_param.elems_per_chunk = mp_param.max_elems =
-          ucs_max(uct_bxi_iface_md(iface)->config.limits.max_entries,
-                  iface->config.tm.max_tags);
-  mp_param.elem_size   = sizeof(uct_bxi_recv_block_t);
-  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops         = &uct_bxi_recv_block_mpool_ops;
-  mp_param.name        = "tag-recv-block";
-  mp_param.grow_factor = 1;
-  status               = ucs_mpool_init(&mp_param, &iface->tm.recv_block_mp);
-  if (status != UCS_OK) {
-    goto err_release_rxq;
-  }
-
-  /* Create RXQ for rendez-vous blocks, see uct_bxi_ep_tag_rndv_zcopy for 
-   * details.*/
-  rxq_param.flags = UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL;
-  rxq_param.eqh   = iface->rx.eqh;
-  rxq_param.nih   = uct_bxi_iface_md(iface)->nih;
-  rxq_param.mp    = (uct_iface_mpool_config_t){0};
-  rxq_param.list  = PTL_OVERFLOW_LIST;
-  rxq_param.name  = "ctrl-tag";
-  //NOTE: Although CTRL RXQ is different, handler is the same as TAG RXQ.
-  //      It should only handle the PTL_EVENT_GET event.
-  rxq_param.handler = uct_bxi_iface_handle_tag_events;
-
-  status = uct_bxi_rxq_create(iface, &rxq_param, &iface->rx.ctrl.q);
-  if (status != UCS_OK) {
-    goto out;
-  }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(iface, iface->rx.ctrl.q);
-
-  /* Initialize list of cancelled blocks. */
-  ucs_list_head_init(&iface->rx.tag.cancel);
-
-  /* Memory pool of Operation Offload context. These are counters that are 
-   * used to implement dependencies between sends and receives. */
-  ucs_mpool_params_reset(&mp_param);
-  mp_param.max_chunk_size  = config->tm.gop_mp.max_chunk_size;
-  mp_param.elems_per_chunk = config->tm.gop_mp.bufs_grow;
-  mp_param.max_elems   = ucs_max(uct_bxi_iface_md(iface)->config.limits.max_cts,
-                                 iface->config.tm.max_gop);
-  mp_param.elem_size   = sizeof(uct_bxi_gop_t);
-  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops         = &uct_bxi_gop_mpool_ops;
-  mp_param.name        = "tag-op-ctx";
-  mp_param.grow_factor = 1;
-
-  status = ucs_mpool_init(&mp_param, &iface->tm.gop_mp);
-  if (status != UCS_OK) {
-    goto err_release_blockrecvmp;
-  }
-
-  return status;
-
-err_release_blockrecvmp:
-  ucs_mpool_cleanup(&iface->tm.recv_block_mp, 0);
-err_release_rxq:
-  uct_bxi_rxq_fini(iface->rx.tag.q);
-out:
-  return status;
-}
-
-static void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
-{
-  void *recv_buffer;
-
-  if (!iface->tm.enabled) {
-    goto out;
-  }
-
-  kh_foreach_key (&iface->tm.tag_addrs, recv_buffer, {
-    ucs_debug("destroying iface %p, with recv buffer %p offloaded to the HW",
-              iface, recv_buffer);
-  })
-    ;
-  kh_destroy_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
-
-  /* Release TAG RX queue. */
-  uct_bxi_rxq_fini(iface->rx.tag.q);
-  uct_bxi_rxq_fini(iface->rx.ctrl.q);
-
-  /* Receive block memory pool.*/
-  ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
-  /* And operation contexts.*/
-  ucs_mpool_cleanup(&iface->tm.gop_mp, 1);
-
-out:
-  return;
+  return (size_t)ucs_max((ssize_t)(max_inline - min_size), 0);
 }
 
 static inline void
@@ -1143,6 +571,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
 {
   uct_bxi_md_t *md = uct_bxi_iface_md(iface);
 
+  iface->config.max_num_eps      = config->super.max_num_eps;
   iface->config.max_events       = config->max_events;
   iface->config.seg_size         = config->seg_size;
   iface->config.tx.max_queue_len = config->tx.max_queue_len;
@@ -1162,8 +591,8 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   //TODO: implement support for scatter buffer.
   iface->config.max_iovecs   = 1;
   iface->config.max_msg_size = md->config.limits.max_msg_size;
-  iface->config.max_inline =
-          ucs_min(md->config.limits.max_volatile_size, UCS_ALLOCA_MAX_SIZE);
+  iface->config.max_inline   = uct_bxi_iface_hdr_size(
+          md->config.limits.max_volatile_size, sizeof(uint64_t));
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
@@ -1171,12 +600,12 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
 
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
-  uct_bxi_iface_t *iface =
-          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
   uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t         *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.send_desc_mp);
 
-  op->mem_desc = iface->tx.mem_desc;
-  op->flags    = 0;
+  op->iface = iface;
+  op->flags = 0;
 }
 
 static ucs_mpool_ops_t uct_bxi_send_mpool_ops = {
@@ -1186,10 +615,36 @@ static ucs_mpool_ops_t uct_bxi_send_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
+void uct_bxi_iface_send_comp_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tx.send_op_mp);
+
+  op->iface = iface;
+  op->flags = 0;
+}
+
+static ucs_mpool_ops_t uct_bxi_send_comp_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_comp_init,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
+void uct_bxi_iface_send_flush_init(ucs_mpool_t *mp, void *obj, void *chunk)
+{
+  uct_bxi_iface_send_op_t *op = obj;
+  uct_bxi_iface_t         *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tx.flush_ops_mp);
+
+  op->iface = iface;
+  op->flags = 0;
+}
+
 static ucs_mpool_ops_t uct_bxi_send_flush_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = NULL,
+        .obj_init      = uct_bxi_iface_send_flush_init,
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
@@ -1214,7 +669,7 @@ static ucs_status_t uct_bxi_iface_tx_ops_init(uct_bxi_iface_t        *iface,
   mp_params.max_elems       = config->tx.max_queue_len;
   mp_params.elem_size       = sizeof(uct_bxi_iface_send_op_t);
   mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
-  mp_params.ops             = &uct_bxi_send_mpool_ops;
+  mp_params.ops             = &uct_bxi_send_comp_mpool_ops;
   mp_params.name            = "send-comp-ops";
   mp_params.grow_factor     = config->tx.mp.grow_factor;
 
@@ -1288,25 +743,21 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err;
   }
 
-  /* Initialize hash table for receive queues. */
-  kh_init_inplace(uct_bxi_rxq, &self->rx.queues);
-
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
-  rxq_param.flags   = 0;
-  rxq_param.eqh     = self->rx.eqh;
-  rxq_param.nih     = md->nih;
-  rxq_param.mp      = self->config.rx.am_mp;
-  rxq_param.list    = PTL_PRIORITY_LIST;
-  rxq_param.handler = uct_bxi_iface_handle_am_events;
-  rxq_param.name    = "rxq-am";
+  rxq_param.flags    = 0;
+  rxq_param.eqh      = self->rx.eqh;
+  rxq_param.nih      = md->nih;
+  rxq_param.mp       = self->config.rx.am_mp;
+  rxq_param.list     = PTL_PRIORITY_LIST;
+  rxq_param.num_segs = self->config.rx.num_seg;
+  rxq_param.seg_size = self->config.seg_size;
+  rxq_param.handler  = uct_bxi_iface_block_handle_am;
+  rxq_param.name     = "rxq-am";
 
-  status = uct_bxi_rxq_create(self, &rxq_param, &self->rx.am.q);
+  status = uct_bxi_rxq_create(&rxq_param, &self->rx.am.q);
   if (status != UCS_OK) {
     goto err_clean_rxevq;
   }
-
-  /* Append RXQ to the hash table for event handling. */
-  uct_bxi_iface_add_rxq(self, self->rx.am.q);
 
   /* Initialize TAG resources if enabled. */
   status = uct_bxi_iface_tag_init(self, params, config);
@@ -1337,6 +788,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_txevq;
   }
 
+  /* Allocate buffer for short message. */
+  self->tx.short_desc = ucs_malloc(self->config.max_inline, "short-desc");
+  if (self->tx.short_desc == NULL) {
+    status = UCS_ERR_NO_MEMORY;
+    goto err_clean_mem_desc;
+  }
+
   /* Create TX buffers mempool */
   ucs_mpool_params_reset(&mp_params);
   mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
@@ -1344,13 +802,14 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   mp_params.elem_size = sizeof(uct_bxi_iface_send_op_t) + self->config.seg_size;
   mp_params.max_elems = config->tx.max_queue_len;
   mp_params.alignment = UCS_SYS_CACHE_LINE_SIZE;
-  mp_params.ops       = &uct_bxi_send_mpool_ops;
-  mp_params.name      = "send-desc-mp";
-  mp_params.grow_factor = config->tx.mp.grow_factor;
+  mp_params.align_offset = sizeof(uct_bxi_iface_send_op_t);
+  mp_params.ops          = &uct_bxi_send_mpool_ops;
+  mp_params.name         = "send-desc-mp";
+  mp_params.grow_factor  = config->tx.mp.grow_factor;
 
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
-    goto err_clean_mem_desc;
+    goto err_clean_short_desc;
   }
 
   /* Initialize operation for the TX Queue. They are not associated with 
@@ -1396,15 +855,16 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
                PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE;
 
   /* RDMA operations are always matched on the same silent ME. */
-  status = uct_ptl_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
+  status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
                                     PTL_PRIORITY_LIST, NULL,
                                     &self->rx.rma.entry.meh));
   if (status != UCS_OK) {
     goto err_clean_rmapti;
   }
 
-  /* Initialize hash table for endpoints. */
-  kh_init_inplace(uct_bxi_eps, &self->eps);
+  /* Initialize table of endpoints. */
+  ucs_list_head_init(&self->eps);
+  self->num_eps = 0;
 
   /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
    * hash table uses ptl_process_t supposing it is 8 bytes. */
@@ -1425,6 +885,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   return status;
 
+err_clean_rmame:
+  PtlMEUnlink(self->rx.rma.entry.meh);
 err_clean_rmapti:
   PtlPTFree(md->nih, self->rx.rma.pti);
 err_clean_pending:
@@ -1433,6 +895,8 @@ err_clean_txops:
   uct_bxi_iface_tx_ops_fini(self);
 err_clean_txbuffer:
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
+err_clean_short_desc:
+  ucs_free(self->tx.short_desc);
 err_clean_mem_desc:
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
 err_clean_txevq:
@@ -1456,6 +920,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   PtlPTFree(md->nih, self->rx.rma.pti);
 
   /* Clean TX resources. */
+  ucs_free(self->tx.short_desc);
   ucs_mpool_cleanup(&self->tx.pending_mp, 1);
   uct_bxi_iface_tx_ops_fini(self);
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
@@ -1472,9 +937,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   /* Clean AM resources */
   uct_bxi_rxq_fini(self->rx.am.q);
   PtlEQFree(self->rx.eqh);
-
-  /* Clean endpoint hash table. */
-  kh_destroy_inplace(uct_bxi_eps, &self->eps);
 
   return;
 }
@@ -1494,8 +956,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_tag_rndv_zcopy        = uct_bxi_ep_tag_rndv_zcopy,
         .ep_tag_eager_zcopy       = uct_bxi_ep_tag_eager_zcopy,
         .ep_tag_eager_bcopy       = uct_bxi_ep_tag_eager_bcopy,
-        .ep_tag_eager_short       = ucs_empty_function_return_unsupported,
-        .ep_tag_get_zcopy         = uct_bxi_ep_tag_get_zcopy,
+        .ep_tag_eager_short       = uct_bxi_ep_tag_eager_short,
         .ep_tag_rndv_cancel       = uct_bxi_ep_tag_rndv_cancel,
         .ep_tag_rndv_request      = uct_bxi_ep_tag_rndv_request,
         .ep_atomic_cswap64        = uct_bxi_ep_atomic_cswap64,
@@ -1527,9 +988,11 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
-        .iface_tag_gop_create     = uct_bxi_iface_tag_gop_create,
-        .iface_tag_gop_delete     = uct_bxi_iface_tag_gop_delete,
-        .iface_tag_gop_depends_on = uct_bxi_iface_tag_gop_depends_on,
+        .iface_tag_sched_enable   = uct_bxi_iface_tag_sched_enable,
+        .iface_tag_sched_disable  = uct_bxi_iface_tag_sched_disable,
+        .iface_tag_sched_recv     = uct_bxi_iface_tag_sched_recv,
+        .iface_tag_sched_send     = uct_bxi_iface_tag_sched_send,
+        .iface_tag_sched_release  = uct_bxi_iface_tag_sched_release,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {

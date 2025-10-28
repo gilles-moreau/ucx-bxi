@@ -132,8 +132,9 @@ static void ucp_proto_eager_tag_offload_bcopy_probe_common(
         .super.max_length    = SIZE_MAX,
         .super.min_iov       = 0,
         .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
-        .super.max_frag_offs = ucs_offsetof(uct_iface_attr_t,
-                                            cap.tag.eager.max_bcopy),
+        .super.max_frag_offs = op_id == UCP_OP_ID_TAG_SEND_SYNC ? 
+            ucs_offsetof(uct_iface_attr_t, cap.tag.eager.max_zcopy) :
+            ucs_offsetof(uct_iface_attr_t, cap.tag.eager.max_bcopy),
         .super.max_iov_offs  = UCP_PROTO_COMMON_OFFSET_INVALID,
         .super.hdr_size      = sizeof(ucp_tag_t),
         .super.send_op       = UCT_EP_OP_EAGER_BCOPY,
@@ -283,8 +284,9 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
 {
     unsigned flags = 0;
 
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        flags = UCT_TAG_OFFLOAD_OPERATION; 
+    if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
+        req->send.state.uct_comp.gop = req->task->comph;
+        flags = UCT_TAG_SCHEDULE;
     }
 
     return uct_ep_tag_eager_zcopy(ucp_ep_get_fast_lane(req->send.ep,

@@ -129,6 +129,7 @@ protected:
     void check_offload_support(bool offload_required);
 
     virtual bool is_external_request();
+    virtual bool need_reply_ep() const;
 
     static ucp_context_attr_t ctx_attr;
     ucs::ptr_vector<ucs::scoped_setenv> m_env;

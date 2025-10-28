@@ -63,12 +63,14 @@ enum uct_am_trace_type {
  * UCT_CB_PARAM_FLAG_FIRST and UCT_CB_PARAM_FLAG_MORE flags are relevant for
  * @ref uct_tag_unexp_eager_cb_t callback only. The former value indicates that
  * the data is the first fragment of the message. The latter value means that
- * more fragments of the message yet to be delivered.
+ * more fragments of the message yet to be delivered. UCT_CB_PARAM_FLAG_HW_RNDV 
+ * is relevant for @ref ucp_tag_offload_unexp_rndv and inform the protocol layer
+ * that rendezvous is supported even with unexpected messages.
  */
 enum uct_cb_param_flags {
-    UCT_CB_PARAM_FLAG_DESC  = UCS_BIT(0),
-    UCT_CB_PARAM_FLAG_FIRST = UCS_BIT(1),
-    UCT_CB_PARAM_FLAG_MORE  = UCS_BIT(2)
+    UCT_CB_PARAM_FLAG_DESC    = UCS_BIT(0),
+    UCT_CB_PARAM_FLAG_FIRST   = UCS_BIT(1),
+    UCT_CB_PARAM_FLAG_MORE    = UCS_BIT(2),
 };
 
 /**

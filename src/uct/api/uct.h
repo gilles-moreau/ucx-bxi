@@ -434,8 +434,7 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_EAGER_BCOPY UCS_BIT(51) /**< Hardware tag matching bcopy eager support */
 #define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
-#define UCT_IFACE_FLAG_TAG_GET_ZCOPY   UCS_BIT(54) /**< Hardware tag matching get support */
-#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(55) /**< Hardware tag matching operation offload support */
+#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(54) /**< Hardware tag matching operation offload support */
 
         /* Interface capability */
 #define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(57) /**< Interface is inter-node capable */
@@ -577,13 +576,24 @@ enum uct_msg_flags {
 
 /**
  * @ingroup UCT_TAG
- * @brief Flags for operation offload.
+ * @brief Flags for tag offloading.
  */
 enum uct_tag_flags {
-    UCT_TAG_OFFLOAD_OPERATION = UCS_BIT(0), /**< Offload corresponding operation and 
+    UCT_TAG_SCHEDULE          = UCS_BIT(0), /**< Schedule corresponding operation and 
                                                  generate an operation handle that can 
                                                  be used to enfore dependency with 
                                                  another operation. */
+    UCT_TAG_CANCEL_FORCE      = UCS_BIT(1), /**< Whether to report completions to 
+                                                 @a ctx->completed_cb when cancelling 
+                                                 a posted receive.
+                                                 If nonzero, the cancel is assumed 
+                                                 to be successful, and the callback 
+                                                 is not called. */
+    UCT_TAG_CANCEL_MATCHED    = UCS_BIT(2), /**< Inform the transport that tag has been
+                                                 matched in software. For transports
+                                                 that support unexpected hw matching, 
+                                                 posted receive does not need to be 
+                                                 explicitly cancelled on the hw. */
 };
 
 
@@ -1820,12 +1830,11 @@ struct uct_tag_context {
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
      /** 
-      *  Offload Operation Context to setup operation dependencies. If not null, then
-      *  it will be used by the corresponding operation. 
+      * Reply endpoint to enable offloaded rendezvous (only needed for BXI).
       */ 
-     uct_gop_h gop;
+     uct_ep_h reply_ep;
 
-     /** A placeholder for the private data used by the transport */
+     /** A placeholder for the private data used by the transport. */
      char priv[UCT_TAG_PRIV_LEN];
 };
 
@@ -1833,7 +1842,9 @@ struct uct_tag_context {
  * Operation Context structure for storing generic operation information.
  */
 typedef struct uct_gop {
-    int dummy;
+    unsigned  flags;
+    void     *buffer; /* Operation buffer */
+    size_t    size;   /* Operation size */
 } uct_gop_t;
 
 
@@ -3616,7 +3627,7 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_zcopy(uct_iface_h iface,
  *                        received despite the cancel request, or
  *                        UCS_ERR_CANCELED which means the tag was successfully
  *                        canceled before it was matched.
- * @param [in]  force     Whether to report completions to @a ctx->completed_cb.
+ * @param [in]  flags     Whether to report completions to @a ctx->completed_cb.
  *                        If nonzero, the cancel is assumed to be successful,
  *                        and the callback is not called.
  *
@@ -3624,14 +3635,43 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_zcopy(uct_iface_h iface,
  */
 UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
                                                       uct_tag_context_t *ctx,
-                                                      int force)
+                                                      unsigned flags)
 {
-    return iface->ops.iface_tag_recv_cancel(iface, ctx, force);
+    return iface->ops.iface_tag_recv_cancel(iface, ctx, flags);
 }
 
 /**
  * @ingroup UCT_TAG
- * @brief Create an Offload Operation Context to a transport interface.
+ * @brief Start a scheduling window on the interface.
+ *
+ * After this call, the interface will behave with scheduling properties.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ *
+ * @return UCS_OK -         The context is created to the transport.
+ */
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
+{
+    return iface->ops.iface_tag_sched_enable(iface);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief End a scheduling window on the interface.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ *
+ * @return UCS_OK                  - The context is created to the transport.
+ * @return UCS_ERR_NOT_IMPLEMENTED - Could not start scheduling window.
+ */
+UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
+{
+    return iface->ops.iface_tag_sched_disable(iface);
+}
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Create a completion handle on the transport for a receive operation.
  *
  * This routine creates the necessary resources on a transport interface to be 
  * able to create dependencies between communication primitives.
@@ -3643,10 +3683,31 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
  * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
  *                                 resources.
  */
-UCT_INLINE_API ucs_status_t uct_iface_tag_gop_create(uct_iface_h iface,
-                                                     uct_gop_h *gop_p)
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_recv(uct_iface_h        iface,
+                                                     uct_tag_context_t *ctx,
+                                                     uct_gop_h         *gop_p)
 {
-    return iface->ops.iface_tag_gop_create(iface, gop_p);
+    return iface->ops.iface_tag_sched_recv(iface, ctx, gop_p);
+}
+
+
+/**
+ * @ingroup UCT_TAG
+ * @brief Create completion handle to schedue a send operation.
+ *
+ * @param [in]    iface     Interface to post the tag on.
+ * @param [in]    gop       Target Operation handle.
+ * @param [in]    gops      Table of Operation handles.
+ * @param [in]    gop_cnt   Size of Operation handle table.
+ *
+ * @return UCS_OK                - The context is created to the transport.
+ */
+UCT_INLINE_API ucs_status_t uct_iface_tag_sched_send(uct_iface_h iface,
+                                                     uct_gop_h *gop_p,
+                                                     uct_gop_h *gops,
+                                                     size_t gop_cnt)
+{
+    return iface->ops.iface_tag_sched_send(iface, gop_p, gops, gop_cnt);
 }
 
 /**
@@ -3657,30 +3718,10 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_gop_create(uct_iface_h iface,
  * @param [in]   gop       Generic operation handle.
  *
  */
-UCT_INLINE_API void uct_iface_tag_gop_delete(uct_iface_h iface,
-                                             uct_gop_h gop)
+UCT_INLINE_API void uct_iface_tag_sched_release(uct_iface_h iface,
+                                                uct_gop_h gop)
 {
-    iface->ops.iface_tag_gop_delete(iface, gop);
-}
-
-/**
- * @ingroup UCT_TAG
- * @brief Create dependencies between one Offload Operation to a table of 
- * other Offload Operations.
- *
- * @param [in]    iface     Interface to post the tag on.
- * @param [in]    gop       Target Operation handle.
- * @param [in]    gops      Table of Operation handles.
- * @param [in]    gop_cnt   Size of Operation handle table.
- *
- * @return UCS_OK                - The context is created to the transport.
- */
-UCT_INLINE_API ucs_status_t uct_iface_tag_gop_depends_on(uct_iface_h iface,
-                                                         uct_gop_h gop,
-                                                         uct_gop_h *gops,
-                                                         size_t gop_cnt)
-{
-    return iface->ops.iface_tag_gop_depends_on(iface, gop, gops, gop_cnt);
+    iface->ops.iface_tag_sched_release(iface, gop);
 }
 
 /**

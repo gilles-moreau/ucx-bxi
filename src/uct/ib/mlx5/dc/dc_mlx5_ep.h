@@ -192,7 +192,7 @@ ucs_status_t uct_dc_mlx5_iface_tag_recv_zcopy(uct_iface_h tl_iface,
 
 ucs_status_t uct_dc_mlx5_iface_tag_recv_cancel(uct_iface_h tl_iface,
                                                uct_tag_context_t *ctx,
-                                               int force);
+                                               unsigned force);
 #endif
 
 ucs_status_t uct_dc_mlx5_ep_fence(uct_ep_h tl_ep, unsigned flags);

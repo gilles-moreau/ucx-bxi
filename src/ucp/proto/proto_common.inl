@@ -175,7 +175,9 @@ ucp_proto_request_set_stage(ucp_request_t *req, uint8_t proto_stage)
     req->send.proto_stage = proto_stage;
 
     /* Set pointer to progress function */
-    if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
+    if (req->flags & UCP_REQUEST_FLAG_SCHEDULED) {
+        req->send.uct.func = ucp_sched_progress_wrapper;
+    } else if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
         req->send.uct.func = ucp_request_progress_wrapper;
     } else {
         req->send.uct.func = proto->progress[proto_stage];
@@ -298,24 +300,17 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
                                 &req->send.state.dt_iter.mem_info, sg_count);
 
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-        status = ucp_request_send_op_offload(&worker->tm, req, param);
+        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+
+        status = ucp_sched_send(req);
         if (status != UCS_OK) {
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);
         }
-        /* Append OP attribute to select protocols that support OP offload. */
-        ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
 
-        /* Check for overlapped region. */ 
-        //NOTE: it should be done once so avoid putting it in send functions, 
-        //      otherwise it can be called multiple time when the operation 
-        //      is appended to pending queues.
-        if (ucp_offload_sched_region_get_overlaps(
-                req->send.tag_offload.sched,
-                req->send.state.dt_iter.type.contig.buffer,
-                req->send.state.dt_iter.length, 
-                &req->send.state.uct_comp.gop)) {
-            req->flags |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
+        /* Append OP attribute to select protocols that support OP offload. */
+        if (ucp_sched_task_is_offload(req)) {
+            ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
         }
     }
 

@@ -18,7 +18,9 @@ noinst_HEADERS = \
 
 libuct_bxi_la_SOURCES = \
 												bxi_iface.c \
+												bxi_iface_tag.c \
 												bxi_ep.c \
+												bxi_ep_tag.c \
 												bxi_rxq.c \
 												bxi_md.c
 

@@ -35,6 +35,11 @@ public:
     {
         return get_variant_value() == RECV_REQ_EXTERNAL;
     }
+
+    virtual bool need_reply_ep() const 
+    {
+        return false;
+    }
 };
 
 UCS_TEST_P(test_ucp_tag_mt, send_recv) {

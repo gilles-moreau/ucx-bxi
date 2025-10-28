@@ -68,6 +68,12 @@ public:
         return get_variant_value() == RECV_REQ_EXTERNAL;
     }
 
+    virtual bool need_reply_ep() const
+    {
+        return false;
+    }
+
+
 protected:
     void test_iov(const size_t *iov_sizes, size_t iov_count);
 
