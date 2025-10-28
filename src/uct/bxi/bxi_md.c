@@ -1,10 +1,15 @@
+#include <omp.h>
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
 
+#include "bxi_md.h"
+
 #include "bxi.h"
 
-#include "bxi_md.h"
+#ifdef HAVE_GDR_COPY
+#include <ucs/sys/ptr_arith.h>
+#endif
 
 #include <assert.h>
 #include <dirent.h>
@@ -16,6 +21,11 @@
 ucs_config_field_t uct_bxi_md_config_table[] = {
         {"", "", NULL, ucs_offsetof(uct_bxi_md_config_t, super),
          UCS_CONFIG_TYPE_TABLE(uct_md_config_table)},
+
+        {"GPU_DIRECT_RDMA", "try",
+         "Use GPU Direct RDMA for HCA to access GPU pages directly\n",
+         ucs_offsetof(uct_bxi_md_config_t, enable_gpudirect_rdma),
+         UCS_CONFIG_TYPE_TERNARY},
 
         {NULL}};
 
@@ -108,8 +118,68 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
                              const uct_md_mem_reg_params_t *params,
                              uct_mem_h                     *memh_p)
 {
+  ucs_status_t status = UCS_OK;
+#ifdef HAVE_GDR_COPY
+  uct_bxi_mem_t *memh;
+  uct_bxi_md_t  *md    = ucs_derived_of(uct_md, uct_bxi_md_t);
+  unsigned long  d_ptr = ((unsigned long)(char *)address);
+  int            ret;
+
+  memh = ucs_malloc(sizeof(uct_bxi_mem_t), "bxi gdr_copy handle");
+  if (NULL == memh) {
+    ucs_error("failed to allocate memory for uct_bxi_mem_t");
+    status = UCS_ERR_NO_MEMORY;
+    goto err;
+  }
+
+  ucs_ptr_check_align(address, length, GPU_PAGE_SIZE);
+
+  ucs_assert((address != NULL) && (length != 0));
+
+  ret = gdr_pin_buffer(md->gdrcpy_ctx, d_ptr, length, 0, 0, &memh->mh);
+  if (ret) {
+    ucs_error("gdr_pin_buffer failed. length :%lu ret:%d", length, ret);
+    goto err;
+  }
+
+  ret = gdr_map(md->gdrcpy_ctx, memh->mh, &memh->bar_ptr, length);
+  if (ret) {
+    ucs_error("gdr_map failed. length :%lu ret:%d", length, ret);
+    goto unpin_buffer;
+  }
+
+  memh->reg_size = length;
+
+  ret = gdr_get_info(md->gdrcpy_ctx, memh->mh, &memh->info);
+  if (ret) {
+    ucs_error("gdr_get_info failed. ret:%d", ret);
+    goto unmap_buffer;
+  }
+
+  ucs_trace("registered memory:%p..%p length:%lu info.va:0x%" PRIx64
+            " bar_ptr:%p",
+            address, UCS_PTR_BYTE_OFFSET(address, length), length,
+            memh->info.va, memh->bar_ptr);
+
+  *memh_p = memh;
+#else
   *memh_p = (void *)0xdeadbeef;
-  return UCS_OK;
+#endif
+
+  return status;
+
+unmap_buffer:
+  ret = gdr_unmap(md->gdrcpy_ctx, memh->mh, memh->bar_ptr, memh->reg_size);
+  if (ret) {
+    ucs_warn("gdr_unmap failed. unpin_size:%lu ret:%d", memh->reg_size, ret);
+  }
+unpin_buffer:
+  ret = gdr_unpin_buffer(md->gdrcpy_ctx, memh->mh);
+  if (ret) {
+    ucs_warn("gdr_unpin_buffer failed. ret;%d", ret);
+  }
+err:
+  return UCS_ERR_IO_ERROR;
 }
 
 ucs_status_t uct_bxi_mem_dereg(uct_md_h                         uct_md,
@@ -269,7 +339,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
                                     const uct_md_config_t *uct_md_config,
                                     uct_md_h              *md_p)
 {
-  ucs_status_t               rc = UCS_OK;
+  ucs_status_t               status = UCS_OK;
   uct_bxi_md_t              *md;
   const uct_bxi_md_config_t *md_config =
           ucs_derived_of(uct_md_config, uct_bxi_md_config_t);
@@ -283,35 +353,57 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   uct_bxi_md_config_init(md, md_config);
 
   /* init one physical interface */
-  rc = uct_bxi_wrap(PtlNIInit(uct_bxi_parse_device(md_name),
-                              PTL_NI_MATCHING | PTL_NI_PHYSICAL, PTL_PID_ANY,
-                              &default_limits, &md->config.limits, &md->nih));
-  if (rc != UCS_OK) {
+  status = uct_bxi_wrap(PtlNIInit(
+          uct_bxi_parse_device(md_name), PTL_NI_MATCHING | PTL_NI_PHYSICAL,
+          PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));
+  if (status != UCS_OK) {
     goto err_free_md;
   }
 
   md->device = ucs_strdup(md_name, "md-name-dup");
   if (md->device == NULL) {
     ucs_error("PTL: Could not allocate bxi device name");
-    rc = UCS_ERR_NO_MEMORY;
+    status = UCS_ERR_NO_MEMORY;
     goto err_nifini;
   }
 
   /* retrieve the process identifier */
-  rc = uct_bxi_wrap(PtlGetPhysId(md->nih, &md->pid));
-  if (rc != UCS_OK) {
+  status = uct_bxi_wrap(PtlGetPhysId(md->nih, &md->pid));
+  if (status != UCS_OK) {
     goto err_freedev;
   }
 
-  md->reg_mem_types |=
-          UCS_BIT(UCS_MEMORY_TYPE_HOST) | UCS_BIT(UCS_MEMORY_TYPE_CUDA);
+  md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_HOST);
 
+  /* Initialize gdr context */
+  md->gdrcpy_ctx = NULL;
+  if (md_config->enable_gpudirect_rdma != UCS_NO) {
+#ifdef HAVE_GDR_COPY
+    md->gdrcpy_ctx = gdr_open();
+    if (md->gdrcpy_ctx == NULL) {
+      ucs_error("failed to open gdr copy");
+      status = UCS_ERR_IO_ERROR;
+      goto err_freedev;
+    }
+
+    md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
+#endif
+  }
+
+  if (!md->gdrcpy_ctx && (md_config->enable_gpudirect_rdma == UCS_YES)) {
+    ucs_error("Couldn't enable GPUDirect RDMA. Please make sure "
+              "gdrcopy is installed correctly");
+    status = UCS_ERR_UNSUPPORTED;
+    goto err_freedev;
+  }
+
+  md->reg_cost        = UCS_LINEAR_FUNC_ZERO;
   md->super.ops       = &uct_bxi_md_ops;
   md->super.component = component;
 
   *md_p = &md->super;
 
-  return rc;
+  return status;
 
 err_freedev:
   ucs_free(md->device);
@@ -320,7 +412,7 @@ err_nifini:
 err_free_md:
   ucs_free(md);
 err:
-  return rc;
+  return status;
 }
 
 uct_component_t uct_bxi_component = {

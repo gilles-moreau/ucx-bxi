@@ -3,6 +3,10 @@
 
 #include "bxi.h"
 
+#ifdef HAVE_GDR_COPY
+#include "gdrapi.h"
+#endif
+
 #include <uct/base/uct_iface.h>
 #include <uct/base/uct_md.h>
 
@@ -13,9 +17,26 @@ enum {
   UCT_BXI_MEM_DESC_FLAG_ALLOCATED = UCS_BIT(1),
 };
 
-typedef struct uct_bxi_rkey {
-  char dummy;
-} uct_bxi_rkey_t;
+#ifdef HAVE_GDR_COPY
+/**
+ * @brief bxi mem handle
+ */
+typedef struct uct_bxi_mem {
+  gdr_mh_t   mh;       /**< Memory handle of GPU memory */
+  gdr_info_t info;     /**< Info of GPU memory mapping */
+  void      *bar_ptr;  /**< BAR address of GPU mapping */
+  size_t     reg_size; /**< Size of mapping */
+} uct_bxi_mem_t;
+
+/**
+ * @brief bxi  packed and remote key for put
+ */
+typedef struct uct_bxi_key {
+  uint64_t vaddr;   /**< Mapped GPU address */
+  void    *bar_ptr; /**< BAR address of GPU mapping */
+  gdr_mh_t mh;      /**< Memory handle of GPU memory */
+} uct_bxi_key_t;
+#endif
 
 typedef struct uct_bxi_mem_desc_param {
   unsigned        options;
@@ -46,6 +67,7 @@ typedef struct uct_bxi_mem_entry {
 typedef struct uct_bxi_md_config {
   uct_md_config_t super;
   size_t          max_events;
+  int             enable_gpudirect_rdma; /**< Enable GPUDirect RDMA */
 } uct_bxi_md_config_t;
 
 extern ucs_config_field_t uct_bxi_md_config_table[];
@@ -55,11 +77,16 @@ typedef struct uct_bxi_md {
   struct {
     ptl_ni_limits_t limits;
   } config;
-  char           *device;
-  ptl_handle_ni_t nih;
-  ptl_process_t   pid;
-  size_t          rkey_size;
-  uint64_t        reg_mem_types;
+  char             *device;
+  ptl_handle_ni_t   nih;
+  ptl_process_t     pid;
+  size_t            rkey_size;
+  uint64_t          reg_mem_types;
+  ucs_linear_func_t reg_cost;              /**< Memory registration cost */
+  int               enable_gpudirect_rdma; /**< Enable GPUDirect RDMA */
+#ifdef HAVE_GDR_COPY
+  gdr_t gdrcpy_ctx;
+#endif
 } uct_bxi_md_t;
 
 ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
