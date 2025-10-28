@@ -649,31 +649,6 @@ int uct_bxi_ep_is_connected(const uct_ep_h                      tl_ep,
   return is_connected;
 }
 
-//TODO: use arbiter group on each endpoint to enforce fairness between endpoints.
-ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
-                                    unsigned flags)
-{
-#ifdef ENABLE_STATS
-  uct_bxi_ep_t *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-#endif
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-
-  if (flags) {
-    goto add_to_pending;
-  }
-
-  if (uct_bxi_iface_has_tx_resources(iface) > 0 &&
-      ((iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) ||
-       !iface->tm.enabled)) {
-    return UCS_ERR_BUSY;
-  }
-
-add_to_pending:
-  uct_pending_req_queue_push(&iface->tx.pending_q, req);
-  UCT_TL_EP_STAT_PEND(&ep->super);
-  return UCS_OK;
-}
-
 static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
                                           uct_completion_t *comp)
 {
@@ -751,6 +726,31 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
   return UCS_OK;
 }
 
+//TODO: use arbiter group on each endpoint to enforce fairness between endpoints.
+ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
+                                    unsigned flags)
+{
+#ifdef ENABLE_STATS
+  uct_bxi_ep_t *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+#endif
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+
+  if (flags) {
+    goto add_to_pending;
+  }
+
+  if (uct_bxi_iface_has_tx_resources(iface) > 0 &&
+      ((iface->tm.enabled && !ucs_mpool_is_empty(&iface->tm.recv_block_mp)) ||
+       !iface->tm.enabled)) {
+    return UCS_ERR_BUSY;
+  }
+
+add_to_pending:
+  uct_pending_req_queue_push(&ep->pending_q, req);
+  UCT_TL_EP_STAT_PEND(&ep->super);
+  return UCS_OK;
+}
+
 void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg)
 {
   uct_bxi_pending_purge_arg_t *purge_arg = arg;
@@ -761,15 +761,15 @@ void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg)
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg)
 {
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_ep_t *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_pending_req_priv_queue_t UCS_V_UNUSED *priv;
   uct_bxi_pending_purge_arg_t                purge_arg;
 
   purge_arg.cb  = cb;
   purge_arg.arg = arg;
 
-  uct_pending_queue_purge(priv, &iface->tx.pending_q, 1,
-                          uct_bxi_ep_pending_purge_cb, &purge_arg);
+  uct_pending_queue_purge(priv, &ep->pending_q, 1, uct_bxi_ep_pending_purge_cb,
+                          &purge_arg);
 }
 
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
@@ -786,6 +786,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   self->iface_addr = *(uct_bxi_iface_addr_t *)params->iface_addr;
   self->conn_state = UCT_BXI_EP_CONN_CONNECTED;
 
+  ucs_queue_head_init(&self->pending_q);
   ucs_list_head_init(&self->send_ops);
   self->flags = 0;
 

@@ -404,6 +404,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   uct_bxi_iface_send_op_t      *op;
   int                           ret;
   ptl_event_t                   ev;
+  uct_bxi_ep_t                 *ep;
   uct_pending_req_priv_queue_t *priv;
 
   while (1) {
@@ -434,6 +435,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         }
         uct_bxi_iface_completion_op(op);
         uct_bxi_iface_check_flush(op->ep);
+
         break;
       case PTL_EVENT_SEND:
       case PTL_EVENT_PUT:
@@ -471,8 +473,10 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   }
 
 out:
-  /* With new credits available, dispatch pending queue. */
-  uct_pending_queue_dispatch(priv, &iface->tx.pending_q, 1);
+  ucs_list_for_each (ep, &iface->eps, elem) {
+    /* With new credits available, dispatch pending queue. */
+    uct_pending_queue_dispatch(priv, &ep->pending_q, 1);
+  }
 
   return progressed;
 }

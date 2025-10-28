@@ -26,7 +26,6 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   ptl_ct_event_t        ct_value;
 
   uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
-  ucs_debug("BXI: success=%lu, v=%lu", ct_value.success, block->ct_value);
 
   /* Whether rendezvous was offloaded or not, handler is called after the 
    * completion of GET which is always performed on MD with counter,  so 
@@ -613,6 +612,9 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
+  /* Must be removed for both eager and rndv requests. */
+  uct_bxi_iface_tag_del_from_hash(iface, block->start);
+
   if (mode & UCT_TAG_CANCEL_MATCHED) {
     /* Posted receive was matched in overflow list, unexpected header was then 
      * consumed and ME unlinked already. Event data was cached in the interface 
@@ -674,7 +676,6 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
                              UCS_ERR_CANCELED);
   }
 
-  uct_bxi_iface_tag_del_from_hash(iface, block->start);
   uct_bxi_iface_release_op(block->op);
   uct_bxi_recv_block_release(block);
 

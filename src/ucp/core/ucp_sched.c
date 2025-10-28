@@ -79,6 +79,7 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 {
   ucp_request_t     *req   = ucs_container_of(self, ucp_request_t, send.uct);
   const ucp_proto_t *proto = req->send.proto_config->proto;
+  //TODO: bug when protocol is a rndv protocol since priv is not the same...
   const ucp_proto_common_lane_priv_t *spriv = req->send.proto_config->priv;
   ucp_sched_task_t                   *stask = req->task;
 

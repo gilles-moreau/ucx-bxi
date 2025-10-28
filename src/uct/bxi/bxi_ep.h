@@ -23,6 +23,7 @@ typedef struct uct_bxi_ep {
   ucs_list_link_t       elem;       /* Elem in endpoint list */
   uint8_t               conn_state; /* Connection state. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
+  ucs_queue_head_t      pending_q;  /* List of pending OP */
 } uct_bxi_ep_t;
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
