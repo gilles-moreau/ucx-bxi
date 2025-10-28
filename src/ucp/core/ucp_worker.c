@@ -68,6 +68,7 @@ static ucs_stats_class_t ucp_worker_tm_offload_stats_class = {
     .counter_names  = {
         [UCP_WORKER_STAT_TAG_OFFLOAD_POSTED]           = "posted",
         [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED]          = "matched",
+        [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED_OVERFLOW] = "matched_overflow",
         [UCP_WORKER_STAT_TAG_OFFLOAD_MATCHED_SW_RNDV]  = "matched_sw_rndv",
         [UCP_WORKER_STAT_TAG_OFFLOAD_CANCELED]         = "canceled",
         [UCP_WORKER_STAT_TAG_OFFLOAD_BLOCK_TAG_EXCEED] = "block_tag_exceed",
@@ -1381,10 +1382,6 @@ ucs_status_t ucp_worker_iface_open(ucp_worker_h worker, ucp_rsc_index_t tl_id,
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_ARG  |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_RNDV_CB   |
                                      UCT_IFACE_PARAM_FIELD_HW_TM_EAGER_CB;
-
-        if (worker->context->config.ext.tm_init_activate) {
-            ucp_tag_offload_iface_activate(wiface);
-        }
     }
 
     iface_params.async_event_arg   = wiface;

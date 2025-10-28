@@ -197,18 +197,25 @@ typedef ucs_status_t (*uct_iface_tag_recv_zcopy_func_t)(uct_iface_h iface,
 
 typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
                                                          uct_tag_context_t *ctx,
-                                                         int force);
+                                                         unsigned mode);
 
-typedef ucs_status_t (*uct_iface_tag_gop_create_func_t)(uct_iface_h iface,
-                                                        uct_gop_h *gop_p);
+/* interface - scheduling operations */
 
-typedef void (*uct_iface_tag_gop_delete_func_t)(uct_iface_h iface,
-                                                uct_gop_h gop);
+typedef ucs_status_t (*uct_iface_tag_sched_enable_func_t)(uct_iface_h iface);
 
-typedef ucs_status_t (*uct_iface_tag_gop_depends_on_func_t)(uct_iface_h iface,
-                                                            uct_gop_h gop, 
-                                                            uct_gop_h *gops,
-                                                            size_t gop_cnt);
+typedef void (*uct_iface_tag_sched_disable_func_t)(uct_iface_h iface);
+
+typedef ucs_status_t (*uct_iface_tag_sched_recv_func_t)(uct_iface_h        iface,
+                                                        uct_tag_context_t *ctx,
+                                                        uct_gop_h         *gop_p);
+
+typedef ucs_status_t (*uct_iface_tag_sched_send_func_t)(uct_iface_h iface,
+                                                        uct_gop_h *gop_p, 
+                                                        uct_gop_h *gops,
+                                                        size_t gop_cnt);
+
+typedef void (*uct_iface_tag_sched_release_func_t)(uct_iface_h iface,
+                                                   uct_gop_h gop);
 
 /* endpoint - pending queue */
 
@@ -348,9 +355,13 @@ typedef struct uct_iface_ops {
     /* interface - tagged operations */
     uct_iface_tag_recv_zcopy_func_t     iface_tag_recv_zcopy;
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
-    uct_iface_tag_gop_create_func_t     iface_tag_gop_create;
-    uct_iface_tag_gop_delete_func_t     iface_tag_gop_delete;
-    uct_iface_tag_gop_depends_on_func_t iface_tag_gop_depends_on;
+
+    /* interface - scheduling operations */
+    uct_iface_tag_sched_enable_func_t   iface_tag_sched_enable;
+    uct_iface_tag_sched_disable_func_t  iface_tag_sched_disable;
+    uct_iface_tag_sched_recv_func_t     iface_tag_sched_recv;
+    uct_iface_tag_sched_send_func_t     iface_tag_sched_send;
+    uct_iface_tag_sched_release_func_t  iface_tag_sched_release;
 
     /* endpoint - pending queue */
     uct_ep_pending_add_func_t           ep_pending_add;

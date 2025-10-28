@@ -4,6 +4,7 @@
  * See file LICENSE for terms.
  */
 
+#include "uct/api/uct_def.h"
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -15,9 +16,10 @@
 #include <ucp/proto/proto_am.inl>
 #include <ucp/core/ucp_context.h>
 #include <ucp/core/ucp_request.h>
+#include <ucp/core/ucp_sched.h>
 #include <ucp/core/ucp_mm.h>
+#include <ucp/wireup/wireup_ep.h>
 #include <ucp/tag/tag_match.inl>
-#include <ucp/tag/offload/sched.h>
 #include <ucs/sys/sys.h>
 
 
@@ -223,10 +225,12 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
         /* Unexpected tag offload rndv request. Sender buffer is either
            non-contig or it's length > rndv.max_zcopy capability of tag lane.
            Pass 0 as tl flags, because RTS needs to be stored in UCP mpool.
-           The header is a full SW RTS packet,
+           The header is a full SW RTS packet.
          */
         ucs_assert(hdr_length >= sizeof(ucp_rndv_rts_hdr_t));
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, RX_UNEXP_SW_RNDV);
+        //FIXME: find a way to remove this flag. It is used to support SW 
+        //       rndv when a offloaded rndv has been setup. 
         ucp_tag_rndv_process_rts(worker, (void*)hdr, hdr_length, 0);
     }
 
@@ -238,28 +242,33 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_unexp_rndv,
     return UCS_OK;
 }
 
-UCS_PROFILE_FUNC_VOID(ucp_tag_offload_cancel, (worker, req, mode),
-                      ucp_worker_t *worker, ucp_request_t *req, unsigned mode)
+UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_cancel, (worker, req, mode),
+                 ucp_worker_t *worker, ucp_request_t *req, unsigned mode)
 {
 
     ucp_worker_iface_t *wiface = req->recv.tag.wiface;
     ucs_status_t status;
 
     ucs_assert(wiface != NULL);
+
     status = uct_iface_tag_recv_cancel(wiface->iface, &req->recv.uct_ctx,
-                                       mode & UCP_TAG_OFFLOAD_CANCEL_FORCE);
-    if (status != UCS_OK) {
+                                       mode);
+    if (status == UCS_INPROGRESS) {
+        return status; 
+    } else if (status != UCS_OK) {
         ucs_error("Failed to cancel recv in the transport: %s",
                   ucs_status_string(status));
-        return;
+        return status;
     }
     UCP_WORKER_STAT_TAG_OFFLOAD(worker, CANCELED);
 
     /* if cancel is not forced, need to wait its completion */
-    if (mode & UCP_TAG_OFFLOAD_CANCEL_FORCE) {
+    if (mode & UCT_TAG_CANCEL_FORCE) {
         ucp_tag_offload_release_buf(req);
         --wiface->post_count;
     }
+
+    return status;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
@@ -269,6 +278,7 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     ucp_context_t *context = worker->context;
     size_t length          = req->recv.dt_iter.length;
     ucp_mem_desc_t *rdesc  = NULL;
+    uct_ep_h reply_ep      = NULL;
     ucp_worker_iface_t *wiface;
     ucs_status_t status;
     ucp_md_index_t mdi;
@@ -339,16 +349,11 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
-    req->recv.uct_ctx.gop             = NULL;
-    if (req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) {
-        ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-        status = ucp_offload_sched_region_add(req->recv.schedh, 
-                                              req->recv.dt_iter.type.contig.buffer, 
-                                              req->recv.dt_iter.length, 
-                                              &req->recv.uct_ctx.gop);
-        if (status != UCS_OK) {
-            ucp_tag_offload_release_buf(req);
-            return status;
+    req->recv.uct_ctx.reply_ep = NULL;
+    if (req->recv.reply_ep != NULL) {
+        reply_ep = ucp_ep_get_tag_uct_ep(req->recv.reply_ep);
+        if (reply_ep != NULL && !ucp_wireup_ep_test(reply_ep)) {
+            req->recv.uct_ctx.reply_ep = reply_ep;
         }
     }
 
@@ -364,15 +369,6 @@ ucp_tag_offload_do_post(ucp_request_t *req)
         ucp_tag_offload_release_buf(req);
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_TAG_EXCEED);
         return status;
-    }
-
-    if ((req->flags & UCP_REQUEST_FLAG_OFFLOAD_OPERATION) && 
-        (req->recv.reply_ep != NULL)) {
-        status = ucp_tag_offload_try_rndv_get(wiface, req);
-        if (status != UCS_OK) {
-            ucp_tag_offload_release_buf(req);
-            return status;
-        }
     }
 
     UCP_WORKER_STAT_TAG_OFFLOAD(worker, POSTED);
@@ -451,14 +447,6 @@ ucp_tag_offload_post_sw_reqs(ucp_request_t *req, ucp_request_queue_t *req_queue)
     return 1;
 }
 
-//static UCS_F_ALWAYS_INLINE void
-//ucp_tag_offload_recv_overflow(ucp_worker_h worker, ucp_request_t *req) {
-//    ucp_worker_iface_t *wiface;
-//    wiface = ucp_tag_offload_iface(worker, req->recv.tag.tag);
-//    if (wiface->iface->ops.iface_tag_recv_overflow != NULL) {
-//       uct_iface_tag_recv_overflow(wiface->iface);
-//    }
-//}
 
 UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
                  ucp_request_t *req, ucp_request_queue_t *req_queue)
@@ -469,7 +457,6 @@ UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
     if (req->recv.dt_iter.dt_class != UCP_DATATYPE_CONTIG) {
         /* Non-contig buffers not supported yet. */
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_NON_CONTIG);
-        //ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 
@@ -477,25 +464,21 @@ UCS_PROFILE_FUNC(int, ucp_tag_offload_post, (req, req_queue),
         if (!ucp_tag_is_specific_source(context, req->recv.tag.tag_mask)) {
             /* Sender rank wildcard */
             UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_WILDCARD);
-            //ucp_tag_offload_recv_overflow(worker, req);
             return 0;
         } else if (worker->tm.expected.sw_all_count) {
             /* There are some requests which must be completed in SW.
              * Do not post tags to HW until they are completed. */
             UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_SW_PEND);
-            //ucp_tag_offload_recv_overflow(worker, req);
             return 0;
         }
     } else if (worker->tm.expected.wildcard.sw_count ||
                (req_queue->sw_count && !ucp_tag_offload_post_sw_reqs(req, req_queue))) {
         /* There are some requests which must be completed in SW */
         UCP_WORKER_STAT_TAG_OFFLOAD(worker, BLOCK_SW_PEND);
-        //ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 
     if (ucp_tag_offload_do_post(req) != UCS_OK) {
-        //ucp_tag_offload_recv_overflow(worker, req);
         return 0;
     }
 

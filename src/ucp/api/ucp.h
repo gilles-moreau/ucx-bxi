@@ -1836,7 +1836,7 @@ typedef struct {
      * operations will be checked to get the operation offload context necessary 
      * to trigger the operation upon subsequent events.
      */
-    ucp_offload_sched_h schedh;
+    ucp_sched_h schedh;
 
     /**
      * Endpoint handle.
@@ -3542,23 +3542,23 @@ ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
 
 /**
  * @ingroup UCP_COMM
- * @brief Operation Offloading scheduler.
+ * @brief Operation scheduler.
  *
- * An offloading scheduler is a communication context for offloading operations.
+ * An scheduler is a communication context for creating dependencies between
+ * operations.
  * When an offloading scheduler is passed to a communication primitive, see 
  * @ref ??, a lookup will be performed to determine dependency through 
- * implicit data dependency checking (memory overlap of already offloaded 
- * memory ranges, see tcache.c).
+ * implicit data dependency checking.
  *
  * @param [in]  worker  UCP worker that is used for the offload operation.
- * @param [out] ctx     Offload Context handle   
+ * @param [out] ctx     Scheduler  handle   
  *
  * @return error code if resources might not be available for example 
  */
-ucs_status_t ucp_offload_sched_create(ucp_worker_h          worker,
-                                      ucp_offload_sched_h  *ctx);
+ucs_status_t ucp_sched_create(ucp_worker_h          worker,
+                                      ucp_sched_h  *ctx);
 
-void ucp_offload_sched_fini(ucp_offload_sched_h ctx);
+void ucp_sched_fini(ucp_sched_h ctx);
 
 /**
  * @ingroup UCP_COMM

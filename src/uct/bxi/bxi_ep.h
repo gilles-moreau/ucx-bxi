@@ -14,26 +14,17 @@ enum {
   UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
 };
 
-typedef struct uct_bxi_ep_config {
-  int max_retries;
-} uct_bxi_ep_config_t;
-
 typedef struct uct_bxi_ep {
   uct_base_ep_t         super;
   unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
+  unsigned int          idx;        /* Index in counter table */
+  ucs_list_link_t       elem;       /* Elem in endpoint list */
   uint8_t               conn_state; /* Connection state. */
-  uint16_t              list_id;    /* ID in Portals PID list. */
-  ucs_list_link_t       elem;       /* Element in Portals PID list. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
+  ucs_queue_head_t      pending_q;  /* List of pending OP */
 } uct_bxi_ep_t;
-
-typedef struct uct_bxi_ep_list {
-  ucs_list_link_t head;
-  unsigned        num_ep;
-  ptl_process_t   pid;
-} uct_bxi_ep_list_t;
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
 {
@@ -51,6 +42,8 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_ep_is_intra_node(uct_bxi_ep_t *ep)
           ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
   return ep->dev_addr.pid.phys.nid == uct_bxi_iface_md(iface)->pid.phys.nid;
 }
+
+void uct_bxi_send_op_handler(uct_bxi_iface_send_op_t *op, const void *resp);
 
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
@@ -106,18 +99,6 @@ ucs_status_ptr_t uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                            unsigned          flags,
                                            uct_completion_t *comp);
 
-ucs_status_t uct_bxi_iface_tag_rndv_zcopy_get(uct_bxi_iface_t *iface,
-                                              ptl_process_t    pid,
-                                              ptl_pt_index_t   pti,
-                                              uct_tag_t send_tag, void *buffer,
-                                              size_t             length,
-                                              uct_tag_context_t *ctx);
-
-ucs_status_t uct_bxi_ep_tag_get_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
-                                      const uct_iov_t *iov, size_t iovcnt,
-                                      uint64_t remote_offset, unsigned flags,
-                                      uct_completion_t *comp);
-
 ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op);
 
 ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
@@ -125,15 +106,19 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                          unsigned    header_length,
                                          unsigned    flags);
 
-ucs_status_t uct_bxi_iface_tag_gop_create(uct_iface_h tl_iface,
-                                          uct_gop_h  *gop_p);
+ucs_status_t uct_bxi_iface_tag_sched_enable(uct_iface_h tl_iface);
 
-void uct_bxi_iface_tag_gop_delete(uct_iface_h tl_iface, uct_gop_h tl_gop);
+void uct_bxi_iface_tag_sched_disable(uct_iface_h tl_iface);
 
-ucs_status_t uct_bxi_iface_tag_gop_depends_on(uct_iface_h tl_iface,
-                                              uct_gop_h   tl_gop,
-                                              uct_gop_h  *tl_gops,
-                                              size_t      gop_cnt);
+ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
+                                          uct_tag_context_t *ctx,
+                                          uct_gop_h         *gop_p);
+
+ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
+                                          uct_gop_h *tl_gop, uct_gop_h *tl_gops,
+                                          size_t gop_cnt);
+
+void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop);
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_t        tag_mask,
@@ -141,9 +126,8 @@ ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_context_t *ctx);
 
 ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        iface,
-                                           uct_tag_context_t *ctx, int force);
-
-void uct_bxi_iface_tag_recv_overflow(uct_iface_h tl_iface);
+                                           uct_tag_context_t *ctx,
+                                           unsigned           mode);
 
 ucs_status_t uct_bxi_ep_atomic_cswap32(uct_ep_h tl_ep, uint32_t compare,
                                        uint32_t swap, uint64_t remote_addr,
@@ -199,12 +183,21 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_ep_add_flush_op_sn(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op,
-                           uint64_t sn)
+uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
 {
   ucs_assert(op != NULL);
   ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
-  op->sn     = sn;
+  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+
+  /* Remove one available send credit from iface. */
+  uct_bxi_iface_available_add(iface, -1);
+}
+
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_ep_add_flush_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
+{
+  ucs_assert(op != NULL);
+  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
 
   //NOTE: Queue is used to complete flush operations.
@@ -217,24 +210,11 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_t *iface =
           ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
 
-  ucs_assert(op != NULL);
-  ucs_assertv(!(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE), "op=%p", op);
-  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
-
+  uct_bxi_iface_op_res(iface, op);
   //NOTE: Queue is used to complete flush operations.
   ucs_list_add_tail(&ep->send_ops, &op->elem);
-  /* Remove one available send credit from iface. */
-  uct_bxi_iface_available_add(iface, -1);
-}
 
-static UCS_F_ALWAYS_INLINE void
-uct_bxi_ep_add_send_op_sn(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op,
-                          uint64_t sn)
-{
-  op->sn = sn;
-  uct_bxi_ep_add_send_op(ep, op);
-
-  ucs_trace_poll("ep %p add send op %p sn %lu handler %s", ep, op, op->sn,
+  ucs_trace_poll("ep %p add send op %p handler %s", ep, op,
                  ucs_debug_get_symbol_name((void *)op->comp.handler));
 }
 

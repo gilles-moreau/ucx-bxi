@@ -333,11 +333,6 @@ static ucs_config_field_t ucp_context_config_table[] = {
    "selected automatically according to the performance characteristics.",
    ucs_offsetof(ucp_context_config_t, tm_sw_rndv), UCS_CONFIG_TYPE_TERNARY},
 
-  {"TM_ACTIVATE_INIT", "n",
-   "Activate tag-matching on worker initialization instead of on the first unexpected "
-    "message.",
-   ucs_offsetof(ucp_context_config_t, tm_init_activate), UCS_CONFIG_TYPE_BOOL},
-
   {"NUM_EPS", "auto",
    "An optimization hint of how many endpoints would be created on this context.\n"
    "Does not affect semantics, but only transport selection criteria and the\n"
@@ -592,6 +587,7 @@ static ucs_config_field_t ucp_config_table[] = {
    " - ud      : ud_v and ud_x (preferably if available).\n"
    " - dc/dc_x : dc with accelerated verbs.\n"
    " - tcp     : sockets over TCP/IP.\n"
+   " - bxi     : BXI over Portals4.\n"
    " - cuda    : CUDA (NVIDIA GPU) memory support.\n"
    " - rocm    : ROCm (AMD GPU) memory support.\n"
    " - ze      : ZE (Intel GPU) memory support.\n"

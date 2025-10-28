@@ -11,6 +11,7 @@
 #include "ucp_worker.h"
 #include "ucp_ep.inl"
 #include "ucp_mm.inl"
+#include "ucp_sched.inl"
 
 #include <ucp/dt/dt.h>
 #include <ucs/profile/profile.h>
@@ -27,7 +28,7 @@ UCS_PTR_MAP_IMPL(request, 0);
 
 
 #define UCP_REQUEST_FLAGS_FMT \
-    "%c%c%c%c%c%c"
+    "%c%c%c%c%c%c%c"
 
 #define UCP_REQUEST_FLAGS_ARG(_flags) \
     (((_flags) & UCP_REQUEST_FLAG_COMPLETED)       ? 'd' : '-'), \
@@ -36,7 +37,8 @@ UCS_PTR_MAP_IMPL(request, 0);
     (((_flags) & UCP_REQUEST_FLAG_CALLBACK)        ? 'c' : '-'), \
     (((_flags) & (UCP_REQUEST_FLAG_RECV_TAG | \
                   UCP_REQUEST_FLAG_RECV_AM))       ? 'r' : '-'), \
-    (((_flags) & UCP_REQUEST_FLAG_SYNC)            ? 's' : '-')
+    (((_flags) & UCP_REQUEST_FLAG_SYNC)            ? 's' : '-'), \
+    (((_flags) & UCP_REQUEST_FLAG_SCHEDULED)       ? 'o' : '-')
 
 #define UCP_RECV_DESC_FMT \
     "rdesc %p %c%c%c%c%c%c len %u+%u"
@@ -81,6 +83,9 @@ UCS_PTR_MAP_IMPL(request, 0);
         \
         if (ucs_likely((_req)->flags & UCP_REQUEST_FLAG_CALLBACK)) { \
             (_req)->_cb((_req) + 1, (_status), ## __VA_ARGS__); \
+        } \
+        if (ucs_unlikely((_req)->flags & UCP_REQUEST_FLAG_SCHEDULED)) { \
+            ucp_sched_task_complete((_req)->task); \
         } \
         if (ucs_unlikely(_flags & UCP_REQUEST_FLAG_RELEASED)) { \
             ucp_request_put(_req); \
@@ -259,10 +264,10 @@ static UCS_F_ALWAYS_INLINE void
 ucp_request_complete_tag_recv(ucp_request_t *req, ucs_status_t status)
 {
     ucs_trace_req("completing receive request %p (%p) " UCP_REQUEST_FLAGS_FMT
-                  " stag 0x%" PRIx64" len %zu, %s",
+                  " stag 0x%" PRIx64" len %zu, %s, task %p ",
                   req, req + 1, UCP_REQUEST_FLAGS_ARG(req->flags),
                   req->recv.tag.info.sender_tag, req->recv.tag.info.length,
-                  ucs_status_string(status));
+                  ucs_status_string(status), req->task);
     UCS_PROFILE_REQUEST_EVENT(req, "complete_tag_recv", status);
     /* coverity[address_free] */
     /* coverity[offset_free] */
@@ -481,48 +486,6 @@ ucp_request_send_buffer_reg(ucp_request_t *req, ucp_md_map_t md_map,
                                   req->send.datatype, &req->send.state.dt,
                                   (ucs_memory_type_t)req->send.mem_type, req,
                                   uct_flags);
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-ucp_request_send_op_offload(ucp_tag_match_t *tm,
-                            ucp_request_t *req, 
-                            const ucp_request_param_t *param)
-{
-    ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-
-    req->send.tag_offload.sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                          schedh, NULL);
-
-    if (!ucp_offload_sched_exists(tm, req->send.tag_offload.sched)) {
-        /* A scheduler was provided but is not available in worker. */
-        ucs_error("req %p. provided scheduler not available. sched=%p", 
-                  req, req->send.tag_offload.sched);
-        return UCS_ERR_INVALID_PARAM;
-    }
-
-    return UCS_OK;
-}
-
-static UCS_F_ALWAYS_INLINE ucs_status_t
-ucp_request_recv_op_offload(ucp_tag_match_t *tm,
-                            ucp_request_t *req, 
-                            const ucp_request_param_t *param)
-{
-    ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
-
-    req->recv.schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
-
-    if (!ucp_offload_sched_exists(tm, req->recv.schedh)) {
-        /* A scheduler was provided but is not available in worker. */
-        ucs_error("req %p. provided scheduler not available. sched=%p", 
-                  req, req->recv.schedh);
-        return UCS_ERR_INVALID_PARAM;
-    }
-
-    req->flags         |= UCP_REQUEST_FLAG_OFFLOAD_OPERATION;
-    req->recv.reply_ep  = UCP_REQUEST_PARAM_FIELD(param, EPH, reply_ep, NULL);
-
-    return UCS_OK;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t

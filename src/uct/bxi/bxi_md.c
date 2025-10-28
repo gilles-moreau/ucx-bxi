@@ -44,6 +44,8 @@ static const ptl_ni_limits_t default_limits = {
 //      op2, it does not mean that first incrementation of the counter
 //      correspond to the ACK of op1. As a consequence, and because UCT API
 //      is request-based, we MUST use an Event Queue.
+//FIXME: Use a memory pool for the MD. Also, the allocate flag makes no sense,
+//       remove it sometimes.
 ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
                                         uct_bxi_mem_desc_param_t *params,
                                         uct_bxi_mem_desc_t      **mem_desc_p)
@@ -52,7 +54,7 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
   uct_bxi_mem_desc_t *mem_desc;
   ptl_md_t            ptl_md;
 
-  //FIXME: recheck if these flags are actually used
+  //FIXME: recheck if these flags are actually used.
   if (params->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATE) {
     mem_desc = ucs_malloc(sizeof(uct_bxi_mem_desc_t), "mem_desc");
     if (mem_desc == NULL) {
@@ -74,12 +76,10 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
           .options   = params->options,
   };
 
-  status = uct_ptl_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
+  status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
   if (status != UCS_OK) {
     goto err_free_memdesc;
   }
-
-  mem_desc->sn = 0;
 
   *mem_desc_p = mem_desc;
 
@@ -139,11 +139,10 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
   md_attr->flags =
           UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_MEMH | UCT_MD_FLAG_NEED_RKEY;
   md_attr->access_mem_types       = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->reg_mem_types          = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->reg_mem_types          = md->reg_mem_types;
   md_attr->gva_mem_types          = 0;
   md_attr->reg_nonblock_mem_types = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->cache_mem_types        = UCS_BIT(UCS_MEMORY_TYPE_HOST);
-  md_attr->access_mem_types       = UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md_attr->cache_mem_types        = UCS_MASK(UCS_MEMORY_TYPE_LAST);
   md_attr->rkey_packed_size       = 0;
   md_attr->reg_cost               = ucs_linear_func_make(9e-9, 0);
 
@@ -303,6 +302,9 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   if (rc != UCS_OK) {
     goto err_freedev;
   }
+
+  md->reg_mem_types |=
+          UCS_BIT(UCS_MEMORY_TYPE_HOST) | UCS_BIT(UCS_MEMORY_TYPE_CUDA);
 
   md->super.ops       = &uct_bxi_md_ops;
   md->super.component = component;

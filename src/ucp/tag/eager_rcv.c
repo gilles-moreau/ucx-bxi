@@ -37,8 +37,10 @@ ucp_eager_common_matched(ucp_worker_t *worker, ucp_request_t *req, void *data,
      * because it arrived either:
      * 1) via SW TM (e. g. peer doesn't support offload)
      * 2) as unexpected via HW TM */
-    ucp_tag_offload_try_cancel(worker, req, UCP_TAG_OFFLOAD_CANCEL_FORCE);
+    ucp_tag_offload_try_cancel(worker, req, UCT_TAG_CANCEL_FORCE | 
+                               UCT_TAG_CANCEL_MATCHED);
 }
+
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 ucp_eager_offload_handler(void *arg, void *data, size_t length,
