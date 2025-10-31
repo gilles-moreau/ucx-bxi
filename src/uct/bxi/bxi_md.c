@@ -6,6 +6,7 @@
 #include "bxi_md.h"
 
 #include "bxi.h"
+#include <ucs/memory/memtype_cache.h>
 
 #ifdef HAVE_GDR_COPY
 #include <ucs/sys/ptr_arith.h>
@@ -120,10 +121,33 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
 {
   ucs_status_t status = UCS_OK;
 #ifdef HAVE_GDR_COPY
-  uct_bxi_mem_t *memh;
-  uct_bxi_md_t  *md    = ucs_derived_of(uct_md, uct_bxi_md_t);
-  unsigned long  d_ptr = ((unsigned long)(char *)address);
-  int            ret;
+  uct_bxi_md_t     *md = ucs_derived_of(uct_md, uct_bxi_md_t);
+  ucs_memory_info_t mem_info;
+  void             *reg_address;
+  size_t            reg_length;
+  uct_bxi_mem_t    *memh;
+  unsigned long     d_ptr;
+  int               ret;
+
+  status = ucs_memtype_cache_lookup(address, length, &mem_info);
+  if (status == UCS_ERR_NO_ELEM) {
+    /* Address was not found in memtype cache. This means is must be 
+     * a host address. */
+    status  = UCS_OK;
+    *memh_p = (void *)0xdeadbeef;
+    goto out;
+  } else if ((status == UCS_ERR_UNSUPPORTED) ||
+             (mem_info.type == UCS_MEMORY_TYPE_UNKNOWN)) {
+    status = UCS_ERR_IO_ERROR;
+    goto out;
+  }
+
+  if (mem_info.type != UCS_MEMORY_TYPE_CUDA) {
+    ucs_error("memtype %s not supported with bxi",
+              ucs_memory_type_names[mem_info.type]);
+    status = UCS_ERR_UNSUPPORTED;
+    goto out;
+  }
 
   memh = ucs_malloc(sizeof(uct_bxi_mem_t), "bxi gdr_copy handle");
   if (NULL == memh) {
@@ -132,42 +156,49 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
     goto err;
   }
 
-  ucs_ptr_check_align(address, length, GPU_PAGE_SIZE);
+  memh->type  = mem_info.type;
+  reg_address = address;
+  reg_length  = length;
 
-  ucs_assert((address != NULL) && (length != 0));
+  ucs_align_ptr_range(&reg_address, &reg_length, GPU_PAGE_SIZE);
+  d_ptr = ((unsigned long)(char *)reg_address);
 
-  ret = gdr_pin_buffer(md->gdrcpy_ctx, d_ptr, length, 0, 0, &memh->mh);
+  ucs_assert((reg_address != NULL) && (reg_length != 0));
+
+  ret = gdr_pin_buffer(md->gdrcpy_ctx, d_ptr, reg_length, 0, 0, &memh->mh);
   if (ret) {
-    ucs_error("gdr_pin_buffer failed. length :%lu ret:%d", length, ret);
-    goto err;
+    ucs_error("bxi gdr_pin_buffer failed. length :%lu ret:%d", reg_length, ret);
+    status = UCS_ERR_IO_ERROR;
+    goto free_mem;
   }
 
-  ret = gdr_map(md->gdrcpy_ctx, memh->mh, &memh->bar_ptr, length);
+  ret = gdr_map(md->gdrcpy_ctx, memh->mh, &memh->bar_ptr, reg_length);
   if (ret) {
-    ucs_error("gdr_map failed. length :%lu ret:%d", length, ret);
+    ucs_error("bxi gdr_map failed. length :%lu ret:%d", reg_length, ret);
     goto unpin_buffer;
   }
 
-  memh->reg_size = length;
+  memh->reg_size = reg_length;
 
   ret = gdr_get_info(md->gdrcpy_ctx, memh->mh, &memh->info);
   if (ret) {
-    ucs_error("gdr_get_info failed. ret:%d", ret);
+    ucs_error("bxi gdr_get_info failed. ret:%d", ret);
+    status = UCS_ERR_IO_ERROR;
     goto unmap_buffer;
   }
 
-  ucs_trace("registered memory:%p..%p length:%lu info.va:0x%" PRIx64
+  ucs_trace("bxi registered memory:%p..%p length:%lu info.va:0x%" PRIx64
             " bar_ptr:%p",
-            address, UCS_PTR_BYTE_OFFSET(address, length), length,
-            memh->info.va, memh->bar_ptr);
+            reg_address, UCS_PTR_BYTE_OFFSET(reg_address, reg_length),
+            reg_length, memh->info.va, memh->bar_ptr);
 
   *memh_p = memh;
-#else
-  *memh_p = (void *)0xdeadbeef;
 #endif
 
+out:
   return status;
 
+#ifdef HAVE_GDR_COPY
 unmap_buffer:
   ret = gdr_unmap(md->gdrcpy_ctx, memh->mh, memh->bar_ptr, memh->reg_size);
   if (ret) {
@@ -178,15 +209,52 @@ unpin_buffer:
   if (ret) {
     ucs_warn("gdr_unpin_buffer failed. ret;%d", ret);
   }
+free_mem:
+  ucs_free(memh);
+#endif
 err:
-  return UCS_ERR_IO_ERROR;
+  return status;
 }
 
 ucs_status_t uct_bxi_mem_dereg(uct_md_h                         uct_md,
                                const uct_md_mem_dereg_params_t *params)
 {
-  ucs_assert(params->memh == (void *)0xdeadbeef);
-  return UCS_OK;
+  ucs_status_t   status = UCS_OK;
+  uct_bxi_md_t  *md     = ucs_derived_of(uct_md, uct_bxi_md_t);
+  uct_bxi_mem_t *memh;
+  int            ret = 0;
+
+  /* Nothing to do for host memory. */
+  if (params->memh == (void *)0xdeadbeef) {
+    status = UCS_OK;
+    goto out;
+  }
+
+#ifdef HAVE_GDR_COPY
+  memh = params->memh;
+  ret  = gdr_unmap(md->gdrcpy_ctx, memh->mh, memh->bar_ptr, memh->reg_size);
+  if (ret) {
+    ucs_error("bxi gdr_unmap failed. unpin_size:%lu ret:%d", memh->reg_size,
+              ret);
+    status = UCS_ERR_IO_ERROR;
+    goto out;
+  }
+
+  ret = gdr_unpin_buffer(md->gdrcpy_ctx, memh->mh);
+  if (ret) {
+    ucs_error("bxi gdr_unpin_buffer failed. ret:%d", ret);
+    status = UCS_ERR_IO_ERROR;
+    goto out;
+  }
+
+  ucs_trace("bxi deregistered memory. info.va:0x%" PRIx64 " bar_ptr:%p",
+            memh->info.va, memh->bar_ptr);
+
+  ucs_free(memh);
+#endif
+
+out:
+  return status;
 }
 
 ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
@@ -308,7 +376,13 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
 
 void uct_bxi_md_close(uct_md_h uct_md)
 {
+  int           ret;
   uct_bxi_md_t *md = ucs_derived_of(uct_md, uct_bxi_md_t);
+
+  ret = gdr_close(md->gdrcpy_ctx);
+  if (ret) {
+    ucs_warn("failed to close gdrcopy. ret:%d", ret);
+  }
 
   uct_bxi_wrap(PtlNIFini(md->nih));
 
