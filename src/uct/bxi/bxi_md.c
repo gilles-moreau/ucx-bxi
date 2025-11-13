@@ -219,10 +219,12 @@ err:
 ucs_status_t uct_bxi_mem_dereg(uct_md_h                         uct_md,
                                const uct_md_mem_dereg_params_t *params)
 {
-  ucs_status_t   status = UCS_OK;
-  uct_bxi_md_t  *md     = ucs_derived_of(uct_md, uct_bxi_md_t);
+  ucs_status_t status = UCS_OK;
+#ifdef HAVE_GDR_COPY
+  uct_bxi_md_t  *md = ucs_derived_of(uct_md, uct_bxi_md_t);
   uct_bxi_mem_t *memh;
   int            ret = 0;
+#endif
 
   /* Nothing to do for host memory. */
   if (params->memh == (void *)0xdeadbeef) {
@@ -376,13 +378,15 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
 
 void uct_bxi_md_close(uct_md_h uct_md)
 {
-  int           ret;
   uct_bxi_md_t *md = ucs_derived_of(uct_md, uct_bxi_md_t);
 
+#ifdef HAVE_GDR_COPY
+  int ret;
   ret = gdr_close(md->gdrcpy_ctx);
   if (ret) {
     ucs_warn("failed to close gdrcopy. ret:%d", ret);
   }
+#endif
 
   uct_bxi_wrap(PtlNIFini(md->nih));
 
@@ -449,10 +453,10 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
 
   md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_HOST);
 
+#ifdef HAVE_GDR_COPY
   /* Initialize gdr context */
   md->gdrcpy_ctx = NULL;
   if (md_config->enable_gpudirect_rdma != UCS_NO) {
-#ifdef HAVE_GDR_COPY
     md->gdrcpy_ctx = gdr_open();
     if (md->gdrcpy_ctx == NULL) {
       ucs_error("failed to open gdr copy");
@@ -461,7 +465,6 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
     }
 
     md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
-#endif
   }
 
   if (!md->gdrcpy_ctx && (md_config->enable_gpudirect_rdma == UCS_YES)) {
@@ -470,6 +473,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
     status = UCS_ERR_UNSUPPORTED;
     goto err_freedev;
   }
+#endif
 
   md->reg_cost        = UCS_LINEAR_FUNC_ZERO;
   md->super.ops       = &uct_bxi_md_ops;

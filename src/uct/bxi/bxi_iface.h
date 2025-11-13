@@ -371,7 +371,8 @@ static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
                                                          const uct_iov_t *iov,
                                                          size_t iovcnt)
 {
-  size_t         iov_it, ptl_it = 0;
+  size_t iov_it, ptl_it = 0;
+#ifdef HAVE_GDR_COPY
   size_t         bar_offset;
   uct_bxi_mem_t *memh;
 
@@ -393,6 +394,18 @@ static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
     }
     ++ptl_it;
   }
+#else
+  for (iov_it = 0; iov_it < iovcnt; ++iov_it) {
+    ptl_iov[ptl_it].iov_len  = uct_iov_get_length(&iov[iov_it]);
+    ptl_iov[ptl_it].iov_base = NULL;
+    if (ptl_iov[ptl_it].iov_len > 0) {
+      ptl_iov[ptl_it].iov_base = (void *)(iov[iov_it].buffer);
+    } else {
+      continue; /* to avoid zero length elements in iov */
+    }
+    ++ptl_it;
+  }
+#endif
 
   return ptl_it;
 }

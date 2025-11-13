@@ -3666,7 +3666,7 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
  */
 UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
 {
-    return iface->ops.iface_tag_sched_disable(iface);
+    iface->ops.iface_tag_sched_disable(iface);
 }
 
 /**

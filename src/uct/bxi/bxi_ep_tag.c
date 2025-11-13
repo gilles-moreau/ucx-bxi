@@ -22,9 +22,14 @@
 static UCS_F_ALWAYS_INLINE ucs_memory_type_t
 uct_bxi_get_memory_type(uct_mem_h mem)
 {
+#ifdef HAVE_GDR_COPY
   return ((void *)mem == (void *)0xdeadbeef) || (mem == NULL) ?
                  UCS_MEMORY_TYPE_HOST :
                  ((uct_bxi_mem_t *)mem)->type;
+#else
+  ucs_assert((void *)mem == (void *)0xdeadbeef);
+  return UCS_MEMORY_TYPE_HOST;
+#endif
 }
 
 /* Callback of receiver for rendezvous protocol. */

@@ -1,8 +1,8 @@
 #ifndef BXI_RQ_H
 #define BXI_RQ_H
 
+#include "bxi.h"
 #include <uct/base/uct_iface.h>
-#include <uct/bxi/bxi.h>
 
 typedef struct uct_bxi_rxq        uct_bxi_rxq_t;
 typedef struct uct_bxi_op_ctx     uct_bxi_op_ctx_t;
