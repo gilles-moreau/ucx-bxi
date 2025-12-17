@@ -22,12 +22,11 @@ enum {
  * @brief bxi mem handle
  */
 typedef struct uct_bxi_mem {
-  gdr_mh_t          mh;       /**< Memory handle of GPU memory */
-  gdr_info_t        info;     /**< Info of GPU memory mapping */
-  void             *bar_ptr;  /**< BAR address of GPU mapping */
-  size_t            reg_size; /**< Size of mapping */
-  size_t            offset;   /**< Offset of origin address after alignment */
-  ucs_memory_type_t type;     /**< Memory type */
+  gdr_mh_t   mh;       /**< Memory handle of GPU memory */
+  gdr_info_t info;     /**< Info of GPU memory mapping */
+  void      *bar_ptr;  /**< BAR address of GPU mapping */
+  size_t     reg_size; /**< Size of mapping */
+  size_t     offset;   /**< Offset of origin address after alignment */
 } uct_bxi_mem_t;
 
 /**
@@ -80,6 +79,7 @@ typedef struct uct_bxi_md {
     ptl_ni_limits_t limits;
   } config;
   char             *device;
+  ucs_sys_device_t  sys_dev;
   ptl_handle_ni_t   nih;
   ptl_process_t     pid;
   size_t            rkey_size;

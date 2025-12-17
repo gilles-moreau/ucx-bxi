@@ -578,7 +578,7 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
   //      this flush request.
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
-  if (ucs_list_is_empty(&ep->send_ops)) {
+  if (ucs_list_is_empty(&ep->b_ep->send_ops)) {
     UCT_TL_EP_STAT_FLUSH(&ep->super);
     return UCS_OK;
   }
@@ -746,7 +746,7 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
   }
 
 add_to_pending:
-  uct_pending_req_queue_push(&ep->pending_q, req);
+  uct_pending_req_queue_push(&ep->b_ep->pending_q, req);
   UCT_TL_EP_STAT_PEND(&ep->super);
   return UCS_OK;
 }
@@ -768,37 +768,35 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
   purge_arg.cb  = cb;
   purge_arg.arg = arg;
 
-  uct_pending_queue_purge(priv, &ep->pending_q, 1, uct_bxi_ep_pending_purge_cb,
-                          &purge_arg);
+  uct_pending_queue_purge(priv, &ep->b_ep->pending_q, 1,
+                          uct_bxi_ep_pending_purge_cb, &purge_arg);
 }
 
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
+  ucs_status_t     status;
   uct_bxi_iface_t *iface = ucs_derived_of(params->iface, uct_bxi_iface_t);
 
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
   if (iface->num_eps + 1 > iface->config.max_num_eps) {
-    return UCS_ERR_NO_RESOURCE;
+    status = UCS_ERR_NO_RESOURCE;
+    goto err;
   }
 
   self->dev_addr   = *(uct_bxi_device_addr_t *)params->dev_addr;
   self->iface_addr = *(uct_bxi_iface_addr_t *)params->iface_addr;
   self->conn_state = UCT_BXI_EP_CONN_CONNECTED;
+  self->flags      = 0;
 
-  ucs_queue_head_init(&self->pending_q);
-  ucs_list_head_init(&self->send_ops);
-  self->flags = 0;
-
-  ucs_list_add_head(&iface->eps, &self->elem);
+  /* Cache counter index for fast access during send operations. */
+  status = uct_bxi_iface_get_base_ep(iface, self->dev_addr.pid, &self->b_ep);
   iface->num_eps++;
 
-  if (iface->tm.enabled) {
-    /* Cache counter index for fast access during send operations. */
-    self->idx = uct_bxi_iface_get_or_create_cnt_idx(iface, self->dev_addr.pid);
-  }
+  ucs_list_add_head(&iface->eps, &self->elem);
 
-  return UCS_OK;
+err:
+  return status;
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)

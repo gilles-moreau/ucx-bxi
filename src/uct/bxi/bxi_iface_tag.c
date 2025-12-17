@@ -39,7 +39,7 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
   ucs_status_t        status;
   uct_bxi_hdr_rndv_t *hdr;
   size_t              length;
-  unsigned int        cnt_idx;
+  uct_bxi_base_ep_t  *b_ep;
 
   /* There must always have space in overflow list. */
   ucs_assert(ev->rlength == ev->mlength);
@@ -47,15 +47,18 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
   /* Cache unexpected event for treatment in case of cancel. */
   iface->tm.unexp_ev = ev;
 
+  /* Increment receive counter for this PID. Since we dont know yet if 
+   * the receive will be posted ever, we need to increment it. */
+  status = uct_bxi_iface_get_base_ep(iface, ev->initiator, &b_ep);
+  if (status != UCS_OK) {
+    goto out;
+  }
+  uct_bxi_ep_inc_recv_cnt(iface, b_ep);
+
   if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
 
     hdr    = UCS_PTR_BYTE_OFFSET(ev->start, iface->tm.rndv_hdr_offset);
     length = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
-
-    /* Increment receive counter for this PID. Since we dont know yet if 
-     * the receive will be posted ever, we need to increment it. */
-    cnt_idx = uct_bxi_iface_get_or_create_cnt_idx(iface, ev->initiator);
-    uct_bxi_ep_inc_recv_cnt(iface, cnt_idx);
 
     status =
             iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
@@ -92,8 +95,8 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
                                                 uct_bxi_recv_block_t *block,
                                                 ptl_event_t          *ev)
 {
-  ucs_status_t status = UCS_OK;
-  unsigned int cnt_idx;
+  ucs_status_t       status = UCS_OK;
+  uct_bxi_base_ep_t *b_ep   = NULL;
 
   /* Receive block has been consumed, notify UCP layer so it can remove 
    * the tag from its expected queues. Buffer may also be removed from 
@@ -103,6 +106,16 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
     uct_bxi_recv_block_update_cnt(block, ev->mlength);
+  }
+
+  if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED)) {
+    /* Rendezvous was not during receive call, thus rndv recv counter not 
+       * incremented, increment it now. */
+    status = uct_bxi_iface_get_base_ep(iface, ev->initiator, &b_ep);
+    if (status != UCS_OK) {
+      return status;
+    }
+    uct_bxi_ep_inc_recv_cnt(iface, b_ep);
   }
 
   /* Now, perform protocol specific actions. */
@@ -119,11 +132,6 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
 
       uct_bxi_iface_complete_rndv(iface, block, ev->hdr_data, ev->initiator,
                                   block->send_size);
-
-      /* Rendezvous was not during receive call, thus rndv recv counter not 
-       * incremented, increment it now. */
-      cnt_idx = uct_bxi_iface_get_or_create_cnt_idx(iface, ev->initiator);
-      uct_bxi_ep_inc_recv_cnt(iface, cnt_idx);
     }
 
     /* Call operation completion to decrement comp counter, release the 
@@ -314,19 +322,6 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           iface->config.tm.eager_limit -
           (sizeof(uct_bxi_hdr_rndv_t) + iface->config.tm.max_hdr);
 
-  //NOTE: no realloc right now to limit memory footprint but could be done
-  //      later.
-  iface->tm.cnts = ucs_malloc(iface->config.max_num_eps * sizeof(uct_bxi_cnt_t),
-                              "bxi cnts");
-  if (iface->tm.cnts == NULL) {
-    status = UCS_ERR_NO_MEMORY;
-    goto err;
-  }
-  iface->tm.num_cnts = 0;
-
-  /* Initialize PID => CNT IDX map. */
-  kh_init_inplace(uct_bxi_pid_map, &iface->tm.map);
-
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
   rxq_param.flags    = 0;
@@ -341,7 +336,7 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   status = uct_bxi_rxq_create(&rxq_param, &iface->rx.tag.q);
   if (status != UCS_OK) {
-    goto err_free_cnts;
+    goto err;
   }
 
   /* Pool of receive blocks for receiving expected messages. */
@@ -402,8 +397,6 @@ err_release_blockrecvmp:
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 0);
 err_release_rxq:
   uct_bxi_rxq_fini(iface->rx.tag.q);
-err_free_cnts:
-  ucs_free(iface->tm.cnts);
 err:
   return status;
 }
@@ -422,10 +415,6 @@ void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
   })
     ;
   kh_destroy_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
-
-  kh_destroy_inplace(uct_bxi_pid_map, &iface->tm.map);
-
-  ucs_free(iface->tm.cnts);
 
   /* Release TAG RX queue. */
   uct_bxi_rxq_fini(iface->rx.tag.q);

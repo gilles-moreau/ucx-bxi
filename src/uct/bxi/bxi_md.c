@@ -7,6 +7,7 @@
 
 #include "bxi.h"
 #include <ucs/memory/memtype_cache.h>
+#include <ucs/sys/string.h>
 
 #ifdef HAVE_GDR_COPY
 #include <ucs/sys/ptr_arith.h>
@@ -18,6 +19,8 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define UCT_BXI_MD_NETDEV_DIR "/sys/class/bxi"
 
 ucs_config_field_t uct_bxi_md_config_table[] = {
         {"", "", NULL, ucs_offsetof(uct_bxi_md_config_t, super),
@@ -131,23 +134,22 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
 
   status = ucs_memtype_cache_lookup(address, length, &mem_info);
   if (status == UCS_ERR_NO_ELEM) {
-    /* Address was not found in memtype cache. This means is must be 
+    /* Address was not found in memtype cache or is unknown. This means is must be 
      * a host address. */
     status  = UCS_OK;
     *memh_p = (void *)0xdeadbeef;
     goto out;
-  } else if ((status == UCS_ERR_UNSUPPORTED) ||
-             (mem_info.type == UCS_MEMORY_TYPE_UNKNOWN)) {
+  } else if (status == UCS_ERR_UNSUPPORTED) {
     status = UCS_ERR_IO_ERROR;
     goto out;
   }
 
-  if (mem_info.type != UCS_MEMORY_TYPE_CUDA) {
-    ucs_error("memtype %s not supported with bxi",
-              ucs_memory_type_names[mem_info.type]);
-    status = UCS_ERR_UNSUPPORTED;
-    goto out;
-  }
+  //if (mem_info.type != UCS_MEMORY_TYPE_CUDA) {
+  //  ucs_error("memtype %s not supported with bxi",
+  //            ucs_memory_type_names[mem_info.type]);
+  //  status = UCS_ERR_UNSUPPORTED;
+  //  goto out;
+  //}
 
   memh = ucs_malloc(sizeof(uct_bxi_mem_t), "bxi gdr_copy handle");
   if (NULL == memh) {
@@ -156,7 +158,6 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
     goto err;
   }
 
-  memh->type  = mem_info.type;
   reg_address = address;
   reg_length  = length;
 
@@ -309,8 +310,8 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p)
 {
-  int                     rc         = UCS_OK;
-  static const char      *bxi_dir[2] = {"/sys/class/bxi", "/sys/class/net"};
+  ucs_status_t       status     = UCS_OK;
+  static const char *bxi_dir[2] = {UCT_BXI_MD_NETDEV_DIR, "/sys/class/net"};
   uct_md_resource_desc_t *resources;
   int                     i = 0;
   int                     is_up;
@@ -325,7 +326,7 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
   do {
     dir = opendir(bxi_dir[i]);
     if (dir == NULL) {
-      ucs_debug("PTL: could not open bxi directory %s.", bxi_dir[i]);
+      ucs_debug("BXI: could not open bxi directory %s.", bxi_dir[i]);
       continue;
     }
 
@@ -334,8 +335,8 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
       entry = readdir(dir);
       if (entry == NULL) {
         if (errno != 0) {
-          ucs_error("PTL: could not read bxi directory %s.", bxi_dir[i]);
-          rc = UCS_ERR_NO_MEMORY;
+          ucs_error("BXI: could not read bxi directory %s.", bxi_dir[i]);
+          status = UCS_ERR_NO_MEMORY;
           goto close_dir;
         }
         break;
@@ -353,10 +354,11 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
         continue;
       }
 
-      resources = realloc(resources, sizeof(*resources) * (num_devices + 1));
+      resources = ucs_realloc(resources, sizeof(*resources) * (num_devices + 1),
+                              "bxi resources");
       if (resources == NULL) {
-        ucs_error("PTL: could not allocate devices");
-        rc = UCS_ERR_NO_MEMORY;
+        ucs_error("BXI: could not allocate devices");
+        status = UCS_ERR_NO_MEMORY;
         goto close_dir;
       }
 
@@ -373,7 +375,8 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
   *resources_p     = resources;
   *num_resources_p = num_devices;
 
-  return rc;
+out:
+  return status;
 }
 
 void uct_bxi_md_close(uct_md_h uct_md)
@@ -411,6 +414,31 @@ static uct_md_ops_t uct_bxi_md_ops = {
         .mkey_pack          = ucs_empty_function_return_success,
         .detect_memory_type = ucs_empty_function_return_unsupported,
 };
+
+static ucs_status_t uct_bxi_set_device_syspath(uct_bxi_md_t *md)
+{
+  ucs_status_t     status;
+  const char      *sysfs_path;
+  char            *path_buffer;
+  ucs_sys_device_t sys_dev;
+
+  status = ucs_string_alloc_path_buffer(&path_buffer, "path_buffer");
+  if (status != UCS_OK) {
+    goto out;
+  }
+
+  ucs_snprintf_safe(path_buffer, PATH_MAX, "%s/%s", UCT_BXI_MD_NETDEV_DIR,
+                    md->device);
+
+  sysfs_path = ucs_topo_resolve_sysfs_path(md->device, path_buffer);
+  sys_dev    = ucs_topo_get_sysfs_dev(md->device, sysfs_path, 10);
+
+  md->sys_dev = sys_dev;
+
+  ucs_free(path_buffer);
+out:
+  return status;
+}
 
 static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
                                     const char            *md_name,
@@ -451,6 +479,11 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
     goto err_freedev;
   }
 
+  status = uct_bxi_set_device_syspath(md);
+  if (status != UCS_OK) {
+    goto err_freedev;
+  }
+
   md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_HOST);
 
 #ifdef HAVE_GDR_COPY
@@ -464,7 +497,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
       goto err_freedev;
     }
 
-    md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
+    //md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
   }
 
   if (!md->gdrcpy_ctx && (md_config->enable_gpudirect_rdma == UCS_YES)) {

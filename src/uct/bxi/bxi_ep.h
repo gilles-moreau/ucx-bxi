@@ -19,11 +19,9 @@ typedef struct uct_bxi_ep {
   unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
-  unsigned int          idx;        /* Index in counter table */
-  ucs_list_link_t       elem;       /* Elem in endpoint list */
+  uct_bxi_base_ep_t    *b_ep;       /* Base endpoint */
+  ucs_list_link_t       elem;       /* Elem is the uct ep list */
   uint8_t               conn_state; /* Connection state. */
-  ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
-  ucs_queue_head_t      pending_q;  /* List of pending OP */
 } uct_bxi_ep_t;
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
@@ -201,7 +199,7 @@ uct_bxi_ep_add_flush_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
 
   //NOTE: Queue is used to complete flush operations.
-  ucs_list_add_tail(&ep->send_ops, &op->elem);
+  ucs_list_add_tail(&ep->b_ep->send_ops, &op->elem);
 }
 
 static UCS_F_ALWAYS_INLINE void
@@ -212,7 +210,7 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
 
   uct_bxi_iface_op_res(iface, op);
   //NOTE: Queue is used to complete flush operations.
-  ucs_list_add_tail(&ep->send_ops, &op->elem);
+  ucs_list_add_tail(&ep->b_ep->send_ops, &op->elem);
 
   ucs_trace_poll("ep %p add send op %p handler %s", ep, op,
                  ucs_debug_get_symbol_name((void *)op->comp.handler));
