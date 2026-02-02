@@ -32,11 +32,10 @@ typedef struct uct_bxi_mem {
 /**
  * @brief bxi  packed and remote key for put
  */
-typedef struct uct_bxi_key {
+typedef struct uct_bxi_rkey {
   uint64_t vaddr;   /**< Mapped GPU address */
   void    *bar_ptr; /**< BAR address of GPU mapping */
-  gdr_mh_t mh;      /**< Memory handle of GPU memory */
-} uct_bxi_key_t;
+} uct_bxi_rkey_t;
 #endif
 
 typedef struct uct_bxi_mem_desc_param {
@@ -100,6 +99,11 @@ ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
                                         uct_bxi_mem_desc_param_t *params,
                                         uct_bxi_mem_desc_t      **mem_desc_p);
 void         uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc);
+
+ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
+                               void *address, size_t length,
+                               const uct_md_mkey_pack_params_t *params,
+                               void                            *buffer);
 
 static UCS_F_ALWAYS_INLINE uct_bxi_mem_desc_t *
 uct_bxi_md_mem_desc_create_inline(uct_bxi_md_t *md, ptl_handle_eq_t eqh,

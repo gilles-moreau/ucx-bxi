@@ -12,6 +12,7 @@ enum {
   UCT_BXI_EP_CONN_CLOSED        = UCS_BIT(1),
   UCT_BXI_EP_KEEP_ALIVE_PENDING = UCS_BIT(2),
   UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
+  UCT_BXI_EP_CONFIG_CONN_KEY    = UCS_BIT(4),
 };
 
 typedef struct uct_bxi_ep {
@@ -19,9 +20,11 @@ typedef struct uct_bxi_ep {
   unsigned              flags;
   uct_bxi_device_addr_t dev_addr;
   uct_bxi_iface_addr_t  iface_addr;
-  uct_bxi_base_ep_t    *b_ep;       /* Base endpoint */
   ucs_list_link_t       elem;       /* Elem is the uct ep list */
   uint8_t               conn_state; /* Connection state. */
+  uct_bxi_rndv_cnt_t   *cnt;        /* Rndv counters. */
+  ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
+  ucs_queue_head_t      pending_q;  /* Head of pending queue */
 } uct_bxi_ep_t;
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
@@ -77,6 +80,10 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                                  unsigned header_length, const uct_iov_t *iov,
                                  size_t iovcnt, unsigned flags,
                                  uct_completion_t *comp);
+
+ucs_status_t uct_bxi_ep_tag_create(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
+
+void uct_bxi_ep_tag_destroy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
 
 ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h ep, uct_tag_t tag,
                                         const void *data, size_t length);
@@ -180,6 +187,8 @@ void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
+ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key);
+
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
 {
@@ -199,7 +208,7 @@ uct_bxi_ep_add_flush_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
 
   //NOTE: Queue is used to complete flush operations.
-  ucs_list_add_tail(&ep->b_ep->send_ops, &op->elem);
+  ucs_list_add_tail(&ep->send_ops, &op->elem);
 }
 
 static UCS_F_ALWAYS_INLINE void
@@ -210,7 +219,7 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
 
   uct_bxi_iface_op_res(iface, op);
   //NOTE: Queue is used to complete flush operations.
-  ucs_list_add_tail(&ep->b_ep->send_ops, &op->elem);
+  ucs_list_add_tail(&ep->send_ops, &op->elem);
 
   ucs_trace_poll("ep %p add send op %p handler %s", ep, op,
                  ucs_debug_get_symbol_name((void *)op->comp.handler));

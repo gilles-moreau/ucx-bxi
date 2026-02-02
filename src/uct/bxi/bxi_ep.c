@@ -171,14 +171,28 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
   return UCS_ERR_UNSUPPORTED;
 }
 
+static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
+                                                          uct_bxi_rkey_t *rkey)
+{
+  if (rkey->bar_ptr == (void *)0xdeadbeef) {
+    /* Remote memory is host memory, no need to resolve it. */
+    return remote_addr;
+  } else {
+    return (uint64_t)UCS_PTR_BYTE_OFFSET(rkey->bar_ptr,
+                                         remote_addr - rkey->vaddr);
+  }
+}
+
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                   unsigned length, uint64_t remote_addr,
-                                  uct_rkey_t rkey)
+                                  uct_rkey_t uct_rkey)
 {
   ucs_status_t             status;
   uct_bxi_iface_send_op_t *op;
   uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey       = (uct_bxi_rkey_t *)uct_rkey;
+  uint64_t         resolved_raddr;
 
   UCT_CHECK_LENGTH(length, 0, iface->config.max_inline, "put_short");
   UCT_BXI_CHECK_EP(ep);
@@ -187,10 +201,13 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                uct_bxi_send_op_handler, length);
 
+  /* Compute remote address based on remote gdrcopy registration. */
+  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
                                length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+                               ep->iface_addr.rma, 0, resolved_raddr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
   }
@@ -209,13 +226,16 @@ err:
 }
 
 ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
-                             void *arg, uint64_t remote_addr, uct_rkey_t rkey)
+                             void *arg, uint64_t remote_addr,
+                             uct_rkey_t uct_rkey)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
   ssize_t                  size = 0;
+  uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
+  uint64_t                 resolved_raddr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -229,10 +249,13 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   }
   UCT_SKIP_ZERO_LENGTH(size, op);
 
+  /* Compute remote address based on remote gdrcopy registration. */
+  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+                               ep->iface_addr.rma, 0, resolved_raddr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
@@ -250,13 +273,15 @@ err:
 
 ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   size_t iovcnt, uint64_t remote_addr,
-                                  uct_rkey_t rkey, uct_completion_t *comp)
+                                  uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
   ucs_status_t     status;
   ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
+  uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
+  uint64_t                 resolved_raddr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -272,11 +297,14 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
+  /* Compute remote address based on remote gdrcopy registration. */
+  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh,
                                (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
                                PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, remote_addr, op, 0));
+                               ep->iface_addr.rma, 0, resolved_raddr, op, 0));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   } else {
@@ -297,12 +325,14 @@ err:
 ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
                                   uct_unpack_callback_t unpack_cb, void *arg,
                                   size_t length, uint64_t remote_addr,
-                                  uct_rkey_t rkey, uct_completion_t *comp)
+                                  uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
   ucs_status_t             status;
   uct_bxi_iface_send_op_t *op;
   uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey       = (uct_bxi_rkey_t *)uct_rkey;
+  uint64_t         resolved_raddr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -313,10 +343,13 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
                                       unpack_cb, uct_bxi_ep_get_bcopy_handler,
                                       comp, arg, length);
 
+  /* Compute remote address based on remote gdrcopy registration. */
+  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
   //TODO: replace by PtlGetNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               remote_addr, op));
+                               resolved_raddr, op));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -335,7 +368,7 @@ err:
 
 ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   size_t iovcnt, uint64_t remote_addr,
-                                  uct_rkey_t rkey, uct_completion_t *comp)
+                                  uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
   ucs_status_t     status;
   size_t           iov_size;
@@ -343,6 +376,8 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
+  uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
+  uint64_t                 resolved_raddr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -360,11 +395,14 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   //FIXME: redundant UCT_SKIP_ZERO_LENGTH?
   UCT_SKIP_ZERO_LENGTH(iov_size);
 
+  /* Compute remote address based on remote gdrcopy registration. */
+  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
   //TODO: replace by PtlGetNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
                                (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
                                ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               remote_addr, op));
+                               resolved_raddr, op));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
@@ -578,7 +616,7 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
   //      this flush request.
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
-  if (ucs_list_is_empty(&ep->b_ep->send_ops)) {
+  if (ucs_list_is_empty(&ep->send_ops)) {
     UCT_TL_EP_STAT_FLUSH(&ep->super);
     return UCS_OK;
   }
@@ -618,6 +656,7 @@ ucs_status_t uct_bxi_ep_fence(uct_ep_h tl_ep, unsigned flags)
   return UCS_OK;
 }
 
+//TODO: remove because not used, CONNECT_TO_EP not supported.
 ucs_status_t uct_bxi_ep_get_address(uct_ep_h tl_ep, uct_ep_addr_t *addr)
 {
   uct_bxi_ep_t      *ep       = ucs_derived_of(tl_ep, uct_bxi_ep_t);
@@ -746,7 +785,7 @@ ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
   }
 
 add_to_pending:
-  uct_pending_req_queue_push(&ep->b_ep->pending_q, req);
+  uct_pending_req_queue_push(&ep->pending_q, req);
   UCT_TL_EP_STAT_PEND(&ep->super);
   return UCS_OK;
 }
@@ -768,14 +807,14 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
   purge_arg.cb  = cb;
   purge_arg.arg = arg;
 
-  uct_pending_queue_purge(priv, &ep->b_ep->pending_q, 1,
-                          uct_bxi_ep_pending_purge_cb, &purge_arg);
+  uct_pending_queue_purge(priv, &ep->pending_q, 1, uct_bxi_ep_pending_purge_cb,
+                          &purge_arg);
 }
 
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
-  ucs_status_t     status;
-  uct_bxi_iface_t *iface = ucs_derived_of(params->iface, uct_bxi_iface_t);
+  ucs_status_t     status = UCS_OK;
+  uct_bxi_iface_t *iface  = ucs_derived_of(params->iface, uct_bxi_iface_t);
 
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
@@ -789,11 +828,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   self->conn_state = UCT_BXI_EP_CONN_CONNECTED;
   self->flags      = 0;
 
-  /* Cache counter index for fast access during send operations. */
-  status = uct_bxi_iface_get_base_ep(iface, self->dev_addr.pid, &self->b_ep);
-  iface->num_eps++;
+  ucs_list_head_init(&self->send_ops);
+  ucs_queue_head_init(&self->pending_q);
 
+  /* Append endpoint to interface list. */
   ucs_list_add_head(&iface->eps, &self->elem);
+
+  iface->num_eps++;
 
 err:
   return status;
@@ -812,6 +853,8 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
 
   uct_bxi_ep_pending_purge(&self->super.super,
                            ucs_empty_function_do_assert_void, NULL);
+
+  uct_bxi_ep_tag_destroy(iface, self);
 
   ucs_list_del(&self->elem);
   iface->num_eps--;

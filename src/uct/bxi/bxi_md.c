@@ -133,7 +133,12 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
   int               ret;
 
   status = ucs_memtype_cache_lookup(address, length, &mem_info);
-  if (status == UCS_ERR_NO_ELEM) {
+  //NOTE: mem_info.type is usually resolved through the UCP path. However, for
+  //      UCT tests, there are no resolution of the address.
+  //FIXME: This condition fails in UCX unit tests but is necessary for NCCL. One
+  //       way to overcome this may be to avoid the memcache and implement on our
+  //       own memory detection and a rcache.
+  if (status == UCS_ERR_NO_ELEM || mem_info.type == UCS_MEMORY_TYPE_UNKNOWN) {
     /* Address was not found in memtype cache or is unknown. This means is must be 
      * a host address. */
     status  = UCS_OK;
@@ -260,12 +265,72 @@ out:
   return status;
 }
 
+ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
+                               void *address, size_t length,
+                               const uct_md_mkey_pack_params_t *params,
+                               void                            *buffer)
+{
+  uct_bxi_mem_t *memh = uct_memh;
+  void          *p    = buffer;
+  unsigned       flags;
+
+  flags = UCS_PARAM_VALUE(UCT_MD_MKEY_PACK_FIELD, params, flags, FLAGS, 0);
+  if (flags &
+      (UCT_MD_MKEY_PACK_FLAG_INVALIDATE_RMA |
+       UCT_MD_MKEY_PACK_FLAG_INVALIDATE_AMO | UCT_MD_MKEY_PACK_FLAG_EXPORT)) {
+    return UCS_ERR_UNSUPPORTED;
+  }
+
+  if ((void *)memh == (void *)0xdeadbeef) {
+    *(void **)buffer = (void *)0xdeadbeef;
+  } else {
+    /* Necessary data are: BAR pointer gotten after gdrcopy mapping and actual 
+     * virtual address. */
+    *(void **)p     = memh->bar_ptr;
+    p              += sizeof(void *);
+    *(uint64_t *)p  = memh->info.va;
+  }
+
+  return UCS_OK;
+}
+
 ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
                                  const void *rkey_buffer, uct_rkey_t *rkey_p,
                                  void **handle_p)
 {
-  *rkey_p   = 0;
+  ucs_status_t    status = UCS_OK;
+  uct_bxi_rkey_t *rkey;
+
+  if (rkey_buffer == (void *)0xdeadbeef) {
+    /* Nothing to unpack since host memory. */
+    return UCS_OK;
+  }
+
+  rkey = ucs_malloc(sizeof(uct_bxi_rkey_t), "bxi rkey");
+  if (rkey == NULL) {
+    ucs_error("BXI: could not allocate rkey.");
+    status = UCS_ERR_NO_MEMORY;
+    goto err;
+  }
+
+  rkey->bar_ptr = *(void **)rkey_buffer;
+  rkey->vaddr = *(uint64_t *)(UCS_PTR_BYTE_OFFSET(rkey_buffer, sizeof(void *)));
+
+  *rkey_p   = (uct_rkey_t)rkey;
   *handle_p = NULL;
+
+err:
+  return status;
+}
+
+ucs_status_t uct_bxi_rkey_release(uct_component_t *component,
+                                  uct_rkey_t uct_rkey, void *handle)
+{
+  uct_bxi_rkey_t *rkey = (uct_bxi_rkey_t *)uct_rkey;
+
+  if ((void *)rkey != (void *)0xdeadbeef) {
+    ucs_free(rkey);
+  }
   return UCS_OK;
 }
 
@@ -286,6 +351,7 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
   md_attr->cache_mem_types        = UCS_MASK(UCS_MEMORY_TYPE_LAST);
   md_attr->rkey_packed_size       = 0;
   md_attr->reg_cost               = ucs_linear_func_make(9e-9, 0);
+  md_attr->rkey_packed_size       = md->rkey_size;
 
   memcpy(md_attr->global_id, md->super.component->name, component_name_length);
 
@@ -398,9 +464,11 @@ void uct_bxi_md_close(uct_md_h uct_md)
   ucs_free(md);
 }
 
-static inline void uct_bxi_md_config_init(uct_bxi_md_t              *md,
-                                          const uct_bxi_md_config_t *md_config)
+static UCS_F_ALWAYS_INLINE void
+uct_bxi_md_config_init(uct_bxi_md_t *md, const uct_bxi_md_config_t *md_config)
 {
+  // BAR address + virtual address return by gdrcopy_pin
+  md->rkey_size = sizeof(void *) + sizeof(uint64_t);
   return;
 }
 
@@ -411,7 +479,7 @@ static uct_md_ops_t uct_bxi_md_ops = {
         .mem_dereg          = uct_bxi_mem_dereg,
         .mem_attach         = ucs_empty_function_return_unsupported,
         .mem_advise         = ucs_empty_function_return_unsupported,
-        .mkey_pack          = ucs_empty_function_return_success,
+        .mkey_pack          = uct_bxi_mkey_pack,
         .detect_memory_type = ucs_empty_function_return_unsupported,
 };
 
@@ -497,7 +565,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
       goto err_freedev;
     }
 
-    //md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
+    md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
   }
 
   if (!md->gdrcpy_ctx && (md_config->enable_gpudirect_rdma == UCS_YES)) {
@@ -532,7 +600,7 @@ uct_component_t uct_bxi_component = {
         .cm_open            = ucs_empty_function_return_unsupported,
         .rkey_unpack        = uct_bxi_rkey_unpack,
         .rkey_ptr           = ucs_empty_function_return_unsupported,
-        .rkey_release       = ucs_empty_function_return_success,
+        .rkey_release       = uct_bxi_rkey_release,
         .rkey_compare       = uct_base_rkey_compare,
         .name               = "bxi",
         .md_config =

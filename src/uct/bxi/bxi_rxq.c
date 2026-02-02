@@ -135,6 +135,9 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   if (status != UCS_OK) {
     goto err;
   }
+  //NOTE: With tag-matching, pti is sent within the ptl hdr data and is
+  //      restricted to 8 bits.
+  ucs_assert(rxq->pti <= UINT8_MAX);
 
   /* No receive blocks for eager messages are requested. */
   if (params->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL) {

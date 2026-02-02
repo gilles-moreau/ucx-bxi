@@ -135,11 +135,11 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%s, type=%s, size=%lu, start=%p, pti=%d, "
+      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
                 "block=%p, nid=%d, pid=%d, match bits=%lx",
-                uct_bxi_iface_md(iface)->device, uct_bxi_event_str[ev.type],
-                ev.mlength, ev.start, ev.pt_index, ev.user_ptr,
-                ev.initiator.phys.nid, ev.initiator.phys.pid, ev.match_bits);
+                iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
+                ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
+                ev.initiator.phys.pid, ev.match_bits);
 
       block = (uct_bxi_recv_block_t *)ev.user_ptr;
 
@@ -317,7 +317,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
           UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_CONNECT_WITH_KEY;
 
   //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
   attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;
@@ -382,7 +382,7 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 
   /* Loop on operation queue and complete all flush operations: flush is 
    * completed when there are no send operation before. */
-  ucs_list_for_each_safe (op, tmp, &ep->b_ep->send_ops, elem) {
+  ucs_list_for_each_safe (op, tmp, &ep->send_ops, elem) {
     if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
       UCT_TL_EP_STAT_FLUSH(&ep->super);
       uct_bxi_iface_completion_flush_op(op);
@@ -407,7 +407,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   uct_bxi_iface_send_op_t      *op;
   int                           ret;
   ptl_event_t                   ev;
-  uct_bxi_base_ep_t            *b_ep;
+  uct_bxi_ep_t                 *ep;
   uct_pending_req_priv_queue_t *priv;
 
   while (1) {
@@ -477,10 +477,11 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
 
 out:
   /* With new credits available, dispatch pending queue. */
-  kh_foreach_value (&iface->b_eps, b_ep,
-                    { uct_pending_queue_dispatch(priv, &b_ep->pending_q, 1); })
+  ucs_list_for_each (ep, &iface->eps, elem) {
+    uct_pending_queue_dispatch(priv, &ep->pending_q, 1);
+  }
 
-    return progressed;
+  return progressed;
 }
 
 unsigned uct_bxi_iface_progress(uct_iface_t *super)
@@ -828,7 +829,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_txops;
   }
 
-  kh_init_inplace(uct_bxi_base_ep_map, &self->b_eps);
   self->num_eps = 0;
   ucs_list_head_init(&self->eps);
 
@@ -909,8 +909,7 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
-  uct_bxi_md_t      *md = uct_bxi_iface_md(self);
-  uct_bxi_base_ep_t *b_ep;
+  uct_bxi_md_t *md = uct_bxi_iface_md(self);
 
   /* Clean RDMA resources. */
   PtlMEUnlink(self->rx.rma.entry.meh);
@@ -923,10 +922,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
   uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
   PtlEQFree(self->tx.eqh);
-
-  kh_foreach_value (&self->b_eps, b_ep, { ucs_free(b_ep); })
-    ;
-  kh_destroy_inplace(uct_bxi_base_ep_map, &self->b_eps);
 
   /* Clean RX resources */
   /* Clean TAG resources if enabled. */
@@ -972,6 +967,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_fence                 = uct_bxi_ep_fence,
         .ep_check                 = uct_bxi_ep_check,
         .ep_create                = UCS_CLASS_NEW_FUNC_NAME(uct_bxi_ep_t),
+        .ep_config_key            = uct_bxi_ep_config_key,
         .ep_destroy               = UCS_CLASS_DELETE_FUNC_NAME(uct_bxi_ep_t),
         .ep_get_address           = uct_bxi_ep_get_address,
         .ep_connect_to_ep         = uct_base_ep_connect_to_ep,
