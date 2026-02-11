@@ -135,7 +135,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
                 "block=%p, nid=%d, pid=%d, match bits=%lx",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
@@ -308,7 +308,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
   //       option with MANAGE_LOCAL are not suitable has there are no way to
   //       leave space for this headroom...
-  attr->cap.tag.eager.max_zcopy = 1168;
+  attr->cap.tag.eager.max_zcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
   attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;

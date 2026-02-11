@@ -346,7 +346,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   /* Now, allocate a send descriptor and pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(
           iface, &iface->tx.send_desc_mp, op, ep, comp,
-          uct_bxi_send_op_rndv_handler, uct_bxi_pack_rndv, ptl_iov->iov_base,
+          uct_bxi_send_op_rndv_handler, uct_bxi_pack_rndv, iov->buffer,
           ptl_iov->iov_len, iov->memh, header, header_length, &size,
           status = UCS_ERR_NO_RESOURCE;
           goto err_deactivate_block);
@@ -364,12 +364,12 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   block->op      = op;
   op->rndv.block = block;
 
-  //ucs_debug("BXI: send block. start=%lu, length=%lu, send tag=0x%016lx, "
-  //          "tag=0x%016lx, nid=%u, pid=%u, op=%p, pti=%d, conn key=%d",
-  //          (uint64_t)block->start, block->size, tag, block->tag,
-  //          uct_bxi_iface_md(iface)->pid.phys.nid,
-  //          uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
-  //          ep->cnt->cid.conn_key);
+  ucs_debug("BXI: send block. start=%lu, length=%lu, send tag=0x%016lx, "
+            "tag=0x%016lx, nid=%u, pid=%u, op=%p, pti=%d, conn key=%d",
+            (uint64_t)block->start, block->size, tag, block->tag,
+            uct_bxi_iface_md(iface)->pid.phys.nid,
+            uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
+            ep->cnt->cid.conn_key);
 
   UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, ep->cnt->cid.conn_key,
                        uct_bxi_rxq_get_addr(iface->rx.ctrl.q));
@@ -515,13 +515,12 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
 
-  //ucs_debug("BXI: recv trig get. ep=%p, start=%lu, length=%lu, tag=0x%016lx, "
-  //          "nid=%u, pid=%u, pti=%d, conn_key=%d, op=%p, recv block=%p, ct "
-  //          "value=%lu, hw value=%lu",
-  //          ep, start, block->op->length, tag, ep->dev_addr.pid.phys.nid,
-  //          ep->dev_addr.pid.phys.pid, ep->iface_addr.ctrl,
-  //          ep->cnt->cid.conn_key, block->op, block, block->ct_value,
-  //          ct_value.success);
+  ucs_debug("BXI: recv trig get. ep=%p, start=%lu, length=%lu, tag=0x%016lx, "
+            "nid=%u, pid=%u, pti=%d, conn_key=%d, op=%p, recv block=%p, ct "
+            "value=%lu",
+            ep, start, block->op->length, tag, ep->dev_addr.pid.phys.nid,
+            ep->dev_addr.pid.phys.pid, ep->iface_addr.ctrl,
+            ep->cnt->cid.conn_key, block->op, block, block->ct_value);
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
