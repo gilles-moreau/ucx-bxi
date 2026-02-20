@@ -487,18 +487,24 @@ static ucs_status_t uct_bxi_set_device_syspath(uct_bxi_md_t *md)
 {
   ucs_status_t     status;
   const char      *sysfs_path;
-  char            *path_buffer;
+  char            *dev_resolved_path;
+  char            *dev_path;
   ucs_sys_device_t sys_dev;
 
-  status = ucs_string_alloc_path_buffer(&path_buffer, "path_buffer");
+  status = ucs_string_alloc_path_buffer(&dev_path, "dev_path");
   if (status != UCS_OK) {
     goto out;
   }
 
-  ucs_snprintf_safe(path_buffer, PATH_MAX, "%s/%s", UCT_BXI_MD_NETDEV_DIR,
+  status = ucs_string_alloc_path_buffer(&dev_resolved_path, "res_path");
+  if (status != UCS_OK) {
+    goto out_free_dev_path;
+  }
+
+  ucs_snprintf_safe(dev_path, PATH_MAX, "%s/%s", UCT_BXI_MD_NETDEV_DIR,
                     md->device);
 
-  sysfs_path = ucs_topo_resolve_sysfs_path(md->device, path_buffer);
+  sysfs_path = ucs_topo_resolve_sysfs_path(dev_path, dev_resolved_path);
   sys_dev    = ucs_topo_get_sysfs_dev(md->device, sysfs_path, 10);
 
   md->sys_dev = sys_dev;
