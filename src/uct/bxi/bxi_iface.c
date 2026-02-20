@@ -8,11 +8,9 @@
 
 #include <ucs/sys/math.h>
 
-#define UCT_PTL_IFACE_MAX_EPS      8192
-#define UCT_PTL_IFACE_TAG_OVERHEAD 10e-4
-#define UCT_PTL_IFACE_TAG_LATENCY  ucs_linear_func_make(800e-4, 0)
-#define UCT_PTL_IFACE_AM_OVERHEAD  10e-8
-#define UCT_PTL_IFACE_AM_LATENCY   ucs_linear_func_make(80e-8, 0)
+#define UCT_BXI_IFACE_MAX_EPS  8192
+#define UCT_BXI_IFACE_OVERHEAD 75e-9
+#define UCT_BXI_IFACE_LATENCY  ucs_linear_func_make(1000e-9, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
@@ -135,7 +133,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
                 "block=%p, nid=%d, pid=%d, match bits=%lx",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
@@ -281,10 +279,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
-  attr->latency             = UCT_PTL_IFACE_AM_LATENCY;
+  attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
-  attr->bandwidth.shared    = 100 * UCS_GBYTE;
-  attr->overhead            = UCT_PTL_IFACE_AM_OVERHEAD;
+  attr->bandwidth.shared    = 10 * UCS_GBYTE;
+  attr->overhead            = UCT_BXI_IFACE_OVERHEAD;
   attr->priority            = 1;
 
   if (!iface->tm.enabled) {
@@ -318,10 +316,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
           UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
           UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_CONNECT_WITH_KEY;
-
-  //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
-  attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;
-  attr->overhead = UCT_PTL_IFACE_TAG_OVERHEAD;
 
   return UCS_OK;
 }
@@ -417,7 +411,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, available=%lu, "
+      ucs_trace("BXI: TX event. iface=%p, type=%s, size=%lu, available=%lu, "
                 "op=%p",
                 iface, uct_bxi_event_str[ev.type], ev.mlength,
                 iface->tx.available, ev.user_ptr);

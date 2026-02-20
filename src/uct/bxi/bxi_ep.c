@@ -769,9 +769,7 @@ ucs_status_t uct_bxi_ep_check(uct_ep_h tl_ep, unsigned flags,
 ucs_status_t uct_bxi_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
                                     unsigned flags)
 {
-#ifdef ENABLE_STATS
-  uct_bxi_ep_t *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-#endif
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
 
   if (flags) {

@@ -17,16 +17,17 @@ enum {
   UCT_BXI_MEM_DESC_FLAG_ALLOCATED = UCS_BIT(1),
 };
 
-#ifdef HAVE_GDR_COPY
 /**
  * @brief bxi mem handle
  */
 typedef struct uct_bxi_mem {
-  gdr_mh_t   mh;       /**< Memory handle of GPU memory */
-  gdr_info_t info;     /**< Info of GPU memory mapping */
-  void      *bar_ptr;  /**< BAR address of GPU mapping */
-  size_t     reg_size; /**< Size of mapping */
-  size_t     offset;   /**< Offset of origin address after alignment */
+#ifdef HAVE_GDR_COPY
+  gdr_mh_t   mh;   /**< Memory handle of GPU memory */
+  gdr_info_t info; /**< Info of GPU memory mapping */
+#endif
+  void  *bar_ptr;  /**< BAR address of GPU mapping */
+  size_t reg_size; /**< Size of mapping */
+  size_t offset;   /**< Offset of origin address after alignment */
 } uct_bxi_mem_t;
 
 /**
@@ -36,7 +37,6 @@ typedef struct uct_bxi_rkey {
   uint64_t vaddr;   /**< Mapped GPU address */
   void    *bar_ptr; /**< BAR address of GPU mapping */
 } uct_bxi_rkey_t;
-#endif
 
 typedef struct uct_bxi_mem_desc_param {
   unsigned        options;

@@ -339,9 +339,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   //FIXME: especially when the target is on the same node, we must ensure the
   //       ME is linked to the NIC before sending data. Another possibility is
   //       for the target to retry the GET.
-  while (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_LINKED)) {
-    uct_bxi_iface_progress(tl_ep->iface);
-  }
+  //while (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_LINKED)) {
+  //  uct_bxi_iface_progress(tl_ep->iface);
+  //}
 
   /* Now, allocate a send descriptor and pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(

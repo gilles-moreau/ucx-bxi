@@ -149,13 +149,6 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
     goto out;
   }
 
-  //if (mem_info.type != UCS_MEMORY_TYPE_CUDA) {
-  //  ucs_error("memtype %s not supported with bxi",
-  //            ucs_memory_type_names[mem_info.type]);
-  //  status = UCS_ERR_UNSUPPORTED;
-  //  goto out;
-  //}
-
   memh = ucs_malloc(sizeof(uct_bxi_mem_t), "bxi gdr_copy handle");
   if (NULL == memh) {
     ucs_error("failed to allocate memory for uct_bxi_mem_t");
@@ -270,6 +263,7 @@ ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
                                const uct_md_mkey_pack_params_t *params,
                                void                            *buffer)
 {
+#ifdef HAVE_GDR_COPY
   uct_bxi_mem_t *memh = uct_memh;
   void          *p    = buffer;
   unsigned       flags;
@@ -291,6 +285,7 @@ ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
     *(uint64_t *)p  = memh->info.va;
   }
 
+#endif
   return UCS_OK;
 }
 
@@ -298,7 +293,8 @@ ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
                                  const void *rkey_buffer, uct_rkey_t *rkey_p,
                                  void **handle_p)
 {
-  ucs_status_t    status = UCS_OK;
+  ucs_status_t status = UCS_OK;
+#ifdef HAVE_GDR_COPY
   uct_bxi_rkey_t *rkey;
 
   if (rkey_buffer == (void *)0xdeadbeef) {
@@ -320,17 +316,22 @@ ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
   *handle_p = NULL;
 
 err:
+#else
+  *rkey_p = 0;
+#endif
   return status;
 }
 
 ucs_status_t uct_bxi_rkey_release(uct_component_t *component,
                                   uct_rkey_t uct_rkey, void *handle)
 {
+#ifdef HAVE_GDR_COPY
   uct_bxi_rkey_t *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
   if ((void *)rkey != (void *)0xdeadbeef) {
     ucs_free(rkey);
   }
+#endif
   return UCS_OK;
 }
 
@@ -509,7 +510,9 @@ static ucs_status_t uct_bxi_set_device_syspath(uct_bxi_md_t *md)
 
   md->sys_dev = sys_dev;
 
-  ucs_free(path_buffer);
+  ucs_free(dev_resolved_path);
+out_free_dev_path:
+  ucs_free(dev_path);
 out:
   return status;
 }
@@ -559,6 +562,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   }
 
   md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_HOST);
+  md->reg_cost       = UCS_LINEAR_FUNC_ZERO;
 
 #ifdef HAVE_GDR_COPY
   /* Initialize gdr context */
@@ -566,9 +570,8 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   if (md_config->enable_gpudirect_rdma != UCS_NO) {
     md->gdrcpy_ctx = gdr_open();
     if (md->gdrcpy_ctx == NULL) {
-      ucs_error("failed to open gdr copy");
-      status = UCS_ERR_IO_ERROR;
-      goto err_freedev;
+      ucs_diag("failed to open gdr copy");
+      goto out_no_gpu_support;
     }
 
     md->reg_mem_types |= UCS_BIT(UCS_MEMORY_TYPE_CUDA);
@@ -580,9 +583,12 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
     status = UCS_ERR_UNSUPPORTED;
     goto err_freedev;
   }
+
+  md->reg_cost = ucs_linear_func_make(16e-6, 0.06e-9);
+
+out_no_gpu_support:
 #endif
 
-  md->reg_cost        = UCS_LINEAR_FUNC_ZERO;
   md->super.ops       = &uct_bxi_md_ops;
   md->super.component = component;
 
