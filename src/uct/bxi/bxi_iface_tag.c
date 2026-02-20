@@ -160,8 +160,10 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
   } else {
 
     if (uct_bxi_iface_is_rndv_sw(ev->hdr_data)) {
-      /* UCP will proceed with a normal software rendez-vous protocol. */
-      block->ctx->rndv_cb(block->ctx, ev->match_bits, ev->start, ev->mlength,
+      /* UCP will proceed with a normal software rendez-vous protocol. UCP 
+       * requires original address, in case of GPU memory it differs from 
+       * ev->start since we use the mapped by gdrcopy. */
+      block->ctx->rndv_cb(block->ctx, ev->match_bits, block->orig, ev->mlength,
                           UCS_OK, 0);
 
     } else {

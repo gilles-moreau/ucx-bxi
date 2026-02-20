@@ -647,10 +647,12 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->handler  = _handler;                                                \
   (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 
-#define UCT_BXI_IFACE_GET_RX_DESC(_iface, _mp, _desc, _mem_type, _start,       \
-                                  _size, _tag, _ctx, _handler, _err_code)      \
+#define UCT_BXI_IFACE_GET_RX_DESC(_iface, _mp, _desc, _mem_type, _orig,        \
+                                  _start, _size, _tag, _ctx, _handler,         \
+                                  _err_code)                                   \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
   (_desc)->start     = _start;                                                 \
+  (_desc)->orig      = _orig;                                                  \
   (_desc)->size      = _size;                                                  \
   (_desc)->tag       = _tag;                                                   \
   (_desc)->ctx       = _ctx;                                                   \

@@ -557,7 +557,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   //      the ptl_iov. Block buffer is thus set using iov->buffer instead of
   //      ptl_iov.
   UCT_BXI_IFACE_GET_RX_DESC(iface, &iface->tm.recv_block_mp, block,
-                            uct_bxi_get_memory_type(iov->memh),
+                            uct_bxi_get_memory_type(iov->memh), iov->buffer,
                             ptl_iov->iov_base, ptl_iov->iov_len, tag, ctx,
                             uct_bxi_iface_block_handle_tag_exp,
                             status = UCS_ERR_EXCEEDS_LIMIT;

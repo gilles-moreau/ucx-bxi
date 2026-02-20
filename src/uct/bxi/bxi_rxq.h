@@ -33,7 +33,9 @@ typedef struct uct_bxi_recv_block_params {
 
 typedef struct uct_bxi_recv_block {
   unsigned              flags;
-  void                 *start;       /* Address of the receive block */
+  const void           *orig;        /* Original address, GPU address */
+  void                 *start;       /* Address of the receive block, may be 
+                                        GDR mapped address for GPU mem */
   ssize_t               size;        /* Size of the receive block */
   size_t                send_size;   /* Actual size sent on the receive block */
   size_t                eager_limit; /* Cached eager limit for easy access 
