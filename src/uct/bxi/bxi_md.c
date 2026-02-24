@@ -452,9 +452,11 @@ void uct_bxi_md_close(uct_md_h uct_md)
 
 #ifdef HAVE_GDR_COPY
   int ret;
-  ret = gdr_close(md->gdrcpy_ctx);
-  if (ret) {
-    ucs_warn("failed to close gdrcopy. ret:%d", ret);
+  if (md->gdrcpy_ctx != NULL) {
+    ret = gdr_close(md->gdrcpy_ctx);
+    if (ret) {
+      ucs_warn("failed to close gdrcopy. ret:%d", ret);
+    }
   }
 #endif
 
