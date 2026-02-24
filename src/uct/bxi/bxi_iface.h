@@ -310,7 +310,6 @@ uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   int ret;
 
-  return UCS_OK;
   /* Dot not add NULL buffer. */
   if (buffer == NULL) {
     return UCS_OK;
@@ -331,7 +330,6 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 {
   khiter_t iter;
 
-  return;
   if (buffer == NULL) {
     return;
   }
