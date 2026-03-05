@@ -21,6 +21,7 @@
 #include <string.h>
 
 #define UCT_BXI_MD_NETDEV_DIR "/sys/class/bxi"
+#define UCT_BXI3_MD_NETDEV_DIR "/sys/class/bxi3"
 
 ucs_config_field_t uct_bxi_md_config_table[] = {
         {"", "", NULL, ucs_offsetof(uct_bxi_md_config_t, super),
@@ -360,7 +361,7 @@ static inline ptl_interface_t uct_bxi_parse_device(const char *ptl_device)
     // Device name from simulator, thus return 0
     iface = 0;
   } else {
-    sscanf(ptl_device + 3, "%d", &iface);
+    sscanf(ptl_device + 3, "%hhd", &iface);
   }
   return iface;
 }
@@ -370,7 +371,8 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         unsigned *num_resources_p)
 {
   ucs_status_t       status     = UCS_OK;
-  static const char *bxi_dir[2] = {UCT_BXI_MD_NETDEV_DIR, "/sys/class/net"};
+  static const char *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR, UCT_BXI3_MD_NETDEV_DIR, 
+	                           "/sys/class/net"};
   uct_md_resource_desc_t *resources;
   int                     i = 0;
   int                     is_up;
@@ -429,7 +431,7 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
 
   close_dir:
     closedir(dir);
-  } while (num_devices == 0 && ++i < 2);
+  } while (num_devices == 0 && ++i < 3);
 
   *resources_p     = resources;
   *num_resources_p = num_devices;

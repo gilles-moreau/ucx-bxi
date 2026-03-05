@@ -865,10 +865,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
 
-  ucs_debug("BXI: interface info. nih=%p, nid=%d, pid=%d, eqh=%p",
-            uct_bxi_iface_md(self)->nih.handle,
+  ucs_debug("BXI: interface info. nid=%d, pid=%d",
             uct_bxi_iface_md(self)->pid.phys.nid,
-            uct_bxi_iface_md(self)->pid.phys.pid, self->rx.eqh.handle);
+            uct_bxi_iface_md(self)->pid.phys.pid);
 
   ucs_debug("BXI: interface pti. pti am=%d, pti tag=%d, pti rma=%d, "
             "pti ctrl=%d, eager size=%lu",
