@@ -74,6 +74,7 @@ static ucs_status_t uct_bxi_rxq_recv_blocks_enable(uct_bxi_rxq_t *rxq)
     }
 
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
+    ucs_list_add_head(&rxq->bhead, &block->c_elem);
   }
 
 err:
@@ -99,7 +100,7 @@ static void uct_bxi_rxq_block_cleanup(ucs_mpool_t *mp, void *obj)
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
 
   uct_bxi_recv_block_deactivate(block);
-  uct_bxi_recv_block_release(block);
+  //uct_bxi_recv_block_release(block);
 }
 
 static ucs_mpool_ops_t uct_bxi_rxq_mpool_ops = {
@@ -200,7 +201,18 @@ err:
 
 void uct_bxi_rxq_fini(uct_bxi_rxq_t *rxq)
 {
+  uct_bxi_recv_block_t *block, *tmp;
+
+  //FIXME: refacto. In order for the block to be cleaned up during
+  //       mpool cleanup, element have to be put back to memory
+  //       pool. uct_bxi_recv_block_release may be used both for
+  //       expected block in tag matching and during mpool element
+  //       cleanup which was conflicting.
   if (!(rxq->flags & UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL)) {
+    ucs_list_for_each_safe (block, tmp, &rxq->bhead, c_elem) {
+      ucs_list_del(&block->c_elem);
+      ucs_mpool_put(block);
+    }
     //NOTE: no need to check for leaks since the pool is static.
     ucs_mpool_cleanup(&rxq->mp, 0);
   }
