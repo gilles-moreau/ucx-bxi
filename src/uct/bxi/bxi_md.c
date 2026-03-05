@@ -122,15 +122,16 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
                              const uct_md_mem_reg_params_t *params,
                              uct_mem_h                     *memh_p)
 {
-  ucs_status_t status = UCS_OK;
-#ifdef HAVE_GDR_COPY
-  uct_bxi_md_t     *md = ucs_derived_of(uct_md, uct_bxi_md_t);
+  ucs_status_t      status = UCS_OK;
   ucs_memory_info_t mem_info;
-  void             *reg_address;
-  size_t            reg_length;
-  uct_bxi_mem_t    *memh;
-  unsigned long     d_ptr;
-  int               ret;
+#ifdef HAVE_GDR_COPY
+  uct_bxi_md_t  *md = ucs_derived_of(uct_md, uct_bxi_md_t);
+  void          *reg_address;
+  size_t         reg_length;
+  uct_bxi_mem_t *memh;
+  unsigned long  d_ptr;
+  int            ret;
+#endif
 
   status = ucs_memtype_cache_lookup(address, length, &mem_info);
   //NOTE: mem_info.type is usually resolved through the UCP path. However, for
@@ -149,6 +150,7 @@ ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
     goto out;
   }
 
+#ifdef HAVE_GDR_COPY
   memh = ucs_malloc(sizeof(uct_bxi_mem_t), "bxi gdr_copy handle");
   if (NULL == memh) {
     ucs_error("failed to allocate memory for uct_bxi_mem_t");
@@ -263,7 +265,6 @@ ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
                                const uct_md_mkey_pack_params_t *params,
                                void                            *buffer)
 {
-#ifdef HAVE_GDR_COPY
   uct_bxi_mem_t *memh = uct_memh;
   void          *p    = buffer;
   unsigned       flags;
@@ -280,12 +281,13 @@ ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
   } else {
     /* Necessary data are: BAR pointer gotten after gdrcopy mapping and actual 
      * virtual address. */
-    *(void **)p     = memh->bar_ptr;
-    p              += sizeof(void *);
-    *(uint64_t *)p  = memh->info.va;
+    *(void **)p  = memh->bar_ptr;
+    p           += sizeof(void *);
+#ifdef HAVE_GDR_COPY
+    *(uint64_t *)p = memh->info.va;
+#endif
   }
 
-#endif
   return UCS_OK;
 }
 
@@ -293,14 +295,8 @@ ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
                                  const void *rkey_buffer, uct_rkey_t *rkey_p,
                                  void **handle_p)
 {
-  ucs_status_t status = UCS_OK;
-#ifdef HAVE_GDR_COPY
+  ucs_status_t    status = UCS_OK;
   uct_bxi_rkey_t *rkey;
-
-  if (rkey_buffer == (void *)0xdeadbeef) {
-    /* Nothing to unpack since host memory. */
-    return UCS_OK;
-  }
 
   rkey = ucs_malloc(sizeof(uct_bxi_rkey_t), "bxi rkey");
   if (rkey == NULL) {
@@ -315,23 +311,19 @@ ucs_status_t uct_bxi_rkey_unpack(uct_component_t *component,
   *rkey_p   = (uct_rkey_t)rkey;
   *handle_p = NULL;
 
+  return status;
+
 err:
-#else
   *rkey_p = 0;
-#endif
   return status;
 }
 
 ucs_status_t uct_bxi_rkey_release(uct_component_t *component,
                                   uct_rkey_t uct_rkey, void *handle)
 {
-#ifdef HAVE_GDR_COPY
   uct_bxi_rkey_t *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
-  if ((void *)rkey != (void *)0xdeadbeef) {
-    ucs_free(rkey);
-  }
-#endif
+  ucs_free(rkey);
   return UCS_OK;
 }
 
