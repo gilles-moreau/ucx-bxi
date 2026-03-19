@@ -430,11 +430,12 @@ typedef enum uct_atomic_op {
                                                        are no outstanding send operations */
 
         /* Tag matching operations */
-#define UCT_IFACE_FLAG_TAG_EAGER_SHORT UCS_BIT(50) /**< Hardware tag matching short eager support */
-#define UCT_IFACE_FLAG_TAG_EAGER_BCOPY UCS_BIT(51) /**< Hardware tag matching bcopy eager support */
-#define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
-#define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY  UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
-#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP  UCS_BIT(54) /**< Hardware tag matching operation offload support */
+#define UCT_IFACE_FLAG_TAG_EAGER_SHORT  UCS_BIT(50) /**< Hardware tag matching short eager support */
+#define UCT_IFACE_FLAG_TAG_EAGER_BCOPY  UCS_BIT(51) /**< Hardware tag matching bcopy eager support */
+#define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY  UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
+#define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY   UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
+#define UCT_IFACE_FLAG_TAG_OFFLOAD_OP   UCS_BIT(54) /**< Hardware tag matching operation offload support */
+#define UCT_IFACE_FLAG_CONNECT_WITH_KEY UCS_BIT(55) /**< Supports connecting endpoint with key */
 
         /* Interface capability */
 #define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(57) /**< Interface is inter-node capable */
@@ -1000,7 +1001,10 @@ enum uct_ep_params_field {
     UCT_EP_PARAM_FIELD_PRIV_DATA_LENGTH           = UCS_BIT(15),
 
     /** Enables @ref uct_ep_params::local_sockaddr */
-    UCT_EP_PARAM_FIELD_LOCAL_SOCKADDR             = UCS_BIT(16)
+    UCT_EP_PARAM_FIELD_LOCAL_SOCKADDR             = UCS_BIT(16),
+
+    /** Enables @ref uct_ep_params::conn_key */
+    UCT_EP_PARAM_FIELD_CONN_KEY                   = UCS_BIT(17),
 };
 
 
@@ -2404,6 +2408,21 @@ ucs_status_t uct_iface_reject(uct_iface_h iface,
  */
 ucs_status_t uct_ep_create(const uct_ep_params_t *params, uct_ep_h *ep_p);
 
+/**
+ * @ingroup UCT_RESOURCE
+ * @brief Associate a connection key to the endpoint.
+ *
+ * Connection key may be used internally to implement particular communication 
+ * patterns. 
+ * @note: it is used in the context of BXI for the implementation of the offloaded 
+ * rendezvous.
+ * @param [in] ep        Endpoint handle.
+ * @param [in] conn_key  Configuration key. 
+ *
+ * @return UCS_OK        Connection key associated successfully to endpoint. 
+ * @return               Error code as defined by @ref ucs_status_t
+ */
+ucs_status_t uct_ep_config_key(uct_ep_h ep, uct_ep_conn_key_t conn_key);
 
 /**
  * @ingroup UCT_CLIENT_SERVER
@@ -3666,7 +3685,7 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
  */
 UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
 {
-    return iface->ops.iface_tag_sched_disable(iface);
+    iface->ops.iface_tag_sched_disable(iface);
 }
 
 /**

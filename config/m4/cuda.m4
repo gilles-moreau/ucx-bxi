@@ -77,9 +77,13 @@ AS_IF([test "x$cuda_checked" != "xyes"],
                               have_cuda_static="yes"],
                              [], [-ldl -lrt -lpthread])])
 
-         AC_CHECK_DECLS([CU_MEM_HANDLE_TYPE_FABRIC],
-                        [AC_DEFINE([HAVE_CUDA_FABRIC], 1, [Enable CUDA fabric handle support])],
-                        [], [[#include <cuda.h>]])
+         #TODO: although declared in cuda 12.4 header, the functionnality is not supported on a100 and gh 
+         #      architecture on CEA INTI. 
+         #      Check https://forums.developer.nvidia.com/t/cudevicegetattribute-shows-i-can-use-fabric-handle-but-actually-i-cannot/336426/6 
+         #      for requirements.
+         #AC_CHECK_DECLS([CU_MEM_HANDLE_TYPE_FABRIC],
+         #               [AC_DEFINE([HAVE_CUDA_FABRIC], 1, [Enable CUDA fabric handle support])],
+         #               [], [[#include <cuda.h>]])
 
          AC_PATH_PROGS(NVCC, nvcc, "", $CUDA_BIN_PATH:$PATH)
 

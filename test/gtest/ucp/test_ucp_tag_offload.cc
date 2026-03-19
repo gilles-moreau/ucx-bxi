@@ -515,6 +515,105 @@ UCS_TEST_P(test_ucp_tag_offload, rndv_recv_matched_cancel)
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_offload)
 
+class test_ucp_tag_conn_key : public test_ucp_tag_offload {
+public:
+
+    static void get_test_variants(std::vector<ucp_test_variant> &variants)
+    {
+        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+                           VARIANT_OFFLOAD_RECVEP, "reply_ep");
+    }
+
+    void init()
+    {
+        ucp_test::init();
+
+        ctx_attr.field_mask = 0;
+        ctx_attr.field_mask |= UCP_ATTR_FIELD_REQUEST_SIZE;
+        ctx_attr.field_mask |= UCP_ATTR_FIELD_THREAD_MODE;
+        ucp_context_query(receiver().ucph(), &ctx_attr);
+
+        ucp::dt_gen_start_count  = 0;
+        ucp::dt_gen_finish_count = 0;
+    }
+
+};
+
+// Test that create a number of endpoint that connects between 
+// each other using the connection key. The connection key is 
+// used during rendezvous.
+UCS_TEST_P(test_ucp_tag_conn_key, multi_ep_rndv_2sided)
+{
+    const unsigned num_eps = 10;
+    const unsigned count = 10;
+    const ucp_tag_t tag = 0x11;
+    size_t length;
+    ucp_ep_attr_t attr;
+    ucp_request_param_t param = {};
+
+    ucs_assert(need_reply_ep());
+
+    /* Initialize endpoint parameters to use the connection key. */
+    ucp_ep_params_t send_ep_params = get_ep_params();
+    send_ep_params.field_mask |= UCP_EP_PARAM_FIELD_FLAGS;
+    send_ep_params.flags = UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY;
+
+    ucp_ep_params_t recv_ep_params = get_ep_params();
+    recv_ep_params.field_mask |= UCP_EP_PARAM_FIELD_CONN_KEY;
+
+    for (unsigned j = 0; j < 4; ++j) {
+
+        unsigned offset = j * num_eps;
+
+        for (unsigned i = 0; i < num_eps; ++i) {
+            unsigned ep_idx = offset + i;
+            sender().connect(&receiver(), send_ep_params, ep_idx);
+            check_offload_support(true);
+
+            /* Query connection key. */
+            attr.field_mask = UCP_EP_ATTR_FIELD_CONN_KEY;
+            ucp_ep_query(sender().ep(0, ep_idx), &attr);
+
+            /* Connect receive side with connection key. */
+            recv_ep_params.conn_key = attr.conn_key;
+            receiver().connect(&sender(), recv_ep_params, ep_idx);
+
+            /* Force a first message to be sent to activate the tag interface. 
+             * Use this length to activate it also in the case of multiple ifaces.*/
+            send_recv(sender(), tag, sender().ucph()->config.ext.tm_thresh + 1);
+
+            UCS_TEST_MESSAGE << "iteration " << j << " pair " << i << ": " <<
+                            sender().ep(0, ep_idx) << " <--> " << receiver().ep(0, ep_idx);
+        }
+
+        length = ucp_ep_config(sender().ep(0, 0))->tag.eager.max_bcopy + 1;
+
+        for (unsigned i = 0; i < num_eps; ++i) {
+            unsigned ep_idx = offset + i;
+
+            std::vector<uint8_t> sendbuf(length);
+            std::vector<uint8_t> recvbuf(length);
+
+            param.op_attr_mask = UCP_OP_ATTR_FIELD_EPH;
+            param.reply_ep = receiver().ep(0, ep_idx);
+
+            for (unsigned k = 0; k < count ; k++) {
+                /* Perform expected receive. */
+                ucs_status_ptr_t rreq = ucp_tag_recv_nbx(receiver().worker(), recvbuf.data(),
+                                                         length, tag, 0xffff, &param);
+
+                ucs_status_ptr_t sreq = ucp_tag_send_nbx(sender().ep(0, ep_idx), sendbuf.data(),
+                                                         sendbuf.size(), tag, &param);
+
+                request_wait(sreq);
+                request_wait(rreq);
+            }
+        }
+    }
+}
+
+UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_conn_key)
+
 class test_ucp_tag_sched : public test_ucp_tag_offload {
 private:
     bool disable_proto() const
