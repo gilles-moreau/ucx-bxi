@@ -25,6 +25,8 @@
 
 #define UCP_MAX_IOV                16UL
 
+#define UCP_EP_CONN_KEY_NULL       ((ucp_ep_conn_key_t)-1)
+
 
 /* Endpoint flags type */
 #if ENABLE_DEBUG_DATA || UCS_ENABLE_ASSERT
@@ -166,8 +168,9 @@ enum {
     UCP_EP_INIT_CREATE_AM_LANE_ONLY    = UCS_BIT(8),  /**< Endpoint requires an AM lane only */
     UCP_EP_INIT_KA_FROM_EXIST_LANES    = UCS_BIT(9),  /**< Use only existing lanes to create
                                                            keepalive lane */
-    UCP_EP_INIT_ALLOW_AM_AUX_TL        = UCS_BIT(10)  /**< Endpoint allows selecting of auxiliary
+    UCP_EP_INIT_ALLOW_AM_AUX_TL        = UCS_BIT(10), /**< Endpoint allows selecting of auxiliary
                                                            transports for AM lane */
+    UCP_EP_INIT_CREATE_CONN_KEY        = UCS_BIT(11), /**< Endpoint creates a connection key */
 };
 
 
@@ -562,6 +565,7 @@ typedef struct ucp_ep {
     uint8_t                       refcount;      /* Reference counter: 0 - it is
                                                     allowed to destroy EP */
     ucp_worker_cfg_index_t        cfg_index;     /* Configuration index */
+    ucp_ep_conn_key_t             conn_key;      /* Connection key */
     ucp_ep_match_conn_sn_t        conn_sn;       /* Sequence number for remote connection */
     ucp_lane_index_t              am_lane;       /* Cached value */
     ucp_ep_flags_t                flags;         /* Endpoint flags */

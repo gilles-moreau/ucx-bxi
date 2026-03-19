@@ -264,7 +264,9 @@ enum ucp_ep_params_field {
     /**< Connection request field */
     UCP_EP_PARAM_FIELD_CONN_REQUEST      = UCS_BIT(6),
     UCP_EP_PARAM_FIELD_NAME              = UCS_BIT(7), /**< Endpoint name */
-    UCP_EP_PARAM_FIELD_LOCAL_SOCK_ADDR   = UCS_BIT(8)  /**< Local socket Address */
+    UCP_EP_PARAM_FIELD_LOCAL_SOCK_ADDR   = UCS_BIT(8), /**< Local socket Address */
+    /**< Endpoint Connection field */
+    UCP_EP_PARAM_FIELD_CONN_KEY          = UCS_BIT(9)  /**< Endpoint Connection */
 };
 
 
@@ -276,31 +278,35 @@ enum ucp_ep_params_field {
  * @ref ucp_ep_create() function.
  */
 enum ucp_ep_params_flags_field {
-    UCP_EP_PARAMS_FLAGS_CLIENT_SERVER  = UCS_BIT(0),  /**< Using a client-server
-                                                           connection establishment
-                                                           mechanism.
-                                                           @ref ucs_sock_addr_t
-                                                           sockaddr field
-                                                           must be provided and
-                                                           contain the address
-                                                           of the remote peer */
-    UCP_EP_PARAMS_FLAGS_NO_LOOPBACK    = UCS_BIT(1),  /**< Avoid connecting the
-                                                           endpoint to itself when
-                                                           connecting the endpoint
-                                                           to the same worker it
-                                                           was created on.
-                                                           Affects protocols which
-                                                           send to a particular
-                                                           remote endpoint, for
-                                                           example stream */
-    UCP_EP_PARAMS_FLAGS_SEND_CLIENT_ID = UCS_BIT(2)   /**< Send client id
-                                                           when connecting to remote
-                                                           socket address as part of the
-                                                           connection request payload.
-                                                           On the remote side value
-                                                           can be obtained from
-                                                           @ref ucp_conn_request_h using
-                                                           @ref ucp_conn_request_query */
+    UCP_EP_PARAMS_FLAGS_CLIENT_SERVER   = UCS_BIT(0),  /**< Using a client-server
+                                                            connection establishment
+                                                            mechanism.
+                                                            @ref ucs_sock_addr_t
+                                                            sockaddr field
+                                                            must be provided and
+                                                            contain the address
+                                                            of the remote peer */
+    UCP_EP_PARAMS_FLAGS_NO_LOOPBACK     = UCS_BIT(1),  /**< Avoid connecting the
+                                                            endpoint to itself when
+                                                            connecting the endpoint
+                                                            to the same worker it
+                                                            was created on.
+                                                            Affects protocols which
+                                                            send to a particular
+                                                            remote endpoint, for
+                                                            example stream */
+    UCP_EP_PARAMS_FLAGS_SEND_CLIENT_ID  = UCS_BIT(2),  /**< Send client id
+                                                            when connecting to remote
+                                                            socket address as part of the
+                                                            connection request payload.
+                                                            On the remote side value
+                                                            can be obtained from
+                                                            @ref ucp_conn_request_h using
+                                                            @ref ucp_conn_request_query */
+    UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY = UCS_BIT(3)   /**< Create connection key which can 
+                                                            then be queried through 
+                                                            @ref ucp_ep_query and 
+                                                            @ref UCP_EP_ATTR_FIELD_CONN_KEY */
 };
 
 
@@ -4116,7 +4122,8 @@ enum ucp_ep_attr_field {
     UCP_EP_ATTR_FIELD_LOCAL_SOCKADDR  = UCS_BIT(1), /**< Sockaddr used by the endpoint */
     UCP_EP_ATTR_FIELD_REMOTE_SOCKADDR = UCS_BIT(2), /**< Sockaddr the endpoint is connected to */
     UCP_EP_ATTR_FIELD_TRANSPORTS      = UCS_BIT(3), /**< Transport and device used by endpoint */
-    UCP_EP_ATTR_FIELD_USER_DATA       = UCS_BIT(4)  /**< User data associated with the endpoint */
+    UCP_EP_ATTR_FIELD_USER_DATA       = UCS_BIT(4), /**< User data associated with the endpoint */
+    UCP_EP_ATTR_FIELD_CONN_KEY        = UCS_BIT(5)  /**< Unique endpoint connection key */
 };
 
 
@@ -4141,6 +4148,12 @@ typedef struct ucp_ep_attr {
      * this name.
      */
     char     name[UCP_ENTITY_NAME_MAX];
+
+    /**
+     * Endpoint connection key. May be sent out-of-band and used to create endpoint 
+     * to endpoint connection.
+     */
+    ucp_ep_conn_key_t       conn_key;
 
     /**
      * Local socket address for this endpoint. Valid only for endpoints created

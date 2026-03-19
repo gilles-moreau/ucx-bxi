@@ -54,6 +54,7 @@ AS_IF([test "x$with_gdrcopy" != "xno"],
                 AS_IF([test ! -z "$ucx_check_gdrcopy_libdir"],
                     gdr_copy_ldflags="-L$ucx_check_gdrcopy_libdir")
                 AC_SUBST(GDR_COPY_LDFLAGS, "$gdr_copy_ldflags")
+                AC_DEFINE([HAVE_GDR_COPY], 1, [gdrcopy available])
             ],
             [
                 AS_IF([test "x$with_gdrcopy" != "xguess"],

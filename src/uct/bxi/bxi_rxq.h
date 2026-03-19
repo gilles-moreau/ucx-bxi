@@ -1,8 +1,8 @@
 #ifndef BXI_RQ_H
 #define BXI_RQ_H
 
+#include "bxi.h"
 #include <uct/base/uct_iface.h>
-#include <uct/bxi/bxi.h>
 
 typedef struct uct_bxi_rxq        uct_bxi_rxq_t;
 typedef struct uct_bxi_op_ctx     uct_bxi_op_ctx_t;
@@ -17,6 +17,8 @@ enum {
   UCT_BXI_RECV_BLOCK_FLAG_RNDV            = UCS_BIT(1),
   UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED  = UCS_BIT(2),
   UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(3),
+  UCT_BXI_RECV_BLOCK_FLAG_LINKED          = UCS_BIT(4),
+  UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED     = UCS_BIT(5),
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -31,7 +33,9 @@ typedef struct uct_bxi_recv_block_params {
 
 typedef struct uct_bxi_recv_block {
   unsigned              flags;
-  void                 *start;       /* Address of the receive block */
+  const void           *orig;        /* Original address, GPU address */
+  void                 *start;       /* Address of the receive block, may be 
+                                        GDR mapped address for GPU mem */
   ssize_t               size;        /* Size of the receive block */
   size_t                send_size;   /* Actual size sent on the receive block */
   size_t                eager_limit; /* Cached eager limit for easy access 
@@ -40,7 +44,8 @@ typedef struct uct_bxi_recv_block {
   ucs_list_link_t       c_elem;      /* Element in the cancel list */
   uct_tag_t             tag;         /* Needed in case block is cancelled */
   uct_tag_t             stag;        /* Send tag */
-  ptl_list_t            list;
+  ucs_memory_type_t     mem_type;    /* Memory type of the buffer */
+  ptl_list_t            list;     /* PTL_OVERFLOW_LIST or PTL_PRIORITY_LIST */
   uct_bxi_block_handler handler;  /* Receive block handler on event */
   uct_tag_context_t    *ctx;      /* Tag context provided by upper layer */
   ptl_handle_me_t       meh;      /* Memory Entry handle */

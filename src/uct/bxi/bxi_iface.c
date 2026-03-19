@@ -8,11 +8,9 @@
 
 #include <ucs/sys/math.h>
 
-#define UCT_PTL_IFACE_MAX_EPS      8192
-#define UCT_PTL_IFACE_TAG_OVERHEAD 10e-4
-#define UCT_PTL_IFACE_TAG_LATENCY  ucs_linear_func_make(800e-4, 0)
-#define UCT_PTL_IFACE_AM_OVERHEAD  10e-8
-#define UCT_PTL_IFACE_AM_LATENCY   ucs_linear_func_make(80e-8, 0)
+#define UCT_BXI_IFACE_MAX_EPS  8192
+#define UCT_BXI_IFACE_OVERHEAD 75e-9
+#define UCT_BXI_IFACE_LATENCY  ucs_linear_func_make(1000e-9, 0)
 
 static uct_iface_ops_t     uct_bxi_iface_tl_ops;
 static uct_bxi_iface_ops_t uct_bxi_iface_ops;
@@ -135,11 +133,11 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
-                "block=%p, nid=%d, pid=%d",
+      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+                "block=%p, nid=%d, pid=%d, match bits=%lx",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
-                ev.initiator.phys.pid);
+                ev.initiator.phys.pid, ev.match_bits);
 
       block = (uct_bxi_recv_block_t *)ev.user_ptr;
 
@@ -165,6 +163,9 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
         goto out;
         break;
       case PTL_EVENT_LINK:
+        block->flags |= UCT_BXI_RECV_BLOCK_FLAG_LINKED;
+        goto out;
+        break;
       case PTL_EVENT_GET_OVERFLOW:
       case PTL_EVENT_ACK:
       case PTL_EVENT_REPLY:
@@ -278,10 +279,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
-  attr->latency             = UCT_PTL_IFACE_AM_LATENCY;
+  attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
-  attr->bandwidth.shared    = 100 * UCS_GBYTE;
-  attr->overhead            = UCT_PTL_IFACE_AM_OVERHEAD;
+  attr->bandwidth.shared    = 10 * UCS_GBYTE;
+  attr->overhead            = UCT_BXI_IFACE_OVERHEAD;
   attr->priority            = 1;
 
   if (!iface->tm.enabled) {
@@ -305,7 +306,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
   //       option with MANAGE_LOCAL are not suitable has there are no way to
   //       leave space for this headroom...
-  attr->cap.tag.eager.max_zcopy = 1168;
+  attr->cap.tag.eager.max_zcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
   attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;
@@ -314,11 +315,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
           UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
-
-  //NOTE: overwrite iface perf value to enforce hw rndv protocols until max_recv
-  attr->latency  = UCT_PTL_IFACE_TAG_LATENCY;
-  attr->overhead = UCT_PTL_IFACE_TAG_OVERHEAD;
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_CONNECT_WITH_KEY;
 
   return UCS_OK;
 }
@@ -414,7 +411,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: TX event. iface=%p, type=%s, size=%lu, available=%lu, "
+      ucs_trace("BXI: TX event. iface=%p, type=%s, size=%lu, available=%lu, "
                 "op=%p",
                 iface, uct_bxi_event_str[ev.type], ev.mlength,
                 iface->tx.available, ev.user_ptr);
@@ -473,8 +470,8 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   }
 
 out:
+  /* With new credits available, dispatch pending queue. */
   ucs_list_for_each (ep, &iface->eps, elem) {
-    /* With new credits available, dispatch pending queue. */
     uct_pending_queue_dispatch(priv, &ep->pending_q, 1);
   }
 
@@ -550,13 +547,8 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
 {
   uct_bxi_md_t *md = ucs_derived_of(uct_md, uct_bxi_md_t);
   return uct_single_device_resource(uct_md, md->device, UCT_DEVICE_TYPE_NET,
-                                    UCS_SYS_DEVICE_ID_UNKNOWN, tl_devices_p,
+                                    md->sys_dev, tl_devices_p,
                                     num_tl_devices_p);
-}
-
-ucs_status_t uct_bxi_iface_add_ep(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
-{
-  return UCS_OK;
 }
 
 static UCS_F_ALWAYS_INLINE size_t uct_bxi_iface_hdr_size(size_t max_inline,
@@ -589,10 +581,9 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
   //TODO: implement support for scatter buffer.
-  iface->config.max_iovecs   = 1;
-  iface->config.max_msg_size = md->config.limits.max_msg_size;
-  iface->config.max_inline   = uct_bxi_iface_hdr_size(
-          md->config.limits.max_volatile_size, sizeof(uint64_t));
+  iface->config.max_iovecs       = 1;
+  iface->config.max_msg_size     = md->config.limits.max_msg_size;
+  iface->config.max_inline       = md->config.limits.max_volatile_size;
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
@@ -830,7 +821,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   if (status != UCS_OK) {
     goto err_clean_txops;
   }
-  ucs_queue_head_init(&self->tx.pending_q);
+
+  self->num_eps = 0;
+  ucs_list_head_init(&self->eps);
 
   /* Initialize available send credits. */
   uct_bxi_iface_available_set(self, self->config.tx.max_queue_len);
@@ -861,10 +854,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   if (status != UCS_OK) {
     goto err_clean_rmapti;
   }
-
-  /* Initialize table of endpoints. */
-  ucs_list_head_init(&self->eps);
-  self->num_eps = 0;
 
   /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
    * hash table uses ptl_process_t supposing it is 8 bytes. */
@@ -971,6 +960,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_fence                 = uct_bxi_ep_fence,
         .ep_check                 = uct_bxi_ep_check,
         .ep_create                = UCS_CLASS_NEW_FUNC_NAME(uct_bxi_ep_t),
+        .ep_config_key            = uct_bxi_ep_config_key,
         .ep_destroy               = UCS_CLASS_DELETE_FUNC_NAME(uct_bxi_ep_t),
         .ep_get_address           = uct_bxi_ep_get_address,
         .ep_connect_to_ep         = uct_base_ep_connect_to_ep,

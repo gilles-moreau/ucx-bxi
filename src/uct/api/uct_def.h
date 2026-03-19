@@ -28,6 +28,7 @@
 #define UCT_INVALID_RKEY           ((uintptr_t)(-1))
 #define UCT_INLINE_API             static UCS_F_ALWAYS_INLINE
 #define UCT_DMABUF_FD_INVALID      -1
+#define UCT_EP_CONN_KEY_NULL       ((uct_ep_conn_key_t)(-1))
 
 
 /**
@@ -102,6 +103,7 @@ typedef struct uct_iface_addr        uct_iface_addr_t;
 typedef struct uct_ep_addr           uct_ep_addr_t;
 typedef struct uct_ep_params         uct_ep_params_t;
 typedef struct uct_ep_connect_params uct_ep_connect_params_t;
+typedef uint32_t                     uct_ep_conn_key_t;
 typedef struct uct_cm_attr           uct_cm_attr_t;
 typedef struct uct_cm                uct_cm_t;
 typedef uct_cm_t                     *uct_cm_h;
