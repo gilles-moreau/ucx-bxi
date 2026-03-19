@@ -581,10 +581,9 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
 
   //TODO: implement support for scatter buffer.
-  iface->config.max_iovecs   = 1;
-  iface->config.max_msg_size = md->config.limits.max_msg_size;
-  iface->config.max_inline   = uct_bxi_iface_hdr_size(
-          md->config.limits.max_volatile_size, sizeof(uint64_t));
+  iface->config.max_iovecs       = 1;
+  iface->config.max_msg_size     = md->config.limits.max_msg_size;
+  iface->config.max_inline       = md->config.limits.max_volatile_size;
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);

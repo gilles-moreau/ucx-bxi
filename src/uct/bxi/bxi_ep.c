@@ -62,48 +62,7 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
-  ucs_status_t     status = UCS_OK;
-  uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_iface_send_op_t *op;
-  size_t                   size = length + sizeof(hdr);
-
-  UCT_BXI_CHECK_AM_SHORT(id, length, uint64_t, iface->config.max_inline);
-  UCT_BXI_CHECK_EP(ep);
-  UCT_BXI_CHECK_IFACE_RES(iface, ep);
-
-  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                               uct_bxi_send_op_handler, size);
-
-  /* Copy on the stack allocated buffer. */
-  *(uint64_t *)iface->tx.short_desc = hdr;
-  memcpy(UCS_PTR_BYTE_OFFSET(iface->tx.short_desc, sizeof(hdr)), buffer,
-         length);
-
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(
-          iface->tx.mem_desc->mdh, (ptl_size_t)iface->tx.short_desc, size,
-          PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.am, id, 0, op, 0));
-
-  if (status == UCS_ERR_NO_RESOURCE) {
-    goto err_release_op;
-  } else if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut short return %d", status);
-  }
-
-  /* Append operation descriptor to completion queue. */
-  uct_bxi_ep_add_send_op(ep, op);
-  uct_bxi_ep_enable_flush(ep);
-
-  UCT_TL_EP_STAT_OP(&ep->super, AM, SHORT, length);
-  uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
-                         UCT_AM_TRACE_TYPE_SEND, id, buffer, size);
-
-  return status;
-
-err_release_op:
-  ucs_mpool_put(op);
-  return status;
+  return UCS_ERR_UNSUPPORTED;
 }
 
 ucs_status_t uct_bxi_ep_am_short_iov(uct_ep_h tl_ep, uint8_t id,
@@ -160,17 +119,6 @@ err:
   return size;
 }
 
-//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
-//      eager, its size is limited by the seg_size that can be used in receiver's
-//      bounce buffer.
-ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
-                                 unsigned header_length, const uct_iov_t *iov,
-                                 size_t iovcnt, unsigned flags,
-                                 uct_completion_t *comp)
-{
-  return UCS_ERR_UNSUPPORTED;
-}
-
 static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
                                                           uct_bxi_rkey_t *rkey)
 {
@@ -181,6 +129,17 @@ static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
     return (uint64_t)UCS_PTR_BYTE_OFFSET(rkey->bar_ptr,
                                          remote_addr - rkey->vaddr);
   }
+}
+
+//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
+//      eager, its size is limited by the seg_size that can be used in receiver's
+//      bounce buffer.
+ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
+                                 unsigned header_length, const uct_iov_t *iov,
+                                 size_t iovcnt, unsigned flags,
+                                 uct_completion_t *comp)
+{
+  return UCS_ERR_UNSUPPORTED;
 }
 
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
@@ -216,8 +175,6 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
-  //ucs_debug("BXI: available=%lu, desc=%d", iface->tx.available,
-  //          iface->tx.num_elems);
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
 
