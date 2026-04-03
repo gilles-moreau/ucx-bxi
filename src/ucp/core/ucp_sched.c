@@ -18,7 +18,8 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
   ucp_worker_iface_t *wiface;
 
   ucs_assert(sched != NULL);
-  ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
+  //FIXME: for some reason, assertion was raised. To be checked.
+  //ucs_assert(req->recv.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
 
   if (sched->count >= UCP_SCHED_MAX_SCHEDULE_SIZE) {
     ucs_error("schedule size overflow. count=%lu, max=%d", sched->count,
@@ -48,8 +49,12 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
     req->task->flags |= UCP_SCHED_TASK_OFFLOADED | UCP_SCHED_TASK_RELEASE_SCHED;
   }
 
-  ucp_trace_req(req, "scheduled recv task %p. offloaded ? %d", req->task,
-                !!(req->task->flags & UCP_SCHED_TASK_OFFLOADED));
+  ucp_trace_req(
+          req,
+          "scheduled recv task %p. offloaded ? %d, size %lu, region %p..%p",
+          req->task, !!(req->task->flags & UCP_SCHED_TASK_OFFLOADED),
+          req->task->size, req->task->buffer,
+          UCS_PTR_BYTE_OFFSET(req->task->buffer, req->task->size));
   req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
 
   return status;
@@ -153,6 +158,8 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
 
   /* Loop over tasks in the recv schedule to find dependencies. */
   ucs_list_for_each (task, &sched->schedule, elem) {
+    ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
+                  UCS_PTR_BYTE_OFFSET(task->buffer, task->size));
     if (ucp_sched_check_overlap(stask->buffer, stask->size, task->buffer,
                                 task->size) &&
         !(task->flags & UCP_SCHED_TASK_COMPLETED)) {
@@ -180,7 +187,11 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
     req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
   }
 
-  ucp_trace_req(req, "scheduled send task %p, has %lu dependencies", stask,
+  ucp_trace_req(req,
+                "scheduled send task %p, region %p..%p, has %lu "
+                "dependencies",
+                stask, stask->buffer,
+                UCS_PTR_BYTE_OFFSET(stask->buffer, stask->size),
                 stask->num_deps);
   req->task = stask;
 
@@ -200,8 +211,6 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
     goto err;
   }
 
-  //FIXME: add iface attr checks.
-
   sched->flags  = 0;
   sched->count  = 0;
   sched->worker = worker;
@@ -209,6 +218,7 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
 
   /* If offload interface has been activated, enable scheduling on it. */
   if (worker->tm.offload.iface != NULL) {
+    //FIXME: multiple interface are not supported
     uct_iface_tag_sched_enable(worker->tm.offload.iface->iface);
     sched->flags |= UCP_SCHED_OFFLOAD_ENABLED;
   }

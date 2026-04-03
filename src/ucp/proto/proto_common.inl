@@ -307,11 +307,6 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);
         }
-
-        /* Append OP attribute to select protocols that support OP offload. */
-        if (ucp_sched_task_is_offload(req)) {
-            ucp_proto_select_add_attr(&sel_param, UCP_OP_ATTR_FLAG_OP_OFFLOAD);
-        }
     }
 
     msg_length = req->send.state.dt_iter.length + header_length;
