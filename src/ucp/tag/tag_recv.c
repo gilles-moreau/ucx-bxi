@@ -159,19 +159,19 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
         /* If offload supported, post this tag to transport as well. */
         ucp_tag_offload_try_post(worker, req, req_queue);
 
-        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
-            req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
-
-            status = ucp_sched_recv(req);
-            if (status != UCS_OK) {
-                goto out_request_put;
-            }
-        }
-
         ucp_tag_exp_push(&worker->tm, req_queue, req);
 
         ucs_trace_req("%s returning expected request %p (%p)", debug_name, req,
                       req + 1);
+    }
+
+    if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
+        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+
+        status = ucp_sched_recv(req);
+        if (status != UCS_OK) {
+            goto out_request_put;
+        }
     }
 
     ucp_request_set_callback_param(param, recv, req, recv.tag);

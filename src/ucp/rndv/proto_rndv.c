@@ -143,6 +143,15 @@ static ucs_status_t ucp_proto_rndv_ctrl_select_remote_proto(
     ucp_rkey_config_t *rkey_config;
     ucs_status_t status;
     ucp_lane_index_t lane;
+    uint32_t op_attr_mask;
+
+    op_attr_mask = ucp_proto_select_op_attr_unpack(remote_select_param->op_attr);
+    if ((op_attr_mask & UCP_OP_ATTR_FLAG_OP_OFFLOAD) && 
+        (!(params->super.flags & UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD))) {
+        ucs_trace("Operation offload requested which can be used only "
+                  "with rendez vous offload.");
+        return UCS_ERR_NO_ELEM;
+    }
 
     /* Construct remote key for remote protocol lookup according to the local
      * buffer properties (since remote side is expected to access the local
@@ -262,7 +271,7 @@ static ucp_proto_select_param_t ucp_proto_rndv_remote_select_param_init(
     uint32_t op_attr_mask;
 
     op_attr_mask = ucp_proto_select_op_attr_unpack(select_param->op_attr) &
-                   UCP_OP_ATTR_FLAG_MULTI_SEND;
+                   (UCP_OP_ATTR_FLAG_MULTI_SEND | UCP_OP_ATTR_FLAG_OP_OFFLOAD);
     /* Construct select parameter for the remote protocol */
     if (init_params->rkey_config_key == NULL) {
         /* Remote buffer is unknown, assume same params as local */

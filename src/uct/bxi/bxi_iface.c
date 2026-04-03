@@ -68,7 +68,15 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "RX_AM_", -1, 128, 128m, 1.0, "recv_am",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.am_mp), "\n"),
 
-        {"SEG_SIZE", "8192",
+        //TODO: difference between seg_size, aka rendezvous threshold, and the
+        //      threshold calculated by the protocol selection may result in
+        //      breaking send/receiver symmetry. The latter is required to correctly
+        //      execute triggered operations.
+        //      Example: seg size=8192 and protocol threshold=8184. If msg size=8192,
+        //      send will initiate rendezvous while receive think it will be eager.
+        //      As a consequence, it will not correctly set the counter threshold for
+        //      the triggered operation.
+        {"SEG_SIZE", "2048",
          "Size of bounce buffers used for post_send "
          "and post_recv. (default: 8192).",
          ucs_offsetof(uct_bxi_iface_config_t, seg_size),
@@ -277,7 +285,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
-  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
+  attr->cap.atomicv.fop_flags |=
+          UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+          UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU | UCT_IFACE_FLAG_ATOMIC_VEC;
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
@@ -306,7 +317,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
   //       option with MANAGE_LOCAL are not suitable has there are no way to
   //       leave space for this headroom...
-  attr->cap.tag.eager.max_zcopy = iface->config.seg_size;
+  attr->cap.tag.eager.max_zcopy = iface->config.seg_size * 2;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
   attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;
@@ -549,12 +560,6 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
   return uct_single_device_resource(uct_md, md->device, UCT_DEVICE_TYPE_NET,
                                     md->sys_dev, tl_devices_p,
                                     num_tl_devices_p);
-}
-
-static UCS_F_ALWAYS_INLINE size_t uct_bxi_iface_hdr_size(size_t max_inline,
-                                                         size_t min_size)
-{
-  return (size_t)ucs_max((ssize_t)(max_inline - min_size), 0);
 }
 
 static inline void
@@ -866,11 +871,12 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
             uct_bxi_iface_md(self)->pid.phys.pid, self->rx.eqh.handle);
 
   ucs_debug("BXI: interface pti. pti am=%d, pti tag=%d, pti rma=%d, "
-            "pti ctrl=%d, ",
+            "pti ctrl=%d, eager size=%lu",
             self->rx.am.q->pti,
             self->tm.enabled ? self->rx.tag.q->pti : UCT_BXI_PT_NULL,
             self->rx.rma.pti,
-            self->tm.enabled ? self->rx.ctrl.q->pti : UCT_BXI_PT_NULL);
+            self->tm.enabled ? self->rx.ctrl.q->pti : UCT_BXI_PT_NULL,
+            uct_bxi_iface_md(self)->config.limits.max_waw_ordered_size);
 
   return status;
 
