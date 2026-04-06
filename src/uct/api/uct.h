@@ -384,11 +384,14 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_GET_ZCOPY      UCS_BIT(10) /**< Zero-copy get */
 
         /* Atomic operations domain */
-#define UCT_IFACE_FLAG_ATOMIC_CPU     UCS_BIT(30) /**< Atomic communications are consistent
+#define UCT_IFACE_FLAG_ATOMIC_CPU     UCS_BIT(20) /**< Atomic communications are consistent
                                                        with respect to CPU operations. */
-#define UCT_IFACE_FLAG_ATOMIC_DEVICE  UCS_BIT(31) /**< Atomic communications are consistent
+#define UCT_IFACE_FLAG_ATOMIC_DEVICE  UCS_BIT(21) /**< Atomic communications are consistent
                                                        only with respect to other atomics
                                                        on the same device. */
+#define UCT_IFACE_FLAG_ATOMIC_VEC     UCS_BIT(22) /**< Atomic communications may be 
+                                                       performed on vectors with atomicity
+                                                       guaranteed at the type level. */
 
         /* Error handling capabilities */
 #define UCT_IFACE_FLAG_ERRHANDLE_SHORT_BUF    UCS_BIT(32) /**< Invalid buffer for short operation */
@@ -1168,7 +1171,7 @@ struct uct_iface_attr {
         struct {
             uint64_t         op_flags;   /**< Attributes for atomic-post operations */
             uint64_t         fop_flags;  /**< Attributes for atomic-fetch operations */
-        } atomic32, atomic64;            /**< Attributes for atomic operations */
+        } atomic32, atomic64, atomicv;   /**< Attributes for atomic operations */
 
         uint64_t             flags;      /**< Flags from @ref UCT_RESOURCE_IFACE_CAP */
         uint64_t             event_flags;/**< Flags from @ref UCT_RESOURCE_IFACE_EVENT_CAP */
@@ -3198,6 +3201,18 @@ UCT_INLINE_API ucs_status_t uct_ep_atomic64_post(uct_ep_h ep, uct_atomic_op_t op
                                                  uct_rkey_t rkey)
 {
     return ep->iface->ops.ep_atomic64_post(ep, opcode, value, remote_addr, rkey);
+}
+
+/**
+ * @ingroup UCT_AMO
+ * @brief
+ */
+UCT_INLINE_API ucs_status_t uct_ep_atomicv_post(uct_ep_h ep, uct_atomic_op_t opcode,
+                                                const uct_iov_t *iov, size_t iovcnt, 
+                                                uint64_t remote_addr,
+                                                uct_rkey_t rkey)
+{
+    return ep->iface->ops.ep_atomicv_post(ep, opcode, iov, iovcnt, remote_addr, rkey);
 }
 
 

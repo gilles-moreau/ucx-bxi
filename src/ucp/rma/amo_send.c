@@ -23,9 +23,9 @@
 
 
 #define UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _action) \
+                            _last_opcode, _vec, _action) \
     { \
-        if (ENABLE_PARAMS_CHECK && \
+        if (ENABLE_PARAMS_CHECK && !(_vec) && \
             ucs_unlikely(((_remote_addr) % (_size)) != 0)) { \
             ucs_error("atomic variable must be naturally aligned " \
                       "(remote address 0x%"PRIx64", size %zu)", (_remote_addr), \
@@ -33,7 +33,7 @@
             _action; \
         } \
         \
-        if (ENABLE_PARAMS_CHECK && \
+        if (ENABLE_PARAMS_CHECK && !(_vec) && \
             ucs_unlikely(((_size) != 4) && (_size != 8))) { \
             ucs_error("invalid atomic operation size: %zu", (_size)); \
             _action; \
@@ -52,17 +52,17 @@
 
 
 #define UCP_AMO_CHECK_PARAM_NBX(_context, _remote_addr, _size, _count, \
-                                _opcode, _last_opcode, _action) \
+                                _opcode, _last_opcode, _vec, _action) \
     { \
         if (ENABLE_PARAMS_CHECK) { \
-            if ((_count) != 1) { \
+            if ((_count) != 1 && !(_vec)) { \
                 ucs_error("unsupported number of elements: %zu", (_count)); \
                 _action; \
             } \
         } \
         \
         UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _action); \
+                            _last_opcode, _vec, _action); \
     }
 
 
@@ -170,6 +170,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
     uint64_t value;
     size_t op_size;
     int op_id;
+    int vec = 0;
 
     UCP_REQUEST_CHECK_PARAM(param);
     if (ENABLE_PARAMS_CHECK &&
@@ -188,6 +189,9 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         op_size = sizeof(uint64_t);
     } else if (param->datatype == ucp_dt_make_contig(4)) {
         op_size = sizeof(uint32_t);
+    } else if (UCP_DT_IS_CONTIG(param->datatype)) {
+        op_size = ucp_contig_dt_length(param->datatype, count);
+        vec = 1;
     } else {
         ucs_error("invalid atomic operation datatype: 0x%"PRIx64,
                   param->datatype);
@@ -195,7 +199,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
     }
 
     UCP_AMO_CHECK_PARAM_NBX(context, remote_addr, op_size, count, opcode,
-                            UCP_ATOMIC_OP_LAST,
+                            UCP_ATOMIC_OP_LAST, vec,
                             return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
     UCP_WORKER_THREAD_CS_ENTER_CONDITIONAL(worker);
 
@@ -226,7 +230,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         } else {
             status_p = ucp_proto_request_send_op(
                     ep, &ucp_rkey_config(worker, rkey)->proto_select,
-                    rkey->cfg_index, req, UCP_OP_ID_AMO_POST, buffer, 1,
+                    rkey->cfg_index, req, UCP_OP_ID_AMO_POST, buffer, count,
                     param->datatype, op_size, param, 0, 0);
         }
         if (UCS_PTR_IS_PTR(status_p) &&

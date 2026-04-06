@@ -49,12 +49,11 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
     req->task->flags |= UCP_SCHED_TASK_OFFLOADED | UCP_SCHED_TASK_RELEASE_SCHED;
   }
 
-  ucp_trace_req(
-          req,
-          "scheduled recv task %p. offloaded ? %d, size %lu, region %p..%p",
-          req->task, !!(req->task->flags & UCP_SCHED_TASK_OFFLOADED),
-          req->task->size, req->task->buffer,
-          UCS_PTR_BYTE_OFFSET(req->task->buffer, req->task->size));
+  ucp_trace_req(req,
+                "scheduled recv task %p. offloaded %d, size %lu, region %p..%p",
+                req->task, !!(req->task->flags & UCP_SCHED_TASK_OFFLOADED),
+                req->task->size, req->task->buffer,
+                UCS_PTR_BYTE_OFFSET(req->task->buffer, req->task->size));
   req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
 
   return status;
@@ -189,10 +188,10 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
 
   ucp_trace_req(req,
                 "scheduled send task %p, region %p..%p, has %lu "
-                "dependencies",
+                "dependencies, offloaded %d",
                 stask, stask->buffer,
                 UCS_PTR_BYTE_OFFSET(stask->buffer, stask->size),
-                stask->num_deps);
+                stask->num_deps, !!(stask->flags & UCP_SCHED_TASK_OFFLOADED));
   req->task = stask;
 
 err:

@@ -150,21 +150,24 @@ enum ucp_feature {
     /** Request 64-bit atomic operations support */
     UCP_FEATURE_AMO64         = UCS_BIT(3),
 
+    /** Request 64-bit atomic operations support */
+    UCP_FEATURE_AMOV          = UCS_BIT(4),
+
     /** Request interrupt notification support */
-    UCP_FEATURE_WAKEUP        = UCS_BIT(4),
+    UCP_FEATURE_WAKEUP        = UCS_BIT(5),
 
     /** Request stream support */
-    UCP_FEATURE_STREAM        = UCS_BIT(5),
+    UCP_FEATURE_STREAM        = UCS_BIT(6),
 
     /** Request Active Message support */
-    UCP_FEATURE_AM            = UCS_BIT(6),
+    UCP_FEATURE_AM            = UCS_BIT(7),
 
     /**
      * Request support mapping a peer's memory handle that was created by
      * @ref ucp_mem_map and packed by @ref ucp_memh_pack with the flag
      * @ref UCP_MEMH_PACK_FLAG_EXPORT and use it for local operations
      */
-    UCP_FEATURE_EXPORTED_MEMH = UCS_BIT(7)
+    UCP_FEATURE_EXPORTED_MEMH = UCS_BIT(8)
 };
 
 
