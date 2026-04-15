@@ -203,7 +203,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
-                     "uct_bxi_ep_get_zcopy");
+                     "uct_bxi_ep_tag_eager_zcopy");
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   UCT_BXI_IFACE_GET_TX_OP_COMP_ERR(iface, &iface->tx.send_op_mp, op, ep, comp,
