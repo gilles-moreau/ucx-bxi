@@ -34,6 +34,26 @@ ucs_config_field_t uct_bxi_md_config_table[] = {
 
         {NULL}};
 
+#if HAVE_PTL_LE_MANAGE_LOCAL
+static const ptl_ni_limits_t default_limits = {
+        .max_entries            = INT_MAX,
+        .max_unexpected_headers = 0,
+        .max_mds                = INT_MAX,
+        .max_cts                = INT_MAX,
+        .max_eqs                = INT_MAX,
+        .max_pt_index           = INT_MAX,
+        .max_iovecs             = INT_MAX,
+        .max_list_size          = INT_MAX,
+        .max_triggered_ops      = 0,
+        .max_msg_size           = PTL_SIZE_MAX,
+        .max_atomic_size        = PTL_SIZE_MAX,
+        .max_fetch_atomic_size  = PTL_SIZE_MAX,
+        .max_waw_ordered_size   = PTL_SIZE_MAX,
+        .max_war_ordered_size   = PTL_SIZE_MAX,
+        .max_volatile_size      = PTL_SIZE_MAX,
+        .features               = PTL_BXI3_LE_EXTENSION,
+};
+#else
 static const ptl_ni_limits_t default_limits = {
         .max_entries            = INT_MAX,
         .max_unexpected_headers = INT_MAX,
@@ -52,6 +72,7 @@ static const ptl_ni_limits_t default_limits = {
         .max_volatile_size      = PTL_SIZE_MAX,
         .features               = 0,
 };
+#endif
 
 //NOTE: Previous implementation tried to use a counter for OP completion.
 //      Unfortunately, there are no guarantees on the order of how the ACK
@@ -532,9 +553,15 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   uct_bxi_md_config_init(md, md_config);
 
   /* init one physical interface */
+#if HAVE_PTL_LE_MANAGE_LOCAL
+  status = uct_bxi_wrap(PtlNIInit(
+          uct_bxi_parse_device(md_name), PTL_NI_NO_MATCHING | PTL_NI_PHYSICAL,
+          PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));
+#else
   status = uct_bxi_wrap(PtlNIInit(
           uct_bxi_parse_device(md_name), PTL_NI_MATCHING | PTL_NI_PHYSICAL,
           PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));
+#endif
   if (status != UCS_OK) {
     goto err_free_md;
   }

@@ -285,10 +285,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
-  attr->cap.atomicv.fop_flags |=
-          UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-          UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
-  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU | UCT_IFACE_FLAG_ATOMIC_VEC;
+  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
@@ -716,7 +713,11 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
+#if HAVE_PTL_LE_MANAGE_LOCAL
+  ptl_le_t                 le;
+#else
   ptl_me_t                 me;
+#endif
 
   UCS_CLASS_CALL_SUPER_INIT(
           uct_base_iface_t, &uct_bxi_iface_tl_ops, &uct_bxi_iface_ops.super,
@@ -840,6 +841,19 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_pending;
   }
 
+#if HAVE_PTL_LE_MANAGE_LOCAL
+  le.ct_handle         = PTL_CT_NONE;
+  le.uid               = PTL_UID_ANY;
+  le.start             = NULL;
+  le.length            = PTL_SIZE_MAX;
+  le.options = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
+               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
+
+  /* RDMA operations are always matched on the same silent ME. */
+  status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
+                                    PTL_PRIORITY_LIST, NULL,
+                                    &self->rx.rma.entry.meh));
+#else
   me.ct_handle         = PTL_CT_NONE;
   me.match_bits        = 0;
   me.ignore_bits       = ~0;
@@ -856,6 +870,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
                                     PTL_PRIORITY_LIST, NULL,
                                     &self->rx.rma.entry.meh));
+#endif
   if (status != UCS_OK) {
     goto err_clean_rmapti;
   }

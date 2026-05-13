@@ -296,7 +296,7 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_t  mp_param;
   uct_bxi_rxq_param_t rxq_param;
 
-  if (!config->tm.enable) {
+  if (!config->tm.enable || HAVE_PTL_LE_MANAGE_LOCAL) {
     /* HW tag matching data structure should not be initialized. */
     iface->tm.enabled = 0;
     goto err;

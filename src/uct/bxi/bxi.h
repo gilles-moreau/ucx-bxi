@@ -13,7 +13,11 @@
 #include <limits.h>
 #include <sys/uio.h>
 
+#if HAVE_PTL_LE_MANAGE_LOCAL
+#include <portals4_bxiext.h>
+#else
 #include <portals4.h>
+#endif
 
 /*********************************/
 /********** Forward Decl *********/

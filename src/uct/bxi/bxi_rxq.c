@@ -145,6 +145,14 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
     goto out;
   }
 
+#if HAVE_PTL_LE_MANAGE_LOCAL
+  rxq->unexp_le.ct_handle         = PTL_CT_NONE;
+  rxq->unexp_le.uid               = PTL_UID_ANY;
+  rxq->unexp_le.min_free          = params->seg_size;
+  rxq->unexp_le.options           = PTL_LE_OP_PUT | PTL_LE_MANAGE_LOCAL |
+                          PTL_LE_EVENT_LINK_DISABLE |
+                          PTL_LE_MAY_ALIGN;
+#else
   rxq->unexp_me.ct_handle         = PTL_CT_NONE;
   rxq->unexp_me.match_bits        = 0;
   rxq->unexp_me.ignore_bits       = ~0;
@@ -155,6 +163,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   rxq->unexp_me.options           = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
                           PTL_ME_NO_TRUNCATE | PTL_ME_EVENT_LINK_DISABLE |
                           PTL_ME_MAY_ALIGN;
+#endif
 
   //FIXME: we may question the use of a memory pool here since the number of
   //       buffer is fixed and everything should be posted to the NIC at init

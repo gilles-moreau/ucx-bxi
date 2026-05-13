@@ -35,6 +35,7 @@ AC_DEFUN([UCX_CHECK_BXI], [
                         AC_CHECK_HEADERS([portals4.h],
                                 [bxi_happy="yes"],
                                 [bxi_happy="no"])
+
                         AS_IF([test "x$bxi_happy" = xyes],
                                         [AC_CHECK_LIB([portals], [PtlInit], 
                                                 bxi_happy="yes"
@@ -47,6 +48,12 @@ AC_DEFUN([UCX_CHECK_BXI], [
                                                 bxi_happy="yes"
 						BXI_LIBS="-lportals-bxi3", 
                                                 bxi_happy="no")])
+
+ 			AC_CHECK_DECLS([PTL_LE_MANAGE_LOCAL],
+               			[AC_DEFINE([HAVE_PTL_LE_MANAGE_LOCAL], [1],
+                          		   [Define if PTL_LE_MANAGE_LOCAL is available])],
+               			[],
+               			[[#include <portals4.h>]])
 
                         AS_IF([test "x$bxi_happy" = xyes],
                                         [AC_DEFINE([HAVE_BXI], 1, [Enable BXI support])
