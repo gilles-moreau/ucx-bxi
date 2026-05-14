@@ -118,7 +118,7 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   ptl_event_t          *ev)
 {
   ucs_status_t status;
-  uint8_t      am_id = ev->match_bits;
+  uint8_t      am_id = ev->hdr_data;
 
   status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
 
@@ -269,6 +269,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //TODO: TEST UCT PEER FAILURE: UCT_IFACE_AM_SHORT is needed to support
   //      UCT_IFACE_FLAG_ERRHANDLE_PEER_FAILURE.
 
+#if HAVE_PTL_LE_MANAGE_LOCAL
+#else
   attr->cap.atomic32.op_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
@@ -286,6 +288,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
+#endif
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;

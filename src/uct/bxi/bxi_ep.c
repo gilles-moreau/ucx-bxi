@@ -95,7 +95,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.am, id, 0, op, 0));
+                               ep->iface_addr.am, 0, 0, op, id));
 
   if (status == UCS_ERR_NO_RESOURCE) {
     size = UCS_ERR_NO_RESOURCE;
