@@ -118,7 +118,7 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   ptl_event_t          *ev)
 {
   ucs_status_t status;
-  uint8_t      am_id = ev->hdr_data;
+  uint8_t      am_id = ev->match_bits;
 
   status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
 
@@ -269,8 +269,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //TODO: TEST UCT PEER FAILURE: UCT_IFACE_AM_SHORT is needed to support
   //      UCT_IFACE_FLAG_ERRHANDLE_PEER_FAILURE.
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
-#else
   attr->cap.atomic32.op_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
@@ -287,8 +285,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
-  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU;
-#endif
+  attr->cap.atomicv.fop_flags |=
+          UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
+          UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
+  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU | UCT_IFACE_FLAG_ATOMIC_VEC;
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
   attr->bandwidth.dedicated = 0;
@@ -376,6 +376,20 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
   ucs_assert(status == UCS_OK);
 }
 
+static UCS_F_ALWAYS_INLINE void uct_bxi_iface_flush_fenced_op(uct_bxi_ep_t *ep)
+{
+  uct_bxi_iface_send_op_t *op;
+
+  /* Decrement endpoint fence beat */
+  ep->fence_beat--;
+
+  /* Loop over fenced operations on endpoint and complete them if possible. */
+  ucs_list_for_each (op, &ep->fenced_ops, felem) {
+    --op->ep_fb;
+    uct_bxi_iface_completion_op(op);
+  }
+}
+
 static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 {
   uct_bxi_iface_send_op_t *op, *tmp;
@@ -390,6 +404,10 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
   ucs_list_for_each_safe (op, tmp, &ep->send_ops, elem) {
     if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
       UCT_TL_EP_STAT_FLUSH(&ep->super);
+      uct_bxi_iface_completion_flush_op(op);
+    } else if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCE) {
+      UCT_TL_EP_STAT_FENCE(&ep->super);
+      uct_bxi_iface_flush_fenced_op(ep);
       uct_bxi_iface_completion_flush_op(op);
     } else {
       break;
@@ -441,6 +459,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         if (ev.ni_fail_type != PTL_NI_OK) {
           uct_bxi_iface_handle_tx_failure(iface, op);
         }
+
         uct_bxi_iface_completion_op(op);
         uct_bxi_iface_check_flush(op->ep);
 
@@ -539,13 +558,23 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
 
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
 {
-#ifdef ENABLE_STATS
   uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-#endif
+  unsigned         count = 0;
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep;
 
-  //NOTE: Fence semantic is to enforce completion of previous operations
-  //      and host visibility of memory.
-  PtlAtomicSync();
+  ucs_list_for_each (ep, &iface->eps, elem) {
+    status = uct_bxi_ep_fence(&ep->super.super, 0);
+    if (status == UCS_ERR_NO_RESOURCE) {
+      count++;
+    } else if (status != UCS_OK) {
+      return status;
+    }
+  }
+
+  if (count != 0) {
+    return status;
+  }
 
   UCT_TL_IFACE_STAT_FENCE(&iface->super);
   return UCS_OK;
@@ -716,11 +745,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
-#if HAVE_PTL_LE_MANAGE_LOCAL
-  ptl_le_t                 le;
-#else
   ptl_me_t                 me;
-#endif
 
   UCS_CLASS_CALL_SUPER_INIT(
           uct_base_iface_t, &uct_bxi_iface_tl_ops, &uct_bxi_iface_ops.super,
@@ -844,19 +869,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err_clean_pending;
   }
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
-  le.ct_handle         = PTL_CT_NONE;
-  le.uid               = PTL_UID_ANY;
-  le.start             = NULL;
-  le.length            = PTL_SIZE_MAX;
-  le.options = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
-               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
-
-  /* RDMA operations are always matched on the same silent ME. */
-  status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
-                                    PTL_PRIORITY_LIST, NULL,
-                                    &self->rx.rma.entry.meh));
-#else
   me.ct_handle         = PTL_CT_NONE;
   me.match_bits        = 0;
   me.ignore_bits       = ~0;
@@ -873,7 +885,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
                                     PTL_PRIORITY_LIST, NULL,
                                     &self->rx.rma.entry.meh));
-#endif
   if (status != UCS_OK) {
     goto err_clean_rmapti;
   }
@@ -883,9 +894,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
 
-  ucs_debug("BXI: interface info. nid=%d, pid=%d",
+  ucs_debug("BXI: interface info. nih=%p, nid=%d, pid=%d, eqh=%p",
+            uct_bxi_iface_md(self)->nih.handle,
             uct_bxi_iface_md(self)->pid.phys.nid,
-            uct_bxi_iface_md(self)->pid.phys.pid);
+            uct_bxi_iface_md(self)->pid.phys.pid, self->rx.eqh.handle);
 
   ucs_debug("BXI: interface pti. pti am=%d, pti tag=%d, pti rma=%d, "
             "pti ctrl=%d, eager size=%lu",

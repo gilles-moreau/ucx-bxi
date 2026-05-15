@@ -53,7 +53,9 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                              const void              *resp)
 {
   //NOTE: flush operation are only used when a user_comp is provided
-  uct_invoke_completion(op->user_comp, UCS_OK);
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
+    uct_invoke_completion(op->user_comp, UCS_OK);
+  }
 
   uct_bxi_ep_remove_from_queue(op);
 }
@@ -590,6 +592,7 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     if (op == NULL) {
       return UCS_ERR_NO_MEMORY;
     }
+    op->ep           = ep;
     op->user_comp    = comp;
     op->comp.handler = uct_bxi_ep_flush_comp_op_handler;
     op->comp.comp    = 1;
@@ -605,9 +608,34 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
 
 ucs_status_t uct_bxi_ep_fence(uct_ep_h tl_ep, unsigned flags)
 {
-  //NOTE: Fence semantic is to enforce completion of previous operations
-  //      and host visibility of memory.
-  PtlAtomicSync();
+  uct_bxi_iface_send_op_t *op = NULL;
+  uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+
+  //NOTE: Endpoint cannot be fenced if there are no resources since there
+  //      may be requests in the pending list. They must be processed before
+  //      this fence request.
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  if (ucs_list_is_empty(&ep->send_ops)) {
+    UCT_TL_EP_STAT_FENCE(&ep->super);
+    return UCS_OK;
+  }
+
+  op = ucs_mpool_get(&iface->tx.flush_ops_mp);
+  if (op == NULL) {
+    return UCS_ERR_NO_MEMORY;
+  }
+  op->ep           = ep;
+  op->user_comp    = NULL;
+  op->comp.comp    = 1;
+  op->comp.handler = uct_bxi_ep_flush_comp_op_handler;
+  op->flags        = UCT_BXI_IFACE_SEND_OP_FLAG_FENCE;
+
+  ep->fence_beat++;
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_flush_op(ep, op);
 
   UCT_TL_EP_STAT_FENCE(ucs_derived_of(tl_ep, uct_base_ep_t));
   return UCS_OK;
@@ -782,8 +810,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   self->iface_addr = *(uct_bxi_iface_addr_t *)params->iface_addr;
   self->conn_state = UCT_BXI_EP_CONN_CONNECTED;
   self->flags      = 0;
+  self->fence_beat = 0;
 
   ucs_list_head_init(&self->send_ops);
+  ucs_list_head_init(&self->fenced_ops);
   ucs_queue_head_init(&self->pending_q);
 
   /* Append endpoint to interface list. */

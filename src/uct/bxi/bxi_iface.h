@@ -41,7 +41,8 @@
 enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE     = UCS_BIT(0),
   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH     = UCS_BIT(1),
-  UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(2),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FENCE     = UCS_BIT(2),
+  UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(3),
 };
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
@@ -89,9 +90,11 @@ typedef struct uct_bxi_iface_send_op {
   uct_bxi_iface_t       *iface;     /* Backpointer */
   uct_bxi_send_op_comp_t comp;      /* Handler called completion */
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
+  ucs_list_link_t        felem;     /* Element on fence list */
   uct_completion_t      *user_comp; /* User completion callback */
   uct_bxi_ep_t          *ep;        /* OP endpoint */
   size_t                 length;    /* Length of the OP */
+  uint16_t               ep_fb;     /* Endpoint fence beat at creation */
 
   union {
     struct {
@@ -449,8 +452,8 @@ uct_bxi_ep_remove_from_queue(uct_bxi_iface_send_op_t *op)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
-  uct_bxi_iface_available_add(op->iface, 1);
   op->flags = 0;
+  uct_bxi_iface_available_add(op->iface, 1);
   ucs_mpool_put_inline(op);
 }
 
@@ -459,7 +462,8 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
 {
   ucs_assertv(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE, "op=%p", op);
 
-  if (--op->comp.comp == 0) {
+  /* Complete if fence beat is null and completion counter is 0. */
+  if (op->ep_fb == 0 && --op->comp.comp == 0) {
     op->comp.handler(op, op + 1);
     uct_bxi_iface_release_op(op);
   }
