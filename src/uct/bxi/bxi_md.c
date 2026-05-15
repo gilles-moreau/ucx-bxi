@@ -34,7 +34,7 @@ ucs_config_field_t uct_bxi_md_config_table[] = {
 
         {NULL}};
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
 static const ptl_ni_limits_t default_limits = {
         .max_entries            = INT_MAX,
         .max_unexpected_headers = 0,
@@ -553,7 +553,7 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   uct_bxi_md_config_init(md, md_config);
 
   /* init one physical interface */
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
   status = uct_bxi_wrap(PtlNIInit(
           uct_bxi_parse_device(md_name), PTL_NI_NO_MATCHING | PTL_NI_PHYSICAL,
           PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));

@@ -42,7 +42,8 @@ enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_INUSE     = UCS_BIT(0),
   UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH     = UCS_BIT(1),
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCE     = UCS_BIT(2),
-  UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(3),
+  UCT_BXI_IFACE_SEND_OP_FLAG_FENCED    = UCS_BIT(3),
+  UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(4),
 };
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
@@ -452,6 +453,9 @@ uct_bxi_ep_remove_from_queue(uct_bxi_iface_send_op_t *op)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCED) {
+    ucs_list_del(&op->felem);
+  }
   op->flags = 0;
   uct_bxi_iface_available_add(op->iface, 1);
   ucs_mpool_put_inline(op);
@@ -463,7 +467,7 @@ uct_bxi_iface_completion_op(uct_bxi_iface_send_op_t *op)
   ucs_assertv(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_INUSE, "op=%p", op);
 
   /* Complete if fence beat is null and completion counter is 0. */
-  if (op->ep_fb == 0 && --op->comp.comp == 0) {
+  if (--op->comp.comp == 0) {
     op->comp.handler(op, op + 1);
     uct_bxi_iface_release_op(op);
   }

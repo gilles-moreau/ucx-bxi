@@ -55,7 +55,7 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   //NOTE: flush operation are only used when a user_comp is provided
   if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
     uct_invoke_completion(op->user_comp, UCS_OK);
-  }
+  } 
 
   uct_bxi_ep_remove_from_queue(op);
 }
@@ -578,6 +578,10 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
   if (ucs_list_is_empty(&ep->send_ops)) {
     UCT_TL_EP_STAT_FLUSH(&ep->super);
     return UCS_OK;
+  }
+
+  ucs_list_for_each(op, &ep->send_ops, elem) {
+	  ucs_debug("BXI: op=%p, comp=%d, flags=%08x", op, op->comp.comp, op->flags);
   }
 
   if (flags & UCT_FLUSH_FLAG_REMOTE) {

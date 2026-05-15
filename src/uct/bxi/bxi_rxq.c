@@ -146,7 +146,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
     goto out;
   }
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
   rxq->unexp_le.ct_handle         = PTL_CT_NONE;
   rxq->unexp_le.uid               = PTL_UID_ANY;
   rxq->unexp_le.min_free          = params->seg_size;

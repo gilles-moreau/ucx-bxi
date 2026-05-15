@@ -86,7 +86,7 @@ typedef struct uct_bxi_rxq {
   ucs_mpool_t           mp;      /* Memory pool of block buffer */
   ucs_list_link_t       bhead;   /* List of allocated blocks */
   uct_bxi_block_handler handler; /* Block handler called based on list */
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
   ptl_le_t              unexp_le;
 #else
   ptl_me_t              unexp_me;
@@ -126,7 +126,7 @@ uct_bxi_recv_block_unexp_activate(uct_bxi_recv_block_t *block)
   ucs_status_t   status;
   uct_bxi_rxq_t *rxq = block->rxq;
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
   rxq->unexp_le.start  = block->start;
   rxq->unexp_le.length = block->size;
   status = uct_bxi_wrap(PtlLEAppend(rxq->nih, rxq->pti, &rxq->unexp_le,

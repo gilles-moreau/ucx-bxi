@@ -13,7 +13,7 @@
 #include <limits.h>
 #include <sys/uio.h>
 
-#if HAVE_PTL_LE_MANAGE_LOCAL
+#if HAVE_BXI3_R6LITE
 #include <portals4_bxiext.h>
 #else
 #include <portals4.h>

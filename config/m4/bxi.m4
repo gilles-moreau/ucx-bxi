@@ -50,8 +50,8 @@ AC_DEFUN([UCX_CHECK_BXI], [
                                                 bxi_happy="no")])
 
  			AC_CHECK_DECLS([PTL_LE_MANAGE_LOCAL],
-               			[AC_DEFINE([HAVE_PTL_LE_MANAGE_LOCAL], [1],
-                          		   [Define if PTL_LE_MANAGE_LOCAL is available])],
+               			[AC_DEFINE([HAVE_BXI3_R6LITE], [1],
+                          		   [Check for BXI3 r6lite version])],
                			[],
                			[[#include <portals4.h>]])
 

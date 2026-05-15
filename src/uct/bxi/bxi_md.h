@@ -61,7 +61,11 @@ typedef struct uct_bxi_mem_entry_param {
 } uct_bxi_mem_entry_param_t;
 
 typedef struct uct_bxi_mem_entry {
+#if HAVE_BXI3_R6LITE
+  ptl_handle_le_t leh;
+#else
   ptl_handle_me_t meh;
+#endif
 } uct_bxi_mem_entry_t;
 
 typedef struct uct_bxi_md_config {
