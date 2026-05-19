@@ -68,6 +68,10 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "RX_AM_", -1, 128, 128m, 1.0, "recv_am",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.am_mp), "\n"),
 
+        UCT_IFACE_MPOOL_CONFIG_FIELDS(
+                "RX_RMA_", 1, 128, 128m, 1.0, "recv_rma",
+                ucs_offsetof(uct_bxi_iface_config_t, rx.rma_mp), "\n"),
+
         //TODO: difference between seg_size, aka rendezvous threshold, and the
         //      threshold calculated by the protocol selection may result in
         //      breaking send/receiver symmetry. The latter is required to correctly
@@ -112,6 +116,13 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         {NULL},
 };
+
+static ucs_status_t uct_bxi_iface_block_handle_rma(uct_bxi_iface_t      *iface,
+                                                   uct_bxi_recv_block_t *block,
+                                                   ptl_event_t          *ev)
+{
+  return UCS_OK;
+}
 
 static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
@@ -287,10 +298,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
-  attr->cap.atomicv.fop_flags |=
-          UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
-          UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR);
-  attr->cap.flags |= UCT_IFACE_FLAG_ATOMIC_CPU | UCT_IFACE_FLAG_ATOMIC_VEC;
 #endif
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
@@ -340,7 +347,7 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
   uct_bxi_iface_addr_t *addr  = (void *)tl_addr;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  addr->rma  = iface->rx.rma.pti;
+  addr->rma  = uct_bxi_rxq_get_addr(iface->rx.rma.q);
   addr->am   = uct_bxi_rxq_get_addr(iface->rx.am.q);
   addr->tag  = !iface->tm.enabled ? UCT_BXI_PT_NULL :
                                     uct_bxi_rxq_get_addr(iface->rx.tag.q);
@@ -610,11 +617,12 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   //      generating PT_DISABLED event.
   iface->config.tx.max_events = config->tx.max_queue_len + 1;
 
-  iface->config.rx.am_mp = config->tx.mp;
+  iface->config.rx.am_mp = config->rx.am_mp;
   //FIXME: Memory pool max elements is reset here, thus overwriting initial
   //       configuration. See FIXME comment in rxq_create about Memory Pool
   //       usage.
   iface->config.rx.am_mp.max_bufs = config->rx.max_queue_len;
+  iface->config.rx.rma_mp         = config->rx.rma_mp;
 
   //TODO: implement support for scatter buffer.
   iface->config.max_iovecs       = 1;
@@ -747,12 +755,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
-#if HAVE_BXI3_R6LITE
-  ptl_le_t                 le;
-#else
-  ptl_me_t                 me;
-#endif
-
 
   UCS_CLASS_CALL_SUPER_INIT(
           uct_base_iface_t, &uct_bxi_iface_tl_ops, &uct_bxi_iface_ops.super,
@@ -776,7 +778,14 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   }
 
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
-  rxq_param.flags    = 0;
+  rxq_param.flags = 0;
+#if HAVE_BXI3_R6LITE
+  rxq_param.options = PTL_LE_OP_PUT | PTL_LE_MANAGE_LOCAL |
+                      PTL_LE_EVENT_LINK_DISABLE | PTL_LE_MAY_ALIGN;
+#else
+  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_NO_TRUNCATE |
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN;
+#endif
   rxq_param.eqh      = self->rx.eqh;
   rxq_param.nih      = md->nih;
   rxq_param.mp       = self->config.rx.am_mp;
@@ -869,45 +878,29 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Initialize available send credits. */
   uct_bxi_iface_available_set(self, self->config.tx.max_queue_len);
 
-  /* Initialize Portals Table Entry for RDMA operations. */
-  status = uct_bxi_wrap(PtlPTAlloc(md->nih, PTL_PT_FLOWCTRL, self->rx.eqh,
-                                   PTL_PT_ANY, &self->rx.rma.pti));
-  if (status != UCS_OK) {
-    goto err_clean_pending;
-  }
+  /* Initialize connection map */
+  kh_init_inplace(uct_bxi_conn_map, &self->conn_map);
 
+  /* Create RX Queues for RMA messages. Only a single block with events. */
+  rxq_param.flags = UCT_BXI_RXQ_FLAG_RMA_BLOCK;
 #if HAVE_BXI3_R6LITE
-  le.ct_handle         = PTL_CT_NONE;
-  le.uid               = PTL_UID_ANY;
-  le.start             = NULL;
-  le.length            = PTL_SIZE_MAX;
-  le.options = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
-               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
-
-  /* RDMA operations are always matched on the same silent ME. */
-  status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
-                                    PTL_PRIORITY_LIST, NULL,
-                                    &self->rx.rma.entry.leh));
+  rxq_param.options = PTL_LE_OP_PUT | PTL_LE_EVENT_LINK_DISABLE;
 #else
-  me.ct_handle         = PTL_CT_NONE;
-  me.match_bits        = 0;
-  me.ignore_bits       = ~0;
-  me.match_id.phys.nid = PTL_NID_ANY;
-  me.match_id.phys.pid = PTL_PID_ANY;
-  me.min_free          = 0;
-  me.uid               = PTL_UID_ANY;
-  me.start             = NULL;
-  me.length            = PTL_SIZE_MAX;
-  me.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
-               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE;
-
-  /* RDMA operations are always matched on the same silent ME. */
-  status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
-                                    PTL_PRIORITY_LIST, NULL,
-                                    &self->rx.rma.entry.meh));
+  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_NO_TRUNCATE |
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN;
 #endif
+  rxq_param.eqh      = self->rx.eqh;
+  rxq_param.nih      = md->nih;
+  rxq_param.mp       = self->config.rx.rma_mp;
+  rxq_param.list     = PTL_PRIORITY_LIST;
+  rxq_param.num_segs = 1;
+  rxq_param.seg_size = PTL_SIZE_MAX;
+  rxq_param.handler  = uct_bxi_iface_block_handle_rma;
+  rxq_param.name     = "rxq-rma";
+
+  status = uct_bxi_rxq_create(&rxq_param, &self->rx.rma.q);
   if (status != UCS_OK) {
-    goto err_clean_rmapti;
+    goto err_clean_rxevq;
   }
 
   /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
@@ -931,20 +924,14 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
             "pti ctrl=%d, eager size=%lu",
             self->rx.am.q->pti,
             self->tm.enabled ? self->rx.tag.q->pti : UCT_BXI_PT_NULL,
-            self->rx.rma.pti,
+            self->rx.rma.q->pti,
             self->tm.enabled ? self->rx.ctrl.q->pti : UCT_BXI_PT_NULL,
             uct_bxi_iface_md(self)->config.limits.max_waw_ordered_size);
 
   return status;
 
 err_clean_rmame:
-#if HAVE_BXI3_R6LITE
-  PtlMEUnlink(self->rx.rma.entry.leh);
-#else
-  PtlMEUnlink(self->rx.rma.entry.meh);
-#endif
-err_clean_rmapti:
-  PtlPTFree(md->nih, self->rx.rma.pti);
+  uct_bxi_rxq_fini(self->rx.rma.q);
 err_clean_pending:
   ucs_mpool_cleanup(&self->tx.pending_mp, 0);
 err_clean_txops:
@@ -969,15 +956,18 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
-  uct_bxi_md_t *md = uct_bxi_iface_md(self);
+  uct_bxi_ep_conn_t *conn;
+
+  /* Destroy connection map. */
+  kh_foreach_key (&self->conn_map, conn, {
+    ucs_warn("BXI: unassigned endpoint connection. conn=%p", conn);
+    ucs_free(conn);
+  })
+    ;
+  kh_destroy_inplace(uct_bxi_conn_map, &self->conn_map);
 
   /* Clean RDMA resources. */
-#if HAVE_BXI3_R6LITE
-  PtlMEUnlink(self->rx.rma.entry.leh);
-#else
-  PtlMEUnlink(self->rx.rma.entry.meh);
-#endif
-  PtlPTFree(md->nih, self->rx.rma.pti);
+  uct_bxi_rxq_fini(self->rx.rma.q);
 
   /* Clean TX resources. */
   ucs_free(self->tx.short_desc);

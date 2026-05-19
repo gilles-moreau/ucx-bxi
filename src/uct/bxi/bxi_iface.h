@@ -141,6 +141,7 @@ typedef struct uct_bxi_iface_config {
     int max_queue_len; /* Maximum number of receive descriptor in the RXQ */
     int num_seg;       /* Number of segments per receive descriptor */
     uct_iface_mpool_config_t am_mp;  /* Receive descriptor for AM RX */
+    uct_iface_mpool_config_t rma_mp; /* Receive descriptor for RMA RX */
     uct_iface_mpool_config_t tag_mp; /* Receive descriptor for TAG RX */
   } rx;
 
@@ -179,15 +180,14 @@ typedef struct uct_bxi_conn_id {
   uct_ep_conn_key_t conn_key; /* Connection key */
 } uct_bxi_conn_id_t;
 
-typedef struct uct_bxi_rndv_cnt {
-  struct {
-    uct_bxi_conn_id_t cid;  /* Counter connection ID */
-    uint16_t          recv; /* Counter of receive rndv requests */
-    uint16_t          send; /* Counter of send rndv requests */
-  };
-} uct_bxi_rndv_cnt_t;
+typedef struct uct_bxi_ep_conn {
+  uct_bxi_conn_id_t id;   /* Counter connection ID */
+  uint16_t          recv; /* Counter of receive rndv requests */
+  uint16_t          send; /* Counter of send rndv requests */
+  uint32_t          cnt;  /* Counter for AM/RMA messages */
+} uct_bxi_ep_conn_t;
 
-KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_rndv_cnt_t *, char);
+KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_ep_conn_t *, char);
 
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
@@ -202,6 +202,7 @@ typedef struct uct_bxi_iface {
       int                      max_queue_len; /* Maximum receive context */
       int                      num_seg; /* Number of segments in RX buffer */
       uct_iface_mpool_config_t am_mp;   /* Memory pool config for AM RX. */
+      uct_iface_mpool_config_t rma_mp;  /* Memory pool config for RMA RX. */
       uct_iface_mpool_config_t tag_mp;  /* Memory pool config for TAG RX. */
     } rx;
 
@@ -241,8 +242,7 @@ typedef struct uct_bxi_iface {
     ptl_event_t *unexp_ev;        /* Cached unexp event, used for cancel */
     unsigned int rndv_hdr_offset; /* Offset of rndv hdr in payload */
     int          sched_window;    /* Is scheduling window opened? */
-    khash_t(uct_bxi_conn_map) conn_map; /* Connection map */
-  } tm;                                 /* Tag matching */
+  } tm;                           /* Tag matching */
 
   struct {
     ptl_handle_eq_t     eqh;          /* Event Queue for OP completion. */
@@ -267,12 +267,12 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t *q;
     } ctrl; /* Control RXQ for internal protocols. */
     struct {
-      ptl_pt_index_t      pti;
-      uct_bxi_mem_entry_t entry;
+      uct_bxi_rxq_t *q;
     } rma;
   } rx;
-  size_t          num_eps;
-  ucs_list_link_t eps; /* List of uct ep */
+  size_t                    num_eps;
+  ucs_list_link_t           eps;      /* List of uct ep */
+  khash_t(uct_bxi_conn_map) conn_map; /* Connection map */
 } uct_bxi_iface_t;
 
 UCS_CLASS_DECLARE(uct_bxi_iface_t, uct_md_h, uct_worker_h,
@@ -356,21 +356,21 @@ static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_sw(ptl_hdr_data_t hdr)
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_inc_send_cnt(uct_bxi_iface_t *iface, uct_bxi_rndv_cnt_t *cnt)
+uct_bxi_rndv_inc_send_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
 {
-  cnt->send++;
+  conn->send++;
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_inc_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_rndv_cnt_t *cnt)
+uct_bxi_rndv_inc_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
 {
-  cnt->recv++;
+  conn->recv++;
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_dec_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_rndv_cnt_t *cnt)
+uct_bxi_rndv_dec_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
 {
-  cnt->recv--;
+  conn->recv--;
 }
 
 static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
@@ -489,9 +489,9 @@ uct_bxi_iface_completion_flush_op(uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_release_flush_op(op);
 }
 
-ucs_status_t uct_bxi_iface_get_rndv_cnt(uct_bxi_iface_t     *iface,
-                                        uct_bxi_conn_id_t    cid,
-                                        uct_bxi_rndv_cnt_t **cnt_p);
+ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
+                                    uct_bxi_conn_id_t   id,
+                                    uct_bxi_ep_conn_t **conn_p);
 
 /* Complete a hardware initiated rendezvous. */
 static UCS_F_ALWAYS_INLINE void

@@ -12,7 +12,6 @@ enum {
   UCT_BXI_EP_CONN_CLOSED        = UCS_BIT(1),
   UCT_BXI_EP_KEEP_ALIVE_PENDING = UCS_BIT(2),
   UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
-  UCT_BXI_EP_CONFIG_CONN_KEY    = UCS_BIT(4),
 };
 
 typedef struct uct_bxi_ep {
@@ -22,7 +21,7 @@ typedef struct uct_bxi_ep {
   uct_bxi_iface_addr_t  iface_addr;
   ucs_list_link_t       elem;       /* Elem is the uct ep list */
   uint8_t               conn_state; /* Connection state. */
-  uct_bxi_rndv_cnt_t   *cnt;        /* Rndv counters. */
+  uct_bxi_ep_conn_t    *conn;       /* Rndv counters. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
   ucs_list_link_t       fenced_ops; /* Queue of fenced OPs */
   uint16_t              fence_beat; /* Endpoint local fence beat */
@@ -222,8 +221,8 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_op_res(iface, op);
   op->comp.comp += ep->fence_beat;
   if (ep->fence_beat > 0) {
-	  op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_FENCED;
-	  ucs_list_add_tail(&ep->fenced_ops, &op->felem);
+    op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_FENCED;
+    ucs_list_add_tail(&ep->fenced_ops, &op->felem);
   };
   //NOTE: Queue is used to complete flush operations.
   ucs_list_add_tail(&ep->send_ops, &op->elem);

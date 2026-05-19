@@ -41,7 +41,7 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
   ucs_status_t        status;
   uct_bxi_hdr_rndv_t *hdr;
   size_t              length;
-  uct_bxi_rndv_cnt_t *cnt = NULL;
+  uct_bxi_ep_conn_t  *conn = NULL;
   uct_bxi_conn_id_t   cid;
   char                packed_rkey[UCT_BXI_MD_PACKED_RKEY_SIZE];
 
@@ -66,11 +66,11 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
 
     /* Increment receive counter for this PID. Since we dont know yet if 
      * the receive will be posted ever, we need to increment it. */
-    status = uct_bxi_iface_get_rndv_cnt(iface, cid, &cnt);
+    status = uct_bxi_iface_get_conn(iface, cid, &conn);
     if (status != UCS_OK) {
       goto out;
     }
-    uct_bxi_rndv_inc_recv_cnt(iface, cnt);
+    uct_bxi_rndv_inc_recv_cnt(iface, conn);
 
     status =
             iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
@@ -107,10 +107,10 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
                                                 uct_bxi_recv_block_t *block,
                                                 ptl_event_t          *ev)
 {
-  ucs_status_t        status = UCS_OK;
-  uct_bxi_conn_id_t   cid;
-  uct_bxi_rndv_cnt_t *cnt = NULL;
-  ptl_match_bits_t    tag;
+  ucs_status_t       status = UCS_OK;
+  uct_bxi_conn_id_t  cid;
+  uct_bxi_ep_conn_t *conn = NULL;
+  ptl_match_bits_t   tag;
 
   /* Receive block has been consumed, notify UCP layer so it can remove 
    * the tag from its expected queues. Buffer may also be removed from 
@@ -141,17 +141,17 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
       cid.conn_key = UCT_BXI_RNDV_CONN_KEY_GET(ev->hdr_data);
       cid.pid      = ev->initiator;
 
-      status = uct_bxi_iface_get_rndv_cnt(iface, cid, &cnt);
+      status = uct_bxi_iface_get_conn(iface, cid, &conn);
       if (status != UCS_OK) {
         return status;
       }
 
-      UCT_BXI_RNDV_TAG_SET(tag, cid.pti, cid.conn_key, cnt->recv);
+      UCT_BXI_RNDV_TAG_SET(tag, cid.pti, cid.conn_key, conn->recv);
 
       uct_bxi_iface_complete_rndv(iface, block, ev->hdr_data, tag,
                                   ev->initiator, block->send_size);
 
-      uct_bxi_rndv_inc_recv_cnt(iface, cnt);
+      uct_bxi_rndv_inc_recv_cnt(iface, conn);
     }
 
     /* Call operation completion to decrement comp counter, release the 
@@ -178,7 +178,7 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
       ucs_assert(block->op->ep != NULL);
       uct_bxi_recv_block_cancel_triggered(block);
-      uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->cnt);
+      uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->conn);
     }
 
     /* Operation will not be used, it may be released. */
@@ -349,9 +349,6 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
-  /* Connection map used to handle rndv counters. */
-  kh_init_inplace(uct_bxi_conn_map, &iface->tm.conn_map);
-
   rxq_param.flags    = 0;
   rxq_param.eqh      = iface->rx.eqh;
   rxq_param.nih      = uct_bxi_iface_md(iface)->nih;
@@ -431,8 +428,7 @@ err:
 
 void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
 {
-  void               *recv_buffer;
-  uct_bxi_rndv_cnt_t *cnt;
+  void *recv_buffer;
 
   if (!iface->tm.enabled) {
     goto out;
@@ -444,14 +440,6 @@ void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
   })
     ;
   kh_destroy_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
-
-  kh_foreach_key (&iface->tm.conn_map, cnt, {
-    ucs_warn("BXI: unassigned rndv counter. cnt=%p", cnt);
-    ucs_free(cnt);
-  })
-    ;
-
-  kh_destroy_inplace(uct_bxi_conn_map, &iface->tm.conn_map);
 
   /* Release TAG RX queue. */
   uct_bxi_rxq_fini(iface->rx.tag.q);

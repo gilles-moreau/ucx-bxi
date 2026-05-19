@@ -88,7 +88,7 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
 
   block->flags   = 0;
   block->size    = rxq->config.blk_size;
-  block->start   = block + 1;
+  block->start   = rxq->flags & UCT_BXI_RXQ_FLAG_RMA_BLOCK ? NULL : block + 1;
   block->rxq     = rxq;
   block->list    = rxq->list;
   block->meh     = PTL_INVALID_HANDLE;
@@ -147,12 +147,10 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   }
 
 #if HAVE_BXI3_R6LITE
-  rxq->unexp_le.ct_handle         = PTL_CT_NONE;
-  rxq->unexp_le.uid               = PTL_UID_ANY;
-  rxq->unexp_le.min_free          = params->seg_size;
-  rxq->unexp_le.options           = PTL_LE_OP_PUT | PTL_LE_MANAGE_LOCAL |
-                          PTL_LE_EVENT_LINK_DISABLE |
-                          PTL_LE_MAY_ALIGN;
+  rxq->unexp_le.ct_handle = PTL_CT_NONE;
+  rxq->unexp_le.uid       = PTL_UID_ANY;
+  rxq->unexp_le.min_free  = params->seg_size;
+  rxq->unexp_le.options   = params->options;
 #else
   rxq->unexp_me.ct_handle         = PTL_CT_NONE;
   rxq->unexp_me.match_bits        = 0;
@@ -161,9 +159,7 @@ ucs_status_t uct_bxi_rxq_create(uct_bxi_rxq_param_t *params,
   rxq->unexp_me.match_id.phys.nid = PTL_NID_ANY;
   rxq->unexp_me.match_id.phys.pid = PTL_PID_ANY;
   rxq->unexp_me.uid               = PTL_UID_ANY;
-  rxq->unexp_me.options           = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL |
-                          PTL_ME_NO_TRUNCATE | PTL_ME_EVENT_LINK_DISABLE |
-                          PTL_ME_MAY_ALIGN;
+  rxq->unexp_me.options           = params->options;
 #endif
 
   //FIXME: we may question the use of a memory pool here since the number of

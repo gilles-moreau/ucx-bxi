@@ -1455,6 +1455,12 @@ struct uct_ep_params {
      * @ref UCT_IFACE_FLAG_CONNECT_TO_SOCKADDR capability.
      */
     const ucs_sock_addr_t             *local_sockaddr;
+
+    /**
+     * Connection key identifying the endpoint.
+     * @note Only needed for BXI tag rendezvous protocol.
+     */ 
+    uct_ep_conn_key_t                  conn_key;
 };
 
 

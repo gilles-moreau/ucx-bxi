@@ -4,6 +4,7 @@
 
 #include <sys/types.h>
 #include <time.h>
+#include <ucs/algorithm/crc.h>
 #include <ucs/profile/profile.h>
 #include <uct/base/uct_log.h>
 
@@ -55,7 +56,7 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   //NOTE: flush operation are only used when a user_comp is provided
   if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
     uct_invoke_completion(op->user_comp, UCS_OK);
-  } 
+  }
 
   uct_bxi_ep_remove_from_queue(op);
 }
@@ -580,8 +581,8 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     return UCS_OK;
   }
 
-  ucs_list_for_each(op, &ep->send_ops, elem) {
-	  ucs_debug("BXI: op=%p, comp=%d, flags=%08x", op, op->comp.comp, op->flags);
+  ucs_list_for_each (op, &ep->send_ops, elem) {
+    ucs_debug("BXI: op=%p, comp=%d, flags=%08x", op, op->comp.comp, op->flags);
   }
 
   if (flags & UCT_FLUSH_FLAG_REMOTE) {
@@ -798,10 +799,63 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                           &purge_arg);
 }
 
+static UCS_F_ALWAYS_INLINE khint_t
+uct_bxi_conn_map_conn_hash(uct_bxi_ep_conn_t *conn)
+{
+  return ucs_crc32(0, &conn->id, sizeof(conn->id));
+}
+
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_conn_map_conn_equal(uct_bxi_ep_conn_t *conn1, uct_bxi_ep_conn_t *conn2)
+{
+  return (conn1->id.pid.phys.nid == conn2->id.pid.phys.nid) &&
+         (conn1->id.pid.phys.pid == conn2->id.pid.phys.pid) &&
+         (conn1->id.pti == conn2->id.pti) &&
+         (conn1->id.conn_key == conn2->id.conn_key);
+}
+
+__KHASH_IMPL(uct_bxi_conn_map, kh_inline, uct_bxi_ep_conn_t *, char, 0,
+             uct_bxi_conn_map_conn_hash, uct_bxi_conn_map_conn_equal);
+
+ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
+                                    uct_bxi_conn_id_t   id,
+                                    uct_bxi_ep_conn_t **conn_p)
+{
+  int                ret;
+  khiter_t           iter;
+  uct_bxi_ep_conn_t *conn;
+
+  conn = ucs_malloc(sizeof(uct_bxi_ep_conn_t), "bxi ep conn");
+  if (conn == NULL) {
+    ucs_fatal("BXI: failed to allocate bxi endpoint connection.");
+  }
+
+  conn->id = id;
+  iter     = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
+  ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
+
+  /* Get the connection or create it if it does not exist and add 
+   * it to the hash table. */
+  if (ret == UCS_KH_PUT_KEY_PRESENT) {
+    ucs_free(conn);
+    conn = kh_key(&iface->conn_map, iter);
+    goto out;
+  }
+
+  /* Initialize counters. */
+  conn->cnt = conn->send = conn->recv = 0;
+
+out:
+  *conn_p = conn;
+
+  return UCS_OK;
+}
+
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
-  ucs_status_t     status = UCS_OK;
-  uct_bxi_iface_t *iface  = ucs_derived_of(params->iface, uct_bxi_iface_t);
+  ucs_status_t      status = UCS_OK;
+  uct_bxi_iface_t  *iface  = ucs_derived_of(params->iface, uct_bxi_iface_t);
+  uct_bxi_conn_id_t id;
 
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
@@ -820,6 +874,19 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   ucs_list_head_init(&self->fenced_ops);
   ucs_queue_head_init(&self->pending_q);
 
+  id.pid      = self->dev_addr.pid;
+  id.pti      = iface->tm.enabled ? uct_bxi_rxq_get_addr(iface->rx.tag.q) :
+                                    UCT_BXI_PT_NULL;
+  id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
+                        params->conn_key :
+                        UCT_EP_CONN_KEY_NULL;
+
+  /* Get endpoint connection based on triplet. */
+  status = uct_bxi_iface_get_conn(iface, id, &self->conn);
+  if (status != UCS_OK) {
+    goto err;
+  }
+
   /* Append endpoint to interface list. */
   ucs_list_add_head(&iface->eps, &self->elem);
 
@@ -831,6 +898,7 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
 {
+  khiter_t         iter;
   uct_bxi_iface_t *iface =
           ucs_derived_of(self->super.super.iface, uct_bxi_iface_t);
 
@@ -840,10 +908,14 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
     uct_bxi_iface_progress(&iface->super.super);
   } while (uct_bxi_iface_flush(&iface->super.super, 0, NULL) != UCS_OK);
 
+  /* Purge all request from the pending queue. */
   uct_bxi_ep_pending_purge(&self->super.super,
                            ucs_empty_function_do_assert_void, NULL);
 
-  uct_bxi_ep_tag_destroy(iface, self);
+  /* Destroy endpoint connection. */
+  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, self->conn);
+  kh_del(uct_bxi_conn_map, &iface->conn_map, iter);
+  ucs_free(self->conn);
 
   ucs_list_del(&self->elem);
   iface->num_eps--;

@@ -45,23 +45,25 @@ typedef struct uct_bxi_recv_block {
   uct_tag_t             tag;         /* Needed in case block is cancelled */
   uct_tag_t             stag;        /* Send tag */
   ucs_memory_type_t     mem_type;    /* Memory type of the buffer */
-  ptl_list_t            list;     /* PTL_OVERFLOW_LIST or PTL_PRIORITY_LIST */
-  uct_bxi_block_handler handler;  /* Receive block handler on event */
-  uct_tag_context_t    *ctx;      /* Tag context provided by upper layer */
-  ptl_handle_me_t       meh;      /* Memory Entry handle */
-  ptl_handle_ct_t       cth;      /* Counter handle associated to 
+  ptl_list_t            list;        /* overflow or priority list */
+  uct_bxi_block_handler handler;     /* Receive block handler on event */
+  uct_tag_context_t    *ctx;         /* Tag context provided by upper layer */
+  ptl_handle_me_t       meh;         /* Memory Entry handle */
+  ptl_handle_ct_t       cth;         /* Counter handle associated to 
                                         the block */
-  ptl_handle_md_t       mdh;      /* Memory Descriptor used for GET */
-  ptl_size_t            ct_value; /* SW counter tracking HW counter */
-  uct_bxi_iface_send_op_t *op;    /* OP in case of GET protocol */
+  ptl_handle_md_t       mdh;         /* Memory Descriptor used for GET */
+  ptl_size_t            ct_value;    /* SW counter tracking HW counter */
+  uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
 enum {
   UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL = UCS_BIT(1),
+  UCT_BXI_RXQ_FLAG_RMA_BLOCK     = UCS_BIT(2),
 };
 
 typedef struct uct_bxi_rxq_param {
   unsigned                 flags;    /* Flags to influence RXQ creation */
+  unsigned                 options;  /* ME/LE options */
   uct_iface_mpool_config_t mp;       /* RX Memory pool configuration */
   ptl_list_t               list;     /* Portals priority list */
   char                    *name;     /* Name used of memory pool */
@@ -87,9 +89,9 @@ typedef struct uct_bxi_rxq {
   ucs_list_link_t       bhead;   /* List of allocated blocks */
   uct_bxi_block_handler handler; /* Block handler called based on list */
 #if HAVE_BXI3_R6LITE
-  ptl_le_t              unexp_le;
+  ptl_le_t unexp_le;
 #else
-  ptl_me_t              unexp_me;
+  ptl_me_t unexp_me;
 #endif
 } uct_bxi_rxq_t;
 
@@ -131,7 +133,7 @@ uct_bxi_recv_block_unexp_activate(uct_bxi_recv_block_t *block)
   rxq->unexp_le.length = block->size;
   status = uct_bxi_wrap(PtlLEAppend(rxq->nih, rxq->pti, &rxq->unexp_le,
                                     block->list, block, &block->meh));
-#else 
+#else
   rxq->unexp_me.start  = block->start;
   rxq->unexp_me.length = block->size;
   status = uct_bxi_wrap(PtlMEAppend(rxq->nih, rxq->pti, &rxq->unexp_me,

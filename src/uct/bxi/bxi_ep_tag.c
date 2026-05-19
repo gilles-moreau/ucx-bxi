@@ -311,7 +311,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
    * Reduce it off of the eager size that will be sent. */
   UCT_BXI_IFACE_GET_RX_RNDV_DESC(
           iface, &iface->tm.recv_block_mp, block, mem_type, ptl_iov->iov_base,
-          ptl_iov->iov_len, ep->cnt->cid, ep->cnt->send,
+          ptl_iov->iov_len, ep->conn->id, ep->conn->send,
           uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
           goto err);
 
@@ -369,9 +369,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             (uint64_t)block->start, block->size, tag, block->tag,
             uct_bxi_iface_md(iface)->pid.phys.nid,
             uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
-            ep->cnt->cid.conn_key);
+            ep->conn->id.conn_key);
 
-  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, ep->cnt->cid.conn_key,
+  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, ep->conn->id.conn_key,
                        uct_bxi_rxq_get_addr(iface->rx.ctrl.q));
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
@@ -396,7 +396,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
   /* Increment rndv send counter. */
-  uct_bxi_rndv_inc_send_cnt(iface, ep->cnt);
+  uct_bxi_rndv_inc_send_cnt(iface, ep->conn);
 
   return (ucs_status_ptr_t)op;
 
@@ -503,8 +503,8 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
   block->op->length = block->size;
   //}
 
-  UCT_BXI_RNDV_TAG_SET(tag, ep->iface_addr.ctrl, ep->cnt->cid.conn_key,
-                       ep->cnt->recv);
+  UCT_BXI_RNDV_TAG_SET(tag, ep->iface_addr.ctrl, ep->conn->id.conn_key,
+                       ep->conn->recv);
   /* TriggeredGet at current counter value plus eager_limit + 1, as defined by 
    * Barrett and al. */
   status = uct_bxi_wrap(PtlTriggeredGet(
@@ -520,7 +520,7 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
             "value=%lu",
             ep, start, block->op->length, tag, ep->dev_addr.pid.phys.nid,
             ep->dev_addr.pid.phys.pid, ep->iface_addr.ctrl,
-            ep->cnt->cid.conn_key, block->op, block, block->ct_value);
+            ep->conn->id.conn_key, block->op, block, block->ct_value);
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
@@ -637,7 +637,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
     uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &me);
 
     /* Increment rndv receive counter. */
-    uct_bxi_rndv_inc_recv_cnt(iface, ep->cnt);
+    uct_bxi_rndv_inc_recv_cnt(iface, ep->conn);
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED;
   }
 
@@ -666,7 +666,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
   uct_bxi_conn_id_t     cid;
-  uct_bxi_rndv_cnt_t   *cnt = NULL;
+  uct_bxi_ep_conn_t    *conn = NULL;
   ptl_match_bits_t      tag;
 
   /* Must be removed for both eager and rndv requests. */
@@ -688,7 +688,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
         ucs_assert(block->op->ep != NULL);
         /* Rendezvous has been offloaded and unexpected handler called, thus 
          * rndv recv counter incremented twice. Decrement it. */
-        uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->cnt);
+        uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->conn);
       }
 
       /* Save stag and send size for rndv completion, see 
@@ -712,14 +712,14 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
         cid.conn_key = UCT_BXI_RNDV_CONN_KEY_GET(iface->tm.unexp_ev->hdr_data);
         /* Rendezvous was not offloaded during receive call, thus rndv recv 
        * counter not incremented, increment it now. */
-        status = uct_bxi_iface_get_rndv_cnt(iface, cid, &cnt);
+        status = uct_bxi_iface_get_conn(iface, cid, &conn);
         if (status != UCS_OK) {
           goto out;
         }
 
         //NOTE: counter was incremented during unexpected handler already, so
         //      decrement by one to create the correct tag.
-        UCT_BXI_RNDV_TAG_SET(tag, cid.pti, cid.conn_key, cnt->recv - 1);
+        UCT_BXI_RNDV_TAG_SET(tag, cid.pti, cid.conn_key, conn->recv - 1);
 
         /* Rendezvous was not offloaded although sender sent a hw rndv request.
          * Complete the rendezvous. */
@@ -743,7 +743,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
       if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
         ucs_assert(block->op->ep != NULL);
         uct_bxi_recv_block_cancel_triggered(block);
-        uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->cnt);
+        uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->conn);
       }
       /* Reset to NULL to let uct_bxi_iface_block_handle_tag_unexp know the ME 
        * do not need to be consumed. */
@@ -878,64 +878,12 @@ void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop)
   ucs_mpool_put(gop);
 }
 
-static UCS_F_ALWAYS_INLINE khint_t
-uct_bxi_conn_map_cnt_hash(uct_bxi_rndv_cnt_t *cnt)
-{
-  return ucs_crc32(0, &cnt->cid, sizeof(cnt->cid));
-}
-
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_conn_map_cnt_equal(uct_bxi_rndv_cnt_t *cnt1, uct_bxi_rndv_cnt_t *cnt2)
-{
-  return (cnt1->cid.pid.phys.nid == cnt2->cid.pid.phys.nid) &&
-         (cnt1->cid.pid.phys.pid == cnt2->cid.pid.phys.pid) &&
-         (cnt1->cid.pti == cnt2->cid.pti) &&
-         (cnt1->cid.conn_key == cnt2->cid.conn_key);
-}
-
-__KHASH_IMPL(uct_bxi_conn_map, kh_inline, uct_bxi_rndv_cnt_t *, char, 0,
-             uct_bxi_conn_map_cnt_hash, uct_bxi_conn_map_cnt_equal);
-
-ucs_status_t uct_bxi_iface_get_rndv_cnt(uct_bxi_iface_t     *iface,
-                                        uct_bxi_conn_id_t    cid,
-                                        uct_bxi_rndv_cnt_t **cnt_p)
-{
-  int                 ret;
-  khiter_t            iter;
-  uct_bxi_rndv_cnt_t *cnt;
-
-  cnt = ucs_malloc(sizeof(uct_bxi_rndv_cnt_t), "bxi rndv cnt");
-  if (cnt == NULL) {
-    ucs_fatal("BXI: failed to allocate bxi rndv counter.");
-  }
-
-  cnt->cid = cid;
-  iter     = kh_put(uct_bxi_conn_map, &iface->tm.conn_map, cnt, &ret);
-  ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
-
-  /* Get the connection or create it if it does not exist and add 
-   * it to the hash table. */
-  if (ret == UCS_KH_PUT_KEY_PRESENT) {
-    ucs_free(cnt);
-    cnt = kh_key(&iface->tm.conn_map, iter);
-    goto out;
-  }
-
-  /* Initialize counters. */
-  cnt->send = cnt->recv = 0;
-
-out:
-  *cnt_p = cnt;
-
-  return UCS_OK;
-}
-
 ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
 {
   ucs_status_t      status;
   uct_bxi_ep_t     *ep    = ucs_derived_of(uct_ep, uct_bxi_ep_t);
   uct_bxi_iface_t  *iface = ucs_derived_of(uct_ep->iface, uct_bxi_iface_t);
-  uct_bxi_conn_id_t cid;
+  uct_bxi_conn_id_t id;
 
   /* Should only be called in tag-matching datapath. */
   ucs_assert(iface->tm.enabled);
@@ -943,40 +891,16 @@ ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
   /* Since counters must be local to each UCT endpoint, connection match 
    * need to be based on the triplet: Portals PID, local Portals Table Index and 
    * Connection Key. */
-  cid.pid      = ep->dev_addr.pid;
-  cid.pti      = iface->rx.ctrl.q->pti;
-  cid.conn_key = conn_key & UCT_BXI_RNDV_CONN_KEY_MASK;
+  id.pid      = ep->dev_addr.pid;
+  id.pti      = iface->rx.ctrl.q->pti;
+  id.conn_key = conn_key & UCT_BXI_RNDV_CONN_KEY_MASK;
 
   /* Get base endpoint counter based on triplet. */
-  status = uct_bxi_iface_get_rndv_cnt(iface, cid, &ep->cnt);
+  status = uct_bxi_iface_get_conn(iface, id, &ep->conn);
   if (status != UCS_OK) {
     goto err;
   }
 
-  if (conn_key != UCT_EP_CONN_KEY_NULL) {
-    ep->flags |= UCT_BXI_EP_CONFIG_CONN_KEY;
-  }
-
 err:
   return status;
-}
-
-void uct_bxi_ep_tag_destroy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep)
-{
-  khiter_t iter;
-
-  if (!iface->tm.enabled) {
-    return;
-  }
-
-  if (ep->flags & UCT_BXI_EP_CONFIG_CONN_KEY) {
-    iter = kh_get(uct_bxi_conn_map, &iface->tm.conn_map, ep->cnt);
-    //FIXME: segfault without this. Investigate.
-    if (iter != kh_end(&iface->tm.conn_map)) {
-      return;
-    }
-
-    kh_del(uct_bxi_conn_map, &iface->tm.conn_map, iter);
-    ucs_free(ep->cnt);
-  }
 }
