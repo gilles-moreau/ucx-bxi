@@ -121,21 +121,89 @@ static ucs_status_t uct_bxi_iface_block_handle_rma(uct_bxi_iface_t      *iface,
                                                    uct_bxi_recv_block_t *block,
                                                    ptl_event_t          *ev)
 {
-  return UCS_OK;
+  ucs_status_t             status = UCS_OK;
+  uct_bxi_conn_id_t        id;
+  uct_bxi_ep_conn_t       *conn;
+  uct_bxi_iface_ooo_op_t  *ooo_op;
+  ucs_frag_list_ooo_type_t err;
+  uint32_t                 sn = UCT_BXI_CONN_SN_GET(ev->hdr_data);
+
+  /* Fetch endpoint connection to get out-of-order list. */
+  id.pid      = ev->initiator;
+  id.pti      = UCT_BXI_PT_NULL;
+  id.conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
+  uct_bxi_iface_get_conn(iface, id, &conn);
+
+  /* Initialize ooo operation. */
+  ooo_op        = ucs_mpool_get(&iface->rx.ooo_mp);
+  ooo_op->flags = 0;
+  ooo_op->size  = ev->mlength;
+  ooo_op->start = ev->start;
+
+  err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
+  if (err == UCS_FRAG_LIST_INSERT_FAIL) {
+    status = UCS_ERR_IO_ERROR;
+  }
+
+  return status;
 }
 
 static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
                                                   ptl_event_t          *ev)
 {
-  ucs_status_t status;
-  uint8_t      am_id = ev->hdr_data;
+  ucs_status_t             status = UCS_OK;
+  uint8_t                  am_id  = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
+  uint32_t                 sn     = UCT_BXI_CONN_SN_GET(ev->hdr_data);
+  uct_bxi_iface_ooo_op_t  *ooo_op, *ooo_tmp;
+  uct_bxi_conn_id_t        id;
+  uct_bxi_ep_conn_t       *conn;
+  ucs_frag_list_elem_t    *elem;
+  ucs_frag_list_ooo_type_t err;
 
-  status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength, 0);
+  /* Fetch endpoint connection to get out-of-order list. */
+  id.pid      = ev->initiator;
+  id.pti      = UCT_BXI_PT_NULL;
+  id.conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
+  uct_bxi_iface_get_conn(iface, id, &conn);
+
+  /* Initialize ooo operation. */
+  ooo_op        = ucs_mpool_get(&iface->rx.ooo_mp);
+  ooo_op->flags = UCT_BXI_IFACE_OOO_AM;
+  ooo_op->size  = ev->mlength;
+  ooo_op->start = ev->start;
+  ooo_op->am_id = am_id;
+
+  err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
+  if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
+    /* Message arrived in order, thus invoke active message callback. */
+    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
+                                 0);
+    ucs_mpool_put(ooo_op);
+  } else if ((err == UCS_FRAG_LIST_INSERT_FIRST) ||
+             (err == UCS_FRAG_LIST_INSERT_READY)) {
+    /* Previous messages arrived out of order and can now be completed. */
+    while ((elem = ucs_frag_list_pull(&conn->ooo)) != NULL) {
+      ooo_tmp = ucs_container_of(&elem, uct_bxi_iface_ooo_op_t, elem);
+
+      if (ooo_tmp->flags & UCT_BXI_IFACE_OOO_AM) {
+        status = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
+                                     ooo_tmp->start, ooo_tmp->size, 0);
+      }
+      ucs_mpool_put(ooo_tmp);
+    }
+  } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
+    /* Out of order message. */
+    ucs_debug("BXI: OOO message.");
+  } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
+    status = UCS_ERR_IO_ERROR;
+    goto err;
+  }
 
   uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
                          ev->mlength);
 
+err:
   return status;
 }
 
@@ -633,6 +701,13 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
 }
 
+static ucs_mpool_ops_t uct_bxi_ooo_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = NULL,
+        .obj_cleanup   = NULL,
+        .obj_str       = NULL};
+
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   uct_bxi_iface_send_op_t *op = obj;
@@ -777,6 +852,24 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
     goto err;
   }
 
+  /* Initialize MP of Out-of-order operation */
+  //FIXME: using tx mp parameters for now
+  ucs_mpool_params_reset(&mp_params);
+  mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
+  mp_params.elems_per_chunk = config->tx.mp.bufs_grow;
+  mp_params.elem_size       = sizeof(uct_bxi_iface_ooo_op_t);
+  mp_params.max_elems       = config->tx.max_queue_len;
+  mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
+  mp_params.align_offset    = sizeof(uct_bxi_iface_ooo_op_t);
+  mp_params.ops             = &uct_bxi_ooo_mpool_ops;
+  mp_params.name            = "ooo-mp";
+  mp_params.grow_factor     = config->tx.mp.grow_factor;
+
+  status = ucs_mpool_init(&mp_params, &self->rx.ooo_mp);
+  if (status != UCS_OK) {
+    goto err_clean_short_desc;
+  }
+
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
   rxq_param.flags = 0;
 #if HAVE_BXI3_R6LITE
@@ -884,9 +977,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Create RX Queues for RMA messages. Only a single block with events. */
   rxq_param.flags = UCT_BXI_RXQ_FLAG_RMA_BLOCK;
 #if HAVE_BXI3_R6LITE
-  rxq_param.options = PTL_LE_OP_PUT | PTL_LE_EVENT_LINK_DISABLE;
+  rxq_param.options =
+          PTL_LE_OP_PUT | | PTL_ME_OP_GET | PTL_LE_EVENT_LINK_DISABLE;
 #else
-  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_NO_TRUNCATE |
+  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_NO_TRUNCATE |
                       PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN;
 #endif
   rxq_param.eqh      = self->rx.eqh;

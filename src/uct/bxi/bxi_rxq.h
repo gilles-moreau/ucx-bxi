@@ -19,6 +19,7 @@ enum {
   UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(3),
   UCT_BXI_RECV_BLOCK_FLAG_LINKED          = UCS_BIT(4),
   UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED     = UCS_BIT(5),
+  UCT_BXI_RECV_BLOCK_FLAG_ONGOING_OOO     = UCS_BIT(6),
 };
 
 typedef struct uct_bxi_recv_block_params {

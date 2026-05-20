@@ -4,6 +4,7 @@
 #include "bxi_md.h"
 #include "bxi_rxq.h"
 
+#include <ucs/datastruct/frag_list.h>
 #include <uct/base/uct_iov.inl>
 
 #define UCT_BXI_MD_PACKED_RKEY_SIZE sizeof(uint64_t) + sizeof(void *)
@@ -36,6 +37,17 @@
   _tag |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
   _tag  = (_tag << 16);                                                        \
   _tag |= ((_cnt) & UCT_BXI_RNDV_CNT_MASK);
+
+#define UCT_BXI_CONN_AM_ID_GET(_hdr) (((_hdr) >> 48) & 0xff)
+#define UCT_BXI_CONN_KEY_GET(_hdr)   (((_hdr) >> 32) & UCT_BXI_RNDV_CONN_KEY_MASK)
+#define UCT_BXI_CONN_SN_GET(_hdr)    ((_hdr) & 0xffffffff)
+
+#define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _conn_key, _sn)                     \
+  _hdr  = ((_am_id) & 0xfful);                                                 \
+  _hdr  = (_hdr << 16);                                                        \
+  _hdr |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
+  _hdr  = (_hdr << 32);                                                        \
+  _hdr |= ((_sn) & 0xfffffffful);
 
 /* Operation flags */
 enum {
@@ -180,11 +192,24 @@ typedef struct uct_bxi_conn_id {
   uct_ep_conn_key_t conn_key; /* Connection key */
 } uct_bxi_conn_id_t;
 
+enum {
+  UCT_BXI_IFACE_OOO_AM = UCS_BIT(0),
+};
+
+typedef struct uct_bxi_iface_ooo_op {
+  unsigned             flags;
+  uint8_t              am_id;
+  void                *start;
+  size_t               size;
+  ucs_frag_list_elem_t elem; /* Element in ooo connection list */
+} uct_bxi_iface_ooo_op_t;
+
 typedef struct uct_bxi_ep_conn {
   uct_bxi_conn_id_t id;   /* Counter connection ID */
   uint16_t          recv; /* Counter of receive rndv requests */
   uint16_t          send; /* Counter of send rndv requests */
-  uint32_t          cnt;  /* Counter for AM/RMA messages */
+  uint32_t          sn;   /* Message sequence number */
+  ucs_frag_list_t   ooo;  /* Out of Order queue */
 } uct_bxi_ep_conn_t;
 
 KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_ep_conn_t *, char);
@@ -269,6 +294,7 @@ typedef struct uct_bxi_iface {
     struct {
       uct_bxi_rxq_t *q;
     } rma;
+    ucs_mpool_t ooo_mp; /* Memory pool of Out-of-order operations */
   } rx;
   size_t                    num_eps;
   ucs_list_link_t           eps;      /* List of uct ep */
