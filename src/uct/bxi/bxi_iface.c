@@ -384,7 +384,7 @@ static ucs_status_t uct_bxi_iface_get_addr(uct_iface_h       tl_iface,
   uct_bxi_iface_addr_t *addr  = (void *)tl_addr;
   uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
 
-  addr->rma  = uct_bxi_rxq_get_addr(iface->rx.rma.q);
+  addr->rma  = iface->rx.rma.pti;
   addr->am   = uct_bxi_rxq_get_addr(iface->rx.am.q);
   addr->tag  = !iface->tm.enabled ? UCT_BXI_PT_NULL :
                                     uct_bxi_rxq_get_addr(iface->rx.tag.q);
@@ -784,6 +784,11 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   uct_bxi_mem_desc_param_t mem_desc_param;
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
+#if HAVE_BXI3_R6LITE
+  ptl_le_t                 le;
+#else
+  ptl_me_t                 me;
+#endif
 
   UCS_CLASS_CALL_SUPER_INIT(
           uct_base_iface_t, &uct_bxi_iface_tl_ops, &uct_bxi_iface_ops.super,
@@ -928,27 +933,46 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Initialize connection map */
   kh_init_inplace(uct_bxi_conn_map, &self->conn_map);
   /* Create RX Queues for RMA messages. Only a single block with events. */
-  rxq_param.flags = UCT_BXI_RXQ_FLAG_RMA_BLOCK;
-#if HAVE_BXI3_R6LITE
-  rxq_param.options = PTL_LE_OP_PUT | PTL_ME_OP_GET |
-                      PTL_LE_EVENT_COMM_DISABLE | PTL_LE_EVENT_LINK_DISABLE;
-#else
-  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_NO_TRUNCATE |
-                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE |
-                      PTL_ME_MAY_ALIGN;
-#endif
-  rxq_param.eqh      = self->rx.eqh;
-  rxq_param.nih      = md->nih;
-  rxq_param.mp       = self->config.rx.rma_mp;
-  rxq_param.list     = PTL_PRIORITY_LIST;
-  rxq_param.num_segs = 1;
-  rxq_param.seg_size = PTL_SIZE_MAX;
-  rxq_param.handler  = NULL;
-  rxq_param.name     = "rxq-rma";
 
-  status = uct_bxi_rxq_create(&rxq_param, &self->rx.rma.q);
+  /* Initialize Portals Table Entry for RDMA operations. */
+  status = uct_bxi_wrap(PtlPTAlloc(md->nih, PTL_PT_FLOWCTRL, self->rx.eqh,
+                                   PTL_PT_ANY, &self->rx.rma.pti));
   if (status != UCS_OK) {
-    goto err_clean_rxevq;
+    goto err_clean_pending;
+  }
+
+#if HAVE_BXI3_R6LITE
+  le.ct_handle         = PTL_CT_NONE;
+  le.uid               = PTL_UID_ANY;
+  le.start             = NULL;
+  le.length            = PTL_SIZE_MAX;
+  le.options = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
+               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
+
+  /* RDMA operations are always matched on the same silent ME. */
+  status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
+                                    PTL_PRIORITY_LIST, NULL,
+                                    &self->rx.rma.entry.leh));
+#else
+  me.ct_handle         = PTL_CT_NONE;
+  me.match_bits        = 0;
+  me.ignore_bits       = ~0;
+  me.match_id.phys.nid = PTL_NID_ANY;
+  me.match_id.phys.pid = PTL_PID_ANY;
+  me.min_free          = 0;
+  me.uid               = PTL_UID_ANY;
+  me.start             = NULL;
+  me.length            = PTL_SIZE_MAX;
+  me.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE;
+
+  /* RDMA operations are always matched on the same silent ME. */
+  status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
+                                    PTL_PRIORITY_LIST, NULL,
+                                    &self->rx.rma.entry.meh));
+#endif
+  if (status != UCS_OK) {
+    goto err_clean_rmapti;
   }
 
   /* PTL hdr is used within internal protocols and 64 bits are needed. Endpoint 
@@ -972,14 +996,20 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
             "pti ctrl=%d, eager size=%lu",
             self->rx.am.q->pti,
             self->tm.enabled ? self->rx.tag.q->pti : UCT_BXI_PT_NULL,
-            self->rx.rma.q->pti,
+            self->rx.rma.pti,
             self->tm.enabled ? self->rx.ctrl.q->pti : UCT_BXI_PT_NULL,
             uct_bxi_iface_md(self)->config.limits.max_waw_ordered_size);
 
   return status;
 
 err_clean_rmame:
-  uct_bxi_rxq_fini(self->rx.rma.q);
+#if HAVE_BXI3_R6LITE
+  PtlLEUnlink(self->rx.rma.entry.leh);
+#else
+  PtlMEUnlink(self->rx.rma.entry.meh);
+#endif
+err_clean_rmapti:
+  PtlPTFree(md->nih, self->rx.rma.pti);
 err_clean_pending:
   ucs_mpool_cleanup(&self->tx.pending_mp, 0);
 err_clean_txops:
@@ -1005,6 +1035,7 @@ err:
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
   uct_bxi_ep_conn_t *conn;
+  uct_bxi_md_t *md = uct_bxi_iface_md(self);
 
   /* Destroy connection map. */
   kh_foreach_key (&self->conn_map, conn, {
@@ -1015,7 +1046,13 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   kh_destroy_inplace(uct_bxi_conn_map, &self->conn_map);
 
   /* Clean RDMA resources. */
-  uct_bxi_rxq_fini(self->rx.rma.q);
+#if HAVE_BXI3_R6LITE
+  PtlLEUnlink(self->rx.rma.entry.leh);
+#else
+  PtlMEUnlink(self->rx.rma.entry.meh);
+#endif
+  PtlPTFree(md->nih, self->rx.rma.pti);
+
 
   /* Clean TX resources. */
   ucs_free(self->tx.short_desc);

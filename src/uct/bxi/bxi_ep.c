@@ -257,6 +257,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                uct_bxi_send_op_handler, length);
 
   /* Compute remote address based on remote gdrcopy registration. */
+  op->ep_fb               = ep->fence_beat;
   op->put.buffer          = (void *)buffer;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
@@ -302,6 +303,8 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   UCT_SKIP_ZERO_LENGTH(op->length, op);
 
   /* Compute remote address based on remote gdrcopy registration. */
+  op->ep_fb              = ep->fence_beat;
+  op->flags             |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY;
   op->put.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
@@ -340,6 +343,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                uct_bxi_send_op_handler, iov->length);
 
   /* Compute remote address based on remote gdrcopy registration. */
+  op->ep_fb               = ep->fence_beat;
   op->length              = iov->length;
   op->put.buffer          = iov->buffer;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
@@ -384,6 +388,7 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
                                       comp, arg, length);
 
   /* Compute remote address based on remote gdrcopy registration. */
+  op->ep_fb              = ep->fence_beat;
   op->length             = length;
   op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
@@ -424,6 +429,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                uct_bxi_send_op_handler, iov->length);
 
   /* Compute remote address based on remote gdrcopy registration. */
+  op->ep_fb              = ep->fence_beat;
   op->get.buffer         = iov->buffer;
   op->length             = iov->length;
   op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
@@ -463,6 +469,7 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
+  op->ep_fb              = ep->fence_beat;
   op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC;
   op->length             = size;
   op->atomic.dt          = dt;
@@ -503,6 +510,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
+  op->ep_fb              = ep->fence_beat;
   op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_FETCH;
   op->length             = size;
   op->atomic.dt          = dt;
@@ -545,6 +553,7 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
+  op->ep_fb              = ep->fence_beat;
   op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_CAS;
   op->length             = size;
   op->atomic.dt          = dt;

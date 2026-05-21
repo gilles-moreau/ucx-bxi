@@ -69,8 +69,7 @@ enum {
   UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(17),
 };
 
-#define UCT_BXI_IFACE_SEND_OP_MASK                                             \
-  (~(UCS_MASK(UCT_BXI_IFACE_SEND_OP_TYPE_START)))
+#define UCT_BXI_IFACE_SEND_OP_MASK (~(UCS_MASK(10)))
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
@@ -320,7 +319,8 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t *q;
     } ctrl; /* Control RXQ for internal protocols. */
     struct {
-      uct_bxi_rxq_t *q;
+      ptl_pt_index_t pti;
+      uct_bxi_mem_entry_t entry; 
     } rma;
     ucs_mpool_t ooo_mp; /* Memory pool of Out-of-order operations */
   } rx;
