@@ -23,7 +23,6 @@ typedef struct uct_bxi_ep {
   uint8_t               conn_state; /* Connection state. */
   uct_bxi_ep_conn_t    *conn;       /* Rndv counters. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
-  ucs_list_link_t       fenced_ops; /* Queue of fenced OPs */
   uint16_t              fence_beat; /* Endpoint local fence beat */
   ucs_queue_head_t      pending_q;  /* Head of pending queue */
 } uct_bxi_ep_t;
@@ -219,11 +218,6 @@ uct_bxi_ep_add_send_op(uct_bxi_ep_t *ep, uct_bxi_iface_send_op_t *op)
           ucs_derived_of(ep->super.super.iface, uct_bxi_iface_t);
 
   uct_bxi_iface_op_res(iface, op);
-  op->comp.comp += ep->fence_beat;
-  if (ep->fence_beat > 0) {
-    op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_FENCED;
-    ucs_list_add_tail(&ep->fenced_ops, &op->felem);
-  };
   //NOTE: Queue is used to complete flush operations.
   ucs_list_add_tail(&ep->send_ops, &op->elem);
 

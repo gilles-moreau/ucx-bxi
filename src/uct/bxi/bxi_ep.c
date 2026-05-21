@@ -14,6 +14,10 @@ ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_SWAP] = PTL_SWAP, [UCT_ATOMIC_OP_CSWAP] = PTL_CSWAP,
 };
 
+static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
+                                          uct_bxi_ep_t            *ep,
+                                          uct_bxi_iface_send_op_t *op);
+
 // Operation completion handlers
 void uct_bxi_send_op_handler(uct_bxi_iface_send_op_t *op, const void *resp)
 {
@@ -53,12 +57,101 @@ static void uct_bxi_send_ato_op_handler(uct_bxi_iface_send_op_t *op,
 static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
                                              const void              *resp)
 {
+  uct_bxi_iface_send_op_t *tmp, *fop;
+
   //NOTE: flush operation are only used when a user_comp is provided
   if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH) {
     uct_invoke_completion(op->user_comp, UCS_OK);
+  } else {
+    ucs_assert(op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCE);
+    /* Decrement endpoint fence beat */
+    op->ep->fence_beat--;
+    /* Loop over fenced operations on endpoint and complete them if possible. */
+    ucs_list_for_each_safe (fop, tmp, &op->ep->send_ops, felem) {
+      ucs_assert(fop->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCED);
+
+      fop->ep_fb--;
+      uct_bxi_ep_execute_op(fop->iface, fop->ep, fop);
+    }
   }
 
   uct_bxi_ep_remove_from_queue(op);
+}
+
+static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
+                                          uct_bxi_ep_t            *ep,
+                                          uct_bxi_iface_send_op_t *op)
+{
+  ucs_status_t status;
+
+  /* Check if operation can be executed. If fence beat > 0, it means a 
+   * fence operation is still ongoing and operation must be stalled until 
+   * its completion. */
+  if (op->ep_fb > 0) {
+    op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_FENCED;
+    status     = UCS_OK;
+    goto out;
+  };
+
+  switch (op->flags & UCT_BXI_IFACE_SEND_OP_MASK) {
+  case UCT_BXI_IFACE_SEND_OP_TYPE_AM:
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.am, 0, 0, op, op->am.hdr));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY:
+    status = uct_bxi_wrap(
+            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)op->put.buffer,
+                   op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                   ep->iface_addr.rma, 0, op->put.resolved_raddr, op, 0));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY:
+    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, op->put.resolved_raddr,
+                                 op, 0));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY:
+    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+                                 op->length, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, op->get.resolved_raddr,
+                                 op));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY:
+    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
+                                 (ptl_size_t)op->get.buffer, op->length,
+                                 ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                                 op->get.resolved_raddr, op));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC:
+    status = uct_bxi_wrap(PtlAtomic(
+            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
+            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+            op->atomic.remote_addr, op, 0, op->atomic.op_code, op->atomic.dt));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_FETCH:
+    status = uct_bxi_wrap(PtlFetchAtomic(
+            iface->tx.mem_desc->mdh, (uint64_t)op->atomic.result,
+            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
+            0, op->atomic.op_code, op->atomic.dt));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_CAS:
+    status = uct_bxi_wrap(PtlSwap(
+            iface->tx.mem_desc->mdh, (uint64_t)op->atomic.result,
+            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
+            0, &op->atomic.compare, PTL_CSWAP, op->atomic.dt));
+    break;
+  default:
+    ucs_error("BXI: unsupported operation. flags=%lx",
+              op->flags & UCT_BXI_IFACE_SEND_OP_MASK);
+    status = UCS_ERR_UNREACHABLE;
+    break;
+  }
+
+out:
+  return status;
 }
 
 // Send calls
@@ -81,8 +174,6 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
-  ptl_size_t               size;
-  ptl_hdr_data_t           hdr;
 
   UCT_CHECK_AM_ID(id);
   UCT_BXI_CHECK_EP(ep);
@@ -91,19 +182,20 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
   UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep, pack,
-                                  arg, uct_bxi_send_op_handler, &size);
-  if (size < 0) {
+                                  arg, uct_bxi_send_op_handler, &op->length);
+  if (op->length < 0) {
     goto err;
   }
 
-  UCT_BXI_CONN_HDR_SET(hdr, id, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.am, 0, 0, op, hdr));
+  /* Initialize other operation field. */
+  op->am.am_id  = id;
+  op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
+  op->ep_fb     = ep->fence_beat;
+  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, ep->conn->id.conn_key, ep->conn->sn++);
 
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
-    size = UCS_ERR_NO_RESOURCE;
+    op->length = UCS_ERR_NO_RESOURCE;
     goto err_release_op;
   } else if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
@@ -113,15 +205,15 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, size);
+  UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, op->length);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
-                         UCT_AM_TRACE_TYPE_SEND, id, op + 1, size);
+                         UCT_AM_TRACE_TYPE_SEND, id, op + 1, op->length);
 
-  return size;
+  return op->length;
 err_release_op:
   ucs_mpool_put(op);
 err:
-  return size;
+  return op->length;
 }
 
 static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
@@ -156,8 +248,6 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_rkey_t  *rkey       = (uct_bxi_rkey_t *)uct_rkey;
-  uint64_t         resolved_raddr;
-  ptl_hdr_data_t   hdr;
 
   UCT_CHECK_LENGTH(length, 0, iface->config.max_inline, "put_short");
   UCT_BXI_CHECK_EP(ep);
@@ -167,13 +257,11 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
                                uct_bxi_send_op_handler, length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->put.buffer          = (void *)buffer;
+  op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
+  op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)buffer,
-                               length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, resolved_raddr, op, hdr));
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
   }
@@ -199,8 +287,6 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   uct_bxi_iface_send_op_t *op;
   ssize_t                  size = 0;
   uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
-  uint64_t                 resolved_raddr;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -208,20 +294,17 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
    * an operation first, then a buffer of size seg_size. */
   UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
-                                  pack_cb, arg, uct_bxi_send_op_handler, &size);
-  if (size < 0) {
+                                  pack_cb, arg, uct_bxi_send_op_handler,
+                                  &op->length);
+  if (op->length < 0) {
     goto err;
   }
-  UCT_SKIP_ZERO_LENGTH(size, op);
+  UCT_SKIP_ZERO_LENGTH(op->length, op);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->put.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, resolved_raddr, op, hdr));
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   }
@@ -242,13 +325,10 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
   ucs_status_t     status;
-  ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
   uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
-  uint64_t                 resolved_raddr;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -257,22 +337,15 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
-                               uct_bxi_send_op_handler,
-                               uct_iov_total_length(iov, iovcnt));
-
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+                               uct_bxi_send_op_handler, iov->length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->length              = iov->length;
+  op->put.buffer          = iov->buffer;
+  op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
+  op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh,
-                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
-                               PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.rma, 0, resolved_raddr, op, hdr));
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut bcopy return %d", status);
   } else {
@@ -283,7 +356,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-  UCT_TL_EP_STAT_OP(&ep->super, PUT, ZCOPY, uct_iov_total_length(iov, iovcnt));
+  UCT_TL_EP_STAT_OP(&ep->super, PUT, ZCOPY, iov->length);
   uct_bxi_log_put(iface);
 
 err:
@@ -300,8 +373,6 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   uct_bxi_ep_t            *ep = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface      = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_rkey_t  *rkey       = (uct_bxi_rkey_t *)uct_rkey;
-  uint64_t         resolved_raddr;
-  ptl_hdr_data_t   hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -313,13 +384,10 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
                                       comp, arg, length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->length             = length;
+  op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlGetNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               resolved_raddr, op));
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -341,14 +409,10 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
   ucs_status_t     status;
-  size_t           iov_size;
-  ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
   uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
-  uint64_t                 resolved_raddr;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -357,25 +421,14 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 
   /* First, get OP while setting appropriate completion callback. */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
-                               uct_bxi_send_op_handler,
-                               uct_iov_total_length(iov, iovcnt));
-
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  ptl_iov  = ucs_alloca(iovcnt * sizeof(ptl_size_t));
-  iov_size = uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
-  //FIXME: redundant UCT_SKIP_ZERO_LENGTH?
-  UCT_SKIP_ZERO_LENGTH(iov_size);
+                               uct_bxi_send_op_handler, iov->length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->get.buffer         = iov->buffer;
+  op->length             = iov->length;
+  op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlGetNB and handle PTL_TRY_AGAI
-  status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
-                               (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
-                               ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                               resolved_raddr, op));
-
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlGet bcopy return %d", status);
   } else {
@@ -385,7 +438,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, uct_iov_total_length(iov, iovcnt));
+  UCT_TL_EP_STAT_OP(&ep->super, GET, ZCOPY, iov->length);
   uct_bxi_log_put(iface);
 
 err:
@@ -401,7 +454,6 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -411,15 +463,14 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
-  op->atomic.value = value;
+  op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC;
+  op->length             = size;
+  op->atomic.dt          = dt;
+  op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
+  op->atomic.value       = value;
+  op->atomic.remote_addr = remote_addr;
 
-  UCT_BXI_CONN_HDR_SET(hdr, 0, ep->conn->id.conn_key, ep->conn->sn++);
-  //TODO: replace by PtlAtomicNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(
-          PtlAtomic(iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                    PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                    remote_addr, op, hdr, uct_bxi_atomic_op_table[opcode], dt));
-
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   }
@@ -452,15 +503,15 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
-  op->atomic.value = value;
+  op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_FETCH;
+  op->length             = size;
+  op->atomic.dt          = dt;
+  op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
+  op->atomic.value       = value;
+  op->atomic.remote_addr = remote_addr;
+  op->atomic.result      = result;
 
-  //TODO: replace by PtlFetchAtomicNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(PtlFetchAtomic(
-          iface->tx.mem_desc->mdh, (uint64_t)result, iface->tx.mem_desc->mdh,
-          (uint64_t)&op->atomic.value, size, ep->dev_addr.pid,
-          ep->iface_addr.rma, 0, remote_addr, op, 0,
-          uct_bxi_atomic_op_table[opcode], dt));
-
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   } else {
@@ -494,16 +545,15 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
                                uct_bxi_send_ato_op_handler, size);
 
   /* Store the value since the Atomic call needs an address. */
-  op->atomic.value   = swap;
-  op->atomic.compare = compare;
+  op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_CAS;
+  op->length             = size;
+  op->atomic.dt          = dt;
+  op->atomic.remote_addr = remote_addr;
+  op->atomic.result      = result;
+  op->atomic.value       = swap;
+  op->atomic.compare     = compare;
 
-  //TODO: replace by PtlSwapNB and handle PTL_TRY_AGAIN
-  status = uct_bxi_wrap(
-          PtlSwap(iface->tx.mem_desc->mdh, (uint64_t)result,
-                  iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, size,
-                  ep->dev_addr.pid, ep->iface_addr.rma, 0, remote_addr, op, 0,
-                  &op->atomic.compare, PTL_CSWAP, dt));
-
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   } else {
@@ -885,7 +935,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   self->fence_beat = 0;
 
   ucs_list_head_init(&self->send_ops);
-  ucs_list_head_init(&self->fenced_ops);
   ucs_queue_head_init(&self->pending_q);
 
   id.pid      = self->dev_addr.pid;

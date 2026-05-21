@@ -117,37 +117,6 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
         {NULL},
 };
 
-static ucs_status_t uct_bxi_iface_block_handle_rma(uct_bxi_iface_t      *iface,
-                                                   uct_bxi_recv_block_t *block,
-                                                   ptl_event_t          *ev)
-{
-  ucs_status_t             status = UCS_OK;
-  uct_bxi_conn_id_t        id;
-  uct_bxi_ep_conn_t       *conn;
-  uct_bxi_iface_ooo_op_t  *ooo_op;
-  ucs_frag_list_ooo_type_t err;
-  uint32_t                 sn = UCT_BXI_CONN_SN_GET(ev->hdr_data);
-
-  /* Fetch endpoint connection to get out-of-order list. */
-  id.pid      = ev->initiator;
-  id.pti      = UCT_BXI_PT_NULL;
-  id.conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
-  uct_bxi_iface_get_conn(iface, id, &conn);
-
-  /* Initialize ooo operation. */
-  ooo_op        = ucs_mpool_get(&iface->rx.ooo_mp);
-  ooo_op->flags = 0;
-  ooo_op->size  = ev->mlength;
-  ooo_op->start = ev->start;
-
-  err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
-  if (err == UCS_FRAG_LIST_INSERT_FAIL) {
-    status = UCS_ERR_IO_ERROR;
-  }
-
-  return status;
-}
-
 static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
                                                   ptl_event_t          *ev)
@@ -454,20 +423,7 @@ static inline void uct_bxi_iface_handle_tx_failure(uct_bxi_iface_t *iface,
   ucs_assert(status == UCS_OK);
 }
 
-static UCS_F_ALWAYS_INLINE void uct_bxi_iface_flush_fenced_op(uct_bxi_ep_t *ep)
-{
-  uct_bxi_iface_send_op_t *op, *tmp;
-
-  /* Decrement endpoint fence beat */
-  ep->fence_beat--;
-
-  /* Loop over fenced operations on endpoint and complete them if possible. */
-  ucs_list_for_each_safe (op, tmp, &ep->fenced_ops, felem) {
-    uct_bxi_iface_completion_op(op);
-  }
-}
-
-static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
+static UCS_F_ALWAYS_INLINE void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
 {
   uct_bxi_iface_send_op_t *op, *tmp;
 
@@ -484,7 +440,6 @@ static void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
       uct_bxi_iface_completion_flush_op(op);
     } else if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCE) {
       UCT_TL_EP_STAT_FENCE(&ep->super);
-      uct_bxi_iface_flush_fenced_op(ep);
       uct_bxi_iface_completion_flush_op(op);
     } else {
       break;
@@ -536,10 +491,7 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
         if (ev.ni_fail_type != PTL_NI_OK) {
           uct_bxi_iface_handle_tx_failure(iface, op);
         }
-
         uct_bxi_iface_completion_op(op);
-        uct_bxi_iface_check_flush(op->ep);
-
         break;
       case PTL_EVENT_SEND:
       case PTL_EVENT_PUT:
@@ -577,9 +529,11 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   }
 
 out:
-  /* With new credits available, dispatch pending queue. */
+  /* With new credits available, dispatch pending queue and flush/fence 
+   * operations. */
   ucs_list_for_each (ep, &iface->eps, elem) {
     uct_pending_queue_dispatch(priv, &ep->pending_q, 1);
+    uct_bxi_iface_check_flush(ep);
   }
 
   return progressed;
@@ -973,15 +927,15 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   /* Initialize connection map */
   kh_init_inplace(uct_bxi_conn_map, &self->conn_map);
-
   /* Create RX Queues for RMA messages. Only a single block with events. */
   rxq_param.flags = UCT_BXI_RXQ_FLAG_RMA_BLOCK;
 #if HAVE_BXI3_R6LITE
-  rxq_param.options =
-          PTL_LE_OP_PUT | | PTL_ME_OP_GET | PTL_LE_EVENT_LINK_DISABLE;
+  rxq_param.options = PTL_LE_OP_PUT | PTL_ME_OP_GET |
+                      PTL_LE_EVENT_COMM_DISABLE | PTL_LE_EVENT_LINK_DISABLE;
 #else
   rxq_param.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_NO_TRUNCATE |
-                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN;
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE |
+                      PTL_ME_MAY_ALIGN;
 #endif
   rxq_param.eqh      = self->rx.eqh;
   rxq_param.nih      = md->nih;
@@ -989,7 +943,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   rxq_param.list     = PTL_PRIORITY_LIST;
   rxq_param.num_segs = 1;
   rxq_param.seg_size = PTL_SIZE_MAX;
-  rxq_param.handler  = uct_bxi_iface_block_handle_rma;
+  rxq_param.handler  = NULL;
   rxq_param.name     = "rxq-rma";
 
   status = uct_bxi_rxq_create(&rxq_param, &self->rx.rma.q);

@@ -56,7 +56,21 @@ enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCE     = UCS_BIT(2),
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCED    = UCS_BIT(3),
   UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(4),
+
+  // Operation type
+  UCT_BXI_IFACE_SEND_OP_TYPE_START     = UCS_BIT(10),
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM        = UCT_BXI_IFACE_SEND_OP_TYPE_START,
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY = UCS_BIT(11),
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY = UCS_BIT(12),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY = UCS_BIT(13),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY = UCS_BIT(14),
+  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(15),
+  UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(16),
+  UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(17),
 };
+
+#define UCT_BXI_IFACE_SEND_OP_MASK                                             \
+  (~(UCS_MASK(UCT_BXI_IFACE_SEND_OP_TYPE_START)))
 
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
@@ -111,15 +125,29 @@ typedef struct uct_bxi_iface_send_op {
 
   union {
     struct {
-      uct_unpack_callback_t unpack_cb;  /* Unpack callback for GET OP */
-      void                 *unpack_arg; /* Unpack user arg for GET OP */
+      uint8_t        am_id;
+      ptl_hdr_data_t hdr;
+    } am;
+    struct {
+      void    *buffer;
+      uint64_t resolved_raddr; /* Resolved remote address */
+    } put;
+    struct {
+      void                 *buffer;
+      uint64_t              resolved_raddr; /* Resolved remote address */
+      uct_unpack_callback_t unpack_cb;      /* Unpack callback for GET OP */
+      void                 *unpack_arg;     /* Unpack user arg for GET OP */
     } get;
     struct {
       uct_bxi_recv_block_t *block; /* Used for completion and OP cancel */
     } rndv;
     struct {
-      uint64_t value;
-      uint64_t compare;
+      ptl_op_t       op_code;
+      uint64_t       value;
+      uint64_t       compare;
+      ptl_datatype_t dt;
+      uint64_t       remote_addr;
+      uint64_t      *result;
     } atomic;
   };
 } uct_bxi_iface_send_op_t;
