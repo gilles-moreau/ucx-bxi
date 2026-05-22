@@ -38,16 +38,19 @@
   _tag  = (_tag << 16);                                                        \
   _tag |= ((_cnt) & UCT_BXI_RNDV_CNT_MASK);
 
-#define UCT_BXI_CONN_AM_ID_GET(_hdr) (((_hdr) >> 48) & 0xff)
-#define UCT_BXI_CONN_KEY_GET(_hdr)   (((_hdr) >> 32) & UCT_BXI_RNDV_CONN_KEY_MASK)
-#define UCT_BXI_CONN_SN_GET(_hdr)    ((_hdr) & 0xffffffff)
+#define UCT_BXI_CONN_AM_ID_GET(_hdr) (((_hdr) >> 40) & 0xff)
+#define UCT_BXI_CONN_PTI_GET(_hdr)   (((_hdr) >> 32) & 0xff)
+#define UCT_BXI_CONN_KEY_GET(_hdr)   (((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK)
+#define UCT_BXI_CONN_SN_GET(_hdr)    ((_hdr) & 0xffff)
 
-#define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _conn_key, _sn)                     \
+#define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _pti, _conn_key, _sn)               \
   _hdr  = ((_am_id) & 0xfful);                                                 \
+  _hdr  = (_hdr << 8);                                                         \
+  _hdr |= ((_pti) & 0xfful);                                                   \
   _hdr  = (_hdr << 16);                                                        \
   _hdr |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
-  _hdr  = (_hdr << 32);                                                        \
-  _hdr |= ((_sn) & 0xfffffffful);
+  _hdr  = (_hdr << 16);                                                        \
+  _hdr |= ((_sn) & 0xfffful);
 
 /* Operation flags */
 enum {
@@ -219,12 +222,7 @@ typedef struct uct_bxi_conn_id {
   uct_ep_conn_key_t conn_key; /* Connection key */
 } uct_bxi_conn_id_t;
 
-enum {
-  UCT_BXI_IFACE_OOO_AM = UCS_BIT(0),
-};
-
 typedef struct uct_bxi_iface_ooo_op {
-  unsigned             flags;
   uint8_t              am_id;
   void                *start;
   size_t               size;
@@ -235,7 +233,7 @@ typedef struct uct_bxi_ep_conn {
   uct_bxi_conn_id_t id;   /* Counter connection ID */
   uint16_t          recv; /* Counter of receive rndv requests */
   uint16_t          send; /* Counter of send rndv requests */
-  uint32_t          sn;   /* Message sequence number */
+  uint16_t          sn;   /* Message sequence number */
   ucs_frag_list_t   ooo;  /* Out of Order queue */
 } uct_bxi_ep_conn_t;
 

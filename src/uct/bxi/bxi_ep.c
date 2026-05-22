@@ -191,7 +191,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   op->am.am_id  = id;
   op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
   op->ep_fb     = ep->fence_beat;
-  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, ep->conn->id.conn_key, ep->conn->sn++);
+  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, ep->conn->id.pti, ep->conn->id.conn_key, ep->conn->sn++);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -875,7 +875,9 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
 static UCS_F_ALWAYS_INLINE khint_t
 uct_bxi_conn_map_conn_hash(uct_bxi_ep_conn_t *conn)
 {
-  return ucs_crc32(0, &conn->id, sizeof(conn->id));
+  uint32_t crc = ucs_crc32(0, &conn->id, sizeof(conn->id));
+  ucs_debug("BXI: crc=%d", crc);
+  return crc;
 }
 
 static UCS_F_ALWAYS_INLINE int
@@ -904,6 +906,8 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
   }
 
   conn->id = id;
+  ucs_debug("BXI: creating connection. nid=%d, pid=%d, pti=%d, conn key=%d.", 
+		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
   iter     = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
   ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
 
@@ -916,7 +920,8 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
   }
 
   /* Initialize counters. */
-  conn->sn = conn->send = conn->recv = 0;
+  conn->sn = conn->send = conn->recv = 1;
+  ucs_frag_list_init(0, &conn->ooo, -1 UCS_STATS_ARG(iface->super.stats));
 
 out:
   *conn_p = conn;
@@ -948,7 +953,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 
   id.pid      = self->dev_addr.pid;
   id.pti      = iface->tm.enabled ? uct_bxi_rxq_get_addr(iface->rx.tag.q) :
-                                    UCT_BXI_PT_NULL;
+                                    iface->rx.rma.pti;
   id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
                         params->conn_key :
                         UCT_EP_CONN_KEY_NULL;
@@ -958,9 +963,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   if (status != UCS_OK) {
     goto err;
   }
-
-  /* Initialize connection frag list for out-of-order support */
-  ucs_frag_list_init(0, &self->conn->ooo, -1 UCS_STATS_ARG(self->super.stats));
 
   /* Append endpoint to interface list. */
   ucs_list_add_head(&iface->eps, &self->elem);

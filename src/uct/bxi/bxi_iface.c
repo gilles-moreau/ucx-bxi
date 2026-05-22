@@ -123,7 +123,7 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
 {
   ucs_status_t             status = UCS_OK;
   uint8_t                  am_id  = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
-  uint32_t                 sn     = UCT_BXI_CONN_SN_GET(ev->hdr_data);
+  uint16_t                 sn     = UCT_BXI_CONN_SN_GET(ev->hdr_data);
   uct_bxi_iface_ooo_op_t  *ooo_op, *ooo_tmp;
   uct_bxi_conn_id_t        id;
   uct_bxi_ep_conn_t       *conn;
@@ -132,39 +132,44 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
 
   /* Fetch endpoint connection to get out-of-order list. */
   id.pid      = ev->initiator;
-  id.pti      = UCT_BXI_PT_NULL;
+  id.pti      = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
   id.conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
   uct_bxi_iface_get_conn(iface, id, &conn);
 
   /* Initialize ooo operation. */
   ooo_op        = ucs_mpool_get(&iface->rx.ooo_mp);
-  ooo_op->flags = UCT_BXI_IFACE_OOO_AM;
   ooo_op->size  = ev->mlength;
   ooo_op->start = ev->start;
   ooo_op->am_id = am_id;
 
   err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
   if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
+    //ucs_error("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+//		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
     /* Message arrived in order, thus invoke active message callback. */
     status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
                                  0);
     ucs_mpool_put(ooo_op);
   } else if ((err == UCS_FRAG_LIST_INSERT_FIRST) ||
              (err == UCS_FRAG_LIST_INSERT_READY)) {
+    ucs_error("BXI: previous msg. sn=%d", sn);
     /* Previous messages arrived out of order and can now be completed. */
     while ((elem = ucs_frag_list_pull(&conn->ooo)) != NULL) {
       ooo_tmp = ucs_container_of(&elem, uct_bxi_iface_ooo_op_t, elem);
-
-      if (ooo_tmp->flags & UCT_BXI_IFACE_OOO_AM) {
-        status = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
-                                     ooo_tmp->start, ooo_tmp->size, 0);
-      }
+      status = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
+		      ooo_tmp->start, ooo_tmp->size, 0);
       ucs_mpool_put(ooo_tmp);
     }
   } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
     /* Out of order message. */
-    ucs_debug("BXI: OOO message.");
+    ucs_error("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
+  } else if (err == UCS_FRAG_LIST_INSERT_DUP) {
+    /* Out of order message. */
+    ucs_error("BXI: DUP connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
   } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
+    ucs_error("BXI: failed msg inserted. sn=%d", sn);
     status = UCS_ERR_IO_ERROR;
     goto err;
   }
@@ -1039,7 +1044,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 
   /* Destroy connection map. */
   kh_foreach_key (&self->conn_map, conn, {
-    ucs_warn("BXI: unassigned endpoint connection. conn=%p", conn);
+    ucs_info("BXI: unassigned endpoint connection. conn=%p", conn);
     ucs_free(conn);
   })
     ;
