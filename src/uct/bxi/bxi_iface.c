@@ -124,16 +124,19 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
   ucs_status_t             status = UCS_OK;
   uint8_t                  am_id  = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
   uint16_t                 sn     = UCT_BXI_CONN_SN_GET(ev->hdr_data);
+  ptl_pt_index_t           pti    = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
+  uct_ep_conn_key_t           conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
   uct_bxi_iface_ooo_op_t  *ooo_op, *ooo_tmp;
-  uct_bxi_conn_id_t        id;
+  uct_bxi_conn_id_t        id = {0};
   uct_bxi_ep_conn_t       *conn;
   ucs_frag_list_elem_t    *elem;
   ucs_frag_list_ooo_type_t err;
 
   /* Fetch endpoint connection to get out-of-order list. */
-  id.pid      = ev->initiator;
-  id.pti      = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
-  id.conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
+  id.pid.phys.nid      = ev->initiator.phys.nid;
+  id.pid.phys.pid      = ev->initiator.phys.pid;
+  id.pti      = pti;
+  id.conn_key = conn_key;
   uct_bxi_iface_get_conn(iface, id, &conn);
 
   /* Initialize ooo operation. */
@@ -141,6 +144,7 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
   ooo_op->size  = ev->mlength;
   ooo_op->start = ev->start;
   ooo_op->am_id = am_id;
+  ooo_op->sn    = sn;
 
   err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
   if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
@@ -152,21 +156,23 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
     ucs_mpool_put(ooo_op);
   } else if ((err == UCS_FRAG_LIST_INSERT_FIRST) ||
              (err == UCS_FRAG_LIST_INSERT_READY)) {
-    ucs_error("BXI: previous msg. sn=%d", sn);
+    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
+                                 0);
     /* Previous messages arrived out of order and can now be completed. */
     while ((elem = ucs_frag_list_pull(&conn->ooo)) != NULL) {
-      ooo_tmp = ucs_container_of(&elem, uct_bxi_iface_ooo_op_t, elem);
+      ooo_tmp = ucs_container_of(elem, uct_bxi_iface_ooo_op_t, elem);
+      ucs_debug("BXI: sn=%d, start=%p, length=%ld, am_id=%d", ooo_tmp->sn, ooo_tmp->start, ooo_tmp->size, ooo_tmp->am_id);
       status = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
 		      ooo_tmp->start, ooo_tmp->size, 0);
       ucs_mpool_put(ooo_tmp);
     }
   } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
     /* Out of order message. */
-    ucs_error("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
-		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
+    ucs_debug("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d, am_id=%d.", 
+		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn, am_id);
   } else if (err == UCS_FRAG_LIST_INSERT_DUP) {
     /* Out of order message. */
-    ucs_error("BXI: DUP connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+    ucs_debug("BXI: DUP connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
 		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
   } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
     ucs_error("BXI: failed msg inserted. sn=%d", sn);
@@ -304,7 +310,10 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       endpoint which implies some changes in the way resource are
   //       managed.
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
-                    UCT_IFACE_FLAG_GET_BCOPY | UCT_IFACE_FLAG_PUT_SHORT |
+                    UCT_IFACE_FLAG_GET_BCOPY | 
+#if !HAVE_BXI3_R6LITE
+		    UCT_IFACE_FLAG_PUT_SHORT |
+#endif
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
                     UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
                     UCT_IFACE_FLAG_INTER_NODE |
@@ -878,7 +887,11 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
           .start   = NULL,
           .cth     = PTL_CT_NONE,
           .length  = PTL_SIZE_MAX,
+#if HAVE_BXI3_R6LITE
           .options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
+#else
+          .options = PTL_MD_EVENT_SEND_DISABLE,
+#endif
           .flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
   };
   status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);

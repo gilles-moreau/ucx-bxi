@@ -106,6 +106,9 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
                    ep->iface_addr.rma, 0, op->put.resolved_raddr, op, 0));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY:
+    ucs_debug("BXI: nid=%d, pid=%d, pti=%d, buff=%p, length=%ld, addr=%lu, mdh=%p", 
+		    ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid, ep->iface_addr.rma, 
+		    (void *)(op + 1), op->length, op->put.resolved_raddr, (void *)iface->tx.mem_desc->mdh.priv);
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.rma, 0, op->put.resolved_raddr,
@@ -219,6 +222,7 @@ err:
 static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
                                                           uct_bxi_rkey_t *rkey)
 {
+  return remote_addr;
   if (rkey->bar_ptr == (void *)0xdeadbeef) {
     /* Remote memory is host memory, no need to resolve it. */
     return remote_addr;
@@ -300,7 +304,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   if (op->length < 0) {
     goto err;
   }
-  UCT_SKIP_ZERO_LENGTH(op->length, op);
+  //UCT_SKIP_ZERO_LENGTH(op->length, op);
 
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb              = ep->fence_beat;
@@ -320,7 +324,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   uct_bxi_log_put(iface);
 
 err:
-  return size;
+  return op->length;
 }
 
 ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
@@ -390,6 +394,7 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb              = ep->fence_beat;
   op->length             = length;
+  op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY;
   op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
@@ -430,6 +435,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb              = ep->fence_beat;
+  op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY;
   op->get.buffer         = iov->buffer;
   op->length             = iov->length;
   op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
@@ -876,8 +882,27 @@ static UCS_F_ALWAYS_INLINE khint_t
 uct_bxi_conn_map_conn_hash(uct_bxi_ep_conn_t *conn)
 {
   uint32_t crc = ucs_crc32(0, &conn->id, sizeof(conn->id));
-  ucs_debug("BXI: crc=%d", crc);
+  conn->crc = crc;
   return crc;
+}
+
+char *buffer_to_hex_string(const void *buffer, size_t size) {
+    const uint8_t *byte_ptr = (const uint8_t *)buffer;
+
+    // Allocate memory for the hex string:
+    // Each byte is represented as 2 hex chars + null terminator.
+    char *hex_str = (char *)malloc(size * 2 + 1);
+    if (!hex_str) {
+        return NULL; // Allocation failed
+    }
+
+    for (size_t i = 0; i < size; i++) {
+        // Write 2-digit hex for the current byte
+        sprintf(hex_str + i * 2, "%02x", byte_ptr[i]);
+    }
+
+    hex_str[size * 2] = '\0'; // Null-terminate the string
+    return hex_str;
 }
 
 static UCS_F_ALWAYS_INLINE int
@@ -904,10 +929,12 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
   if (conn == NULL) {
     ucs_fatal("BXI: failed to allocate bxi endpoint connection.");
   }
+  memset(conn, 0, sizeof(*conn));
 
-  conn->id = id;
-  ucs_debug("BXI: creating connection. nid=%d, pid=%d, pti=%d, conn key=%d.", 
-		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
+  conn->id.pid = id.pid;
+  conn->id.pti = id.pti;
+  conn->id.conn_key = id.conn_key;
+
   iter     = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
   ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
 
@@ -955,8 +982,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   id.pti      = iface->tm.enabled ? uct_bxi_rxq_get_addr(iface->rx.tag.q) :
                                     iface->rx.rma.pti;
   id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
-                        params->conn_key :
-                        UCT_EP_CONN_KEY_NULL;
+                        params->conn_key & UCT_BXI_RNDV_CONN_KEY_MASK:
+                        UCT_EP_CONN_KEY_NULL & UCT_BXI_RNDV_CONN_KEY_MASK;
 
   /* Get endpoint connection based on triplet. */
   status = uct_bxi_iface_get_conn(iface, id, &self->conn);

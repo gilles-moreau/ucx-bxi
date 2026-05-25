@@ -38,9 +38,9 @@
   _tag  = (_tag << 16);                                                        \
   _tag |= ((_cnt) & UCT_BXI_RNDV_CNT_MASK);
 
-#define UCT_BXI_CONN_AM_ID_GET(_hdr) (((_hdr) >> 40) & 0xff)
-#define UCT_BXI_CONN_PTI_GET(_hdr)   (((_hdr) >> 32) & 0xff)
-#define UCT_BXI_CONN_KEY_GET(_hdr)   (((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK)
+#define UCT_BXI_CONN_AM_ID_GET(_hdr) ((uint8_t)(((_hdr) >> 40) & 0xfful))
+#define UCT_BXI_CONN_PTI_GET(_hdr)   ((ptl_pt_index_t)(((_hdr) >> 32) & 0xfful))
+#define UCT_BXI_CONN_KEY_GET(_hdr)   ((uct_ep_conn_key_t)(((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK))
 #define UCT_BXI_CONN_SN_GET(_hdr)    ((_hdr) & 0xffff)
 
 #define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _pti, _conn_key, _sn)               \
@@ -220,13 +220,14 @@ typedef struct uct_bxi_conn_id {
   ptl_process_t     pid;      /* Portals Process ID */
   ptl_pt_index_t    pti;      /* Portals Table Index */
   uct_ep_conn_key_t conn_key; /* Connection key */
-} uct_bxi_conn_id_t;
+} UCS_S_PACKED uct_bxi_conn_id_t;
 
 typedef struct uct_bxi_iface_ooo_op {
   uint8_t              am_id;
   void                *start;
   size_t               size;
   ucs_frag_list_elem_t elem; /* Element in ooo connection list */
+  uint16_t sn;
 } uct_bxi_iface_ooo_op_t;
 
 typedef struct uct_bxi_ep_conn {
@@ -235,6 +236,7 @@ typedef struct uct_bxi_ep_conn {
   uint16_t          send; /* Counter of send rndv requests */
   uint16_t          sn;   /* Message sequence number */
   ucs_frag_list_t   ooo;  /* Out of Order queue */
+  uint32_t crc;
 } uct_bxi_ep_conn_t;
 
 KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_ep_conn_t *, char);
