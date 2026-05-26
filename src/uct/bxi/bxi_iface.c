@@ -148,8 +148,8 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
 
   err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
   if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
-    //ucs_error("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
-//		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
+    ucs_error("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
     /* Message arrived in order, thus invoke active message callback. */
     status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
                                  0);
@@ -831,7 +831,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
   mp_params.elems_per_chunk = config->tx.mp.bufs_grow;
   mp_params.elem_size       = sizeof(uct_bxi_iface_ooo_op_t);
-  mp_params.max_elems       = config->tx.max_queue_len;
+  mp_params.max_elems       = -1;
   mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
   mp_params.align_offset    = sizeof(uct_bxi_iface_ooo_op_t);
   mp_params.ops             = &uct_bxi_ooo_mpool_ops;

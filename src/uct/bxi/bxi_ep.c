@@ -67,10 +67,14 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
     /* Decrement endpoint fence beat */
     op->ep->fence_beat--;
     /* Loop over fenced operations on endpoint and complete them if possible. */
-    ucs_list_for_each_safe (fop, tmp, &op->ep->send_ops, felem) {
-      ucs_assert(fop->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCED);
+    ucs_list_for_each_safe (fop, tmp, &op->ep->send_ops, elem) {
+      if (fop->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCE) {
+        continue;
+      }
 
       fop->ep_fb--;
+      ucs_assert(fop->ep_fb >= 0);
+      ucs_assert(fop->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCED);
       uct_bxi_ep_execute_op(fop->iface, fop->ep, fop);
     }
   }
@@ -945,6 +949,9 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
     conn = kh_key(&iface->conn_map, iter);
     goto out;
   }
+
+  ucs_debug("BXI: creating connection. iface=%p, nid=%d, pid=%d, pti=%d, conn key=%d.", 
+		  iface, id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
 
   /* Initialize counters. */
   conn->sn = conn->send = conn->recv = 1;

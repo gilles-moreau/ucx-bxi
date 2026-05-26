@@ -507,9 +507,6 @@ uct_bxi_ep_remove_from_queue(uct_bxi_iface_send_op_t *op)
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_release_op(uct_bxi_iface_send_op_t *op)
 {
-  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCED) {
-    ucs_list_del(&op->felem);
-  }
   op->flags = 0;
   uct_bxi_iface_available_add(op->iface, 1);
   ucs_mpool_put_inline(op);

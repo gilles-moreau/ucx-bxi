@@ -717,6 +717,7 @@ ucs_status_t ucp_worker_mem_type_eps_create(ucp_worker_h worker)
                                               UCP_EP_INIT_FLAG_MEM_TYPE |
                                               UCP_EP_INIT_FLAG_INTERNAL,
                                               ep_name, addr_indices,
+					      UCP_EP_CONN_KEY_NULL,
                                               &worker->mem_type_ep[mem_type]);
         if (status != UCS_OK) {
             UCS_ASYNC_UNBLOCK(&worker->async);
@@ -856,7 +857,8 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
                              const ucp_tl_bitmap_t *local_tl_bitmap,
                              const ucp_unpacked_address_t *remote_address,
                              unsigned ep_init_flags, const char *message,
-                             unsigned *addr_indices, ucp_ep_h *ep_p)
+                             unsigned *addr_indices, ucp_ep_conn_key_t conn_key,
+			     ucp_ep_h *ep_p)
 {
     ucp_tl_bitmap_t ep_tl_bitmap;
     ucs_status_t status;
@@ -868,6 +870,7 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
     if (status != UCS_OK) {
         goto err;
     }
+    ep->conn_key = conn_key;
 
     /* initialize transport endpoints */
     status = ucp_wireup_init_lanes(ep, ep_init_flags, local_tl_bitmap,
@@ -1070,19 +1073,19 @@ ucp_ep_create_api_conn_request(ucp_worker_h worker,
     return status;
 }
 
-static uct_ep_conn_key_t ucp_ep_get_conn_key(ucp_ep_match_conn_sn_t conn_sn,
-                                             const ucp_ep_params_t *params)
-{
-    unsigned flags = UCP_PARAM_VALUE(EP, params, flags, FLAGS, 0);
-
-    if (flags & UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY) {
-        return conn_sn;
-    } else if (params->field_mask & UCP_EP_PARAM_FIELD_CONN_KEY) {
-        return params->conn_key;
-    } else {
-        return UCP_EP_CONN_KEY_NULL;
-    }
-}
+//static uct_ep_conn_key_t ucp_ep_get_conn_key(ucp_ep_match_conn_sn_t conn_sn,
+//                                             const ucp_ep_params_t *params)
+//{
+//    unsigned flags = UCP_PARAM_VALUE(EP, params, flags, FLAGS, 0);
+//
+//    if (flags & UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY) {
+//        return conn_sn;
+//    } else if (params->field_mask & UCP_EP_PARAM_FIELD_CONN_KEY) {
+//        return params->conn_key;
+//    } else {
+//        return UCP_EP_CONN_KEY_NULL;
+//    }
+//}
 
 static ucs_status_t
 ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
@@ -1093,7 +1096,7 @@ ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
     unsigned addr_indices[UCP_MAX_LANES];
     ucp_unpacked_address_t remote_address;
     ucp_ep_match_conn_sn_t conn_sn;
-    ucp_ep_conn_key_t      conn_key;
+    //ucp_ep_conn_key_t      conn_key;
     ucs_status_t status;
     unsigned flags;
     ucp_ep_h ep;
@@ -1141,7 +1144,8 @@ ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
 
     status = ucp_ep_create_to_worker_addr(worker, &ucp_tl_bitmap_max,
                                           &remote_address, ep_init_flags,
-                                          "from api call", addr_indices, &ep);
+                                          "from api call", addr_indices, 
+					  conn_sn, &ep);
     if (status != UCS_OK) {
         goto out_free_address;
     }
@@ -1200,8 +1204,8 @@ out_resolve_remote_id:
     }
 
     /* Configure connection key if provided. */
-    conn_key = ucp_ep_get_conn_key(conn_sn, params);
-    ucp_ep_config_conn_key(worker, ep, conn_key);
+    //conn_key = ucp_ep_get_conn_key(conn_sn, params);
+    //ucp_ep_config_conn_key(worker, ep, conn_key);
 out_free_address:
     ucs_free(remote_address.address_list);
 out:

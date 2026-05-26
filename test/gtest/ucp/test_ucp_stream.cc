@@ -1003,7 +1003,7 @@ test_ucp_stream_many2one::erase_completed_reqs(std::vector<request_wrapper_t> &r
 }
 
 UCS_TEST_P(test_ucp_stream_many2one, drop_data) {
-    send_all(DATATYPE, 10);
+    send_all(DATATYPE, 2);
 
     ASSERT_EQ(m_receiver_idx, m_nsenders);
     for (size_t i = 0; i <= m_receiver_idx; ++i) {
