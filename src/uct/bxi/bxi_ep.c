@@ -198,7 +198,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   op->am.am_id  = id;
   op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
   op->ep_fb     = ep->fence_beat;
-  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, ep->conn->id.pti, ep->conn->id.conn_key, ep->conn->sn++);
+  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, iface->rx.rma.pti, ep->conn->id.conn_key, ep->conn->sn++);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -209,6 +209,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   /* Append operation descriptor to completion queue. */
+  ucs_debug("BXI: bcopy. sn=%d", ep->conn->sn-1);
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
@@ -987,7 +988,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 
   id.pid      = self->dev_addr.pid;
   id.pti      = iface->tm.enabled ? uct_bxi_rxq_get_addr(iface->rx.tag.q) :
-                                    iface->rx.rma.pti;
+                                    self->iface_addr.rma;
   id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
                         params->conn_key & UCT_BXI_RNDV_CONN_KEY_MASK:
                         UCT_EP_CONN_KEY_NULL & UCT_BXI_RNDV_CONN_KEY_MASK;

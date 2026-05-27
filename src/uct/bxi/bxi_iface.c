@@ -148,7 +148,7 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
 
   err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
   if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
-    ucs_error("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
+    ucs_debug("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
 		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
     /* Message arrived in order, thus invoke active message callback. */
     status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
