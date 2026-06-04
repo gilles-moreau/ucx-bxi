@@ -39,33 +39,33 @@ AC_DEFUN([UCX_CHECK_BXI], [
                         AS_IF([test "x$bxi_happy" = xyes],
                                         [AC_CHECK_LIB([portals], [PtlInit], 
                                                 bxi_happy="yes"
-						BXI_LIBS="-lportals", 
+						                                    BXI_LIBS="-lportals", 
                                                 bxi_happy="no")])
 
                         AS_IF([test "x$bxi_happy" = xno],
-                                        [LIBS="$save_LIBS -lportals-bxi3"
-					AC_CHECK_LIB([portals-bxi3], [PtlInit], 
-                                                bxi_happy="yes"
-						BXI_LIBS="-lportals-bxi3", 
-                                                bxi_happy="no")])
+                              [LIBS="$save_LIBS -lportals-bxi3"
+					                          AC_CHECK_LIB([portals-bxi3], [PtlInit], 
+                                                  bxi_happy="yes"
+						                                      BXI_LIBS="-lportals-bxi3", 
+                                                  bxi_happy="no")])
 
- 			AC_CHECK_DECLS([PTL_LE_MANAGE_LOCAL],
-               			[AC_DEFINE([HAVE_BXI3_R6LITE], [1],
-                          		   [Check for BXI3 r6lite version])],
-               			[],
-               			[[#include <portals4.h>]])
+ 			                  AC_CHECK_DECLS([PTL_LE_MANAGE_LOCAL],
+                                 			[AC_DEFINE([HAVE_BXI3_R6LITE], [1],
+                                            		   [Check for BXI3 r6lite version])],
+                                 			[],
+                                 			[[#include <portals4.h>]])
 
                         AS_IF([test "x$bxi_happy" = xyes],
-                                        [AC_DEFINE([HAVE_BXI], 1, [Enable BXI support])
-                                        AC_SUBST([BXI_CPPFLAGS])
-                                        AC_SUBST([BXI_LDFLAGS])
-                                        AC_SUBST([BXI_LIBS])],
-                                        [AC_MSG_WARN([Portals not found])])
+                                   [AC_DEFINE([HAVE_BXI], 1, [Enable BXI support])
+                                   AC_SUBST([BXI_CPPFLAGS])
+                                   AC_SUBST([BXI_LDFLAGS])
+                                   AC_SUBST([BXI_LIBS])],
+                                   [AC_MSG_WARN([Portals not found])])
 
-                        CPPFLAGS=$save_CPPFLAGS
-                        LDFLAGS=$save_LDFLAGS
-                        LIBS=$save_LIBS],
-                        [AC_MSG_WARN([BXI was explicitly disabled])]
+                       CPPFLAGS=$save_CPPFLAGS
+                       LDFLAGS=$save_LDFLAGS
+                       LIBS=$save_LIBS],
+                       [AC_MSG_WARN([BXI was explicitly disabled])]
         )
 
         AM_CONDITIONAL([HAVE_BXI], [test "x$bxi_happy" != xno])

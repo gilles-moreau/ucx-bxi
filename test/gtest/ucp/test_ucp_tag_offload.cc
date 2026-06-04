@@ -655,7 +655,8 @@ err:
                                 int is_rndv) {
         ucp_request_param_t param = {};
         
-        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_SCHEDH | 
+            UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.schedh   = sched;
         return ucp_tag_send_nbx(e.ep(), buf, length, tag, &param);
     }
@@ -666,7 +667,8 @@ err:
                                 int is_rndv) {
         ucp_request_param_t param = {};
         
-        param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH;
+        param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH | 
+            UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
         param.schedh   = sched;
         param.reply_ep = !is_rndv ? NULL : e.ep();
@@ -711,8 +713,10 @@ err:
 
         // Prepare the receive operation of the sender. In case of rndv, 
         // it must be offloaded so offload it anyway.
-        req = recv_sched(sender(), length, send_buf.data(), tag, 
-                           s_sched, is_rndv);
+        param.op_attr_mask = !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
+        param.reply_ep     = !is_rndv ? NULL : sender().ep();
+        ucp_tag_recv_nbx(sender().worker(), send_buf.data(),
+                         length, tag, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
@@ -720,8 +724,8 @@ err:
 
         // Last operation must not be offloaded since it would otherwise have a 
         // dependency on the previous receive.
-        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(), length, 
-                               tag, &param);
+        req = send_sched(sender(), length, send_buf.data(), tag, 
+                           s_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
@@ -838,8 +842,8 @@ err:
 
         // Prepare the receive operation of the sender. No offload 
         // sched is provided since sender's operations are not offloaded.
-        req = recv_sched(sender(), length, send_buf.data(), g, s_sched, 
-                           is_rndv);
+        req = ucp_tag_recv_nbx(sender().worker(), send_buf.data(),
+                                length, g, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
@@ -848,15 +852,15 @@ err:
         // Finally, send the gather operations.
         // Last operations must not be offloaded since they would 
         // otherwise have a dependency on the previous receive.
-        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(), 
-                               length/2, g1, &param);
+        req = send_sched(sender(), length/2, send_buf.data(), g1, s_sched, 
+                         is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.push_back(req);
 
-        req = ucp_tag_send_nbx(sender().ep(), send_buf.data() + length/2, 
-                               length/2, g2, &param);
+        req = send_sched(sender(), length/2, send_buf.data() + length/2, g2, s_sched, 
+                         is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }

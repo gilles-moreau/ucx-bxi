@@ -40,8 +40,9 @@
 
 #define UCT_BXI_CONN_AM_ID_GET(_hdr) ((uint8_t)(((_hdr) >> 40) & 0xfful))
 #define UCT_BXI_CONN_PTI_GET(_hdr)   ((ptl_pt_index_t)(((_hdr) >> 32) & 0xfful))
-#define UCT_BXI_CONN_KEY_GET(_hdr)   ((uct_ep_conn_key_t)(((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK))
-#define UCT_BXI_CONN_SN_GET(_hdr)    ((_hdr) & 0xffff)
+#define UCT_BXI_CONN_KEY_GET(_hdr)                                             \
+  ((uct_ep_conn_key_t)(((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK))
+#define UCT_BXI_CONN_SN_GET(_hdr) ((_hdr) & 0xffff)
 
 #define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _pti, _conn_key, _sn)               \
   _hdr  = ((_am_id) & 0xfful);                                                 \
@@ -227,7 +228,7 @@ typedef struct uct_bxi_iface_ooo_op {
   void                *start;
   size_t               size;
   ucs_frag_list_elem_t elem; /* Element in ooo connection list */
-  uint16_t sn;
+  uint16_t             sn;
 } uct_bxi_iface_ooo_op_t;
 
 typedef struct uct_bxi_ep_conn {
@@ -236,7 +237,7 @@ typedef struct uct_bxi_ep_conn {
   uint16_t          send; /* Counter of send rndv requests */
   uint16_t          sn;   /* Message sequence number */
   ucs_frag_list_t   ooo;  /* Out of Order queue */
-  uint32_t crc;
+  uint32_t          crc;
 } uct_bxi_ep_conn_t;
 
 KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_ep_conn_t *, char);
@@ -319,8 +320,8 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t *q;
     } ctrl; /* Control RXQ for internal protocols. */
     struct {
-      ptl_pt_index_t pti;
-      uct_bxi_mem_entry_t entry; 
+      ptl_pt_index_t      pti;
+      uct_bxi_mem_entry_t entry;
     } rma;
     ucs_mpool_t ooo_mp; /* Memory pool of Out-of-order operations */
   } rx;
@@ -694,13 +695,14 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
 //  } else {
 
 #define UCT_BXI_IFACE_GET_RX_RNDV_DESC(_iface, _mp, _desc, _mem_type, _start,  \
-                                       _size, _cid, _cnt, _handler, _err_code) \
+                                       _size, _pti, _ckey, _cnt, _handler,     \
+                                       _err_code)                              \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
   (_desc)->start = _start;                                                     \
   (_desc)->size  = _size;                                                      \
   (_desc)->start = _start;                                                     \
   (_desc)->size  = _size;                                                      \
-  UCT_BXI_RNDV_TAG_SET((_desc)->tag, (_cid).pti, (_cid).conn_key, _cnt);       \
+  UCT_BXI_RNDV_TAG_SET((_desc)->tag, _pti, _ckey, _cnt);                       \
   (_desc)->handler  = _handler;                                                \
   (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 

@@ -110,9 +110,6 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
                    ep->iface_addr.rma, 0, op->put.resolved_raddr, op, 0));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY:
-    ucs_debug("BXI: nid=%d, pid=%d, pti=%d, buff=%p, length=%ld, addr=%lu, mdh=%p", 
-		    ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid, ep->iface_addr.rma, 
-		    (void *)(op + 1), op->length, op->put.resolved_raddr, (void *)iface->tx.mem_desc->mdh.priv);
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.rma, 0, op->put.resolved_raddr,
@@ -198,7 +195,8 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   op->am.am_id  = id;
   op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
   op->ep_fb     = ep->fence_beat;
-  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, iface->rx.rma.pti, ep->conn->id.conn_key, ep->conn->sn++);
+  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, iface->rx.rma.pti, ep->conn->id.conn_key,
+                       ep->conn->sn++);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -209,7 +207,6 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   /* Append operation descriptor to completion queue. */
-  ucs_debug("BXI: bcopy. sn=%d", ep->conn->sn-1);
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
@@ -227,7 +224,6 @@ err:
 static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
                                                           uct_bxi_rkey_t *rkey)
 {
-  return remote_addr;
   if (rkey->bar_ptr == (void *)0xdeadbeef) {
     /* Remote memory is host memory, no need to resolve it. */
     return remote_addr;
@@ -267,6 +263,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
 
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb               = ep->fence_beat;
+  op->length              = length;
   op->put.buffer          = (void *)buffer;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
@@ -309,12 +306,12 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   if (op->length < 0) {
     goto err;
   }
-  //UCT_SKIP_ZERO_LENGTH(op->length, op);
+  UCT_SKIP_ZERO_LENGTH(op->length, op);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  op->ep_fb              = ep->fence_beat;
-  op->flags             |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY;
-  op->put.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->ep_fb               = ep->fence_beat;
+  op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY;
+  op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
@@ -397,10 +394,10 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
                                       comp, arg, length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  op->ep_fb              = ep->fence_beat;
-  op->length             = length;
+  op->ep_fb               = ep->fence_beat;
+  op->length              = length;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY;
-  op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
@@ -439,11 +436,11 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                uct_bxi_send_op_handler, iov->length);
 
   /* Compute remote address based on remote gdrcopy registration. */
-  op->ep_fb              = ep->fence_beat;
+  op->ep_fb               = ep->fence_beat;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY;
-  op->get.buffer         = iov->buffer;
-  op->length             = iov->length;
-  op->get.resolved_raddr = uct_bxi_resolve_raddr(remote_addr, rkey);
+  op->get.buffer          = iov->buffer;
+  op->length              = iov->length;
+  op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
@@ -665,10 +662,6 @@ ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,
     return UCS_OK;
   }
 
-  ucs_list_for_each (op, &ep->send_ops, elem) {
-    ucs_debug("BXI: op=%p, comp=%d, flags=%08x", op, op->comp.comp, op->flags);
-  }
-
   if (flags & UCT_FLUSH_FLAG_REMOTE) {
     if (!(ep->flags & UCT_BXI_EP_FLUSH_REMOTE)) {
       return UCS_INPROGRESS;
@@ -887,27 +880,28 @@ static UCS_F_ALWAYS_INLINE khint_t
 uct_bxi_conn_map_conn_hash(uct_bxi_ep_conn_t *conn)
 {
   uint32_t crc = ucs_crc32(0, &conn->id, sizeof(conn->id));
-  conn->crc = crc;
+  conn->crc    = crc;
   return crc;
 }
 
-char *buffer_to_hex_string(const void *buffer, size_t size) {
-    const uint8_t *byte_ptr = (const uint8_t *)buffer;
+char *buffer_to_hex_string(const void *buffer, size_t size)
+{
+  const uint8_t *byte_ptr = (const uint8_t *)buffer;
 
-    // Allocate memory for the hex string:
-    // Each byte is represented as 2 hex chars + null terminator.
-    char *hex_str = (char *)malloc(size * 2 + 1);
-    if (!hex_str) {
-        return NULL; // Allocation failed
-    }
+  // Allocate memory for the hex string:
+  // Each byte is represented as 2 hex chars + null terminator.
+  char *hex_str = (char *)malloc(size * 2 + 1);
+  if (!hex_str) {
+    return NULL; // Allocation failed
+  }
 
-    for (size_t i = 0; i < size; i++) {
-        // Write 2-digit hex for the current byte
-        sprintf(hex_str + i * 2, "%02x", byte_ptr[i]);
-    }
+  for (size_t i = 0; i < size; i++) {
+    // Write 2-digit hex for the current byte
+    sprintf(hex_str + i * 2, "%02x", byte_ptr[i]);
+  }
 
-    hex_str[size * 2] = '\0'; // Null-terminate the string
-    return hex_str;
+  hex_str[size * 2] = '\0'; // Null-terminate the string
+  return hex_str;
 }
 
 static UCS_F_ALWAYS_INLINE int
@@ -936,11 +930,11 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
   }
   memset(conn, 0, sizeof(*conn));
 
-  conn->id.pid = id.pid;
-  conn->id.pti = id.pti;
+  conn->id.pid      = id.pid;
+  conn->id.pti      = id.pti;
   conn->id.conn_key = id.conn_key;
 
-  iter     = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
+  iter = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
   ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
 
   /* Get the connection or create it if it does not exist and add 
@@ -951,8 +945,9 @@ ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
     goto out;
   }
 
-  ucs_debug("BXI: creating connection. iface=%p, nid=%d, pid=%d, pti=%d, conn key=%d.", 
-		  iface, id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
+  ucs_debug("BXI: creating connection. iface=%p, nid=%d, pid=%d, pti=%d, conn "
+            "key=%d.",
+            iface, id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
 
   /* Initialize counters. */
   conn->sn = conn->send = conn->recv = 1;
@@ -986,11 +981,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   ucs_list_head_init(&self->send_ops);
   ucs_queue_head_init(&self->pending_q);
 
-  id.pid      = self->dev_addr.pid;
-  id.pti      = iface->tm.enabled ? uct_bxi_rxq_get_addr(iface->rx.tag.q) :
-                                    self->iface_addr.rma;
+  id.pid = self->dev_addr.pid;
+  id.pti = iface->tm.enabled ? self->iface_addr.ctrl : self->iface_addr.rma;
   id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
-                        params->conn_key & UCT_BXI_RNDV_CONN_KEY_MASK:
+                        params->conn_key & UCT_BXI_RNDV_CONN_KEY_MASK :
                         UCT_EP_CONN_KEY_NULL & UCT_BXI_RNDV_CONN_KEY_MASK;
 
   /* Get endpoint connection based on triplet. */

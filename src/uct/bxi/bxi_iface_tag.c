@@ -296,11 +296,18 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_mpool_params_t  mp_param;
   uct_bxi_rxq_param_t rxq_param;
 
-  if (!config->tm.enable || HAVE_BXI3_R6LITE) {
+  if (!config->tm.enable) {
     /* HW tag matching data structure should not be initialized. */
     iface->tm.enabled = 0;
     goto err;
   }
+
+#if HAVE_BXI3_R6LITE
+  ucs_warn("BXI: hardware matching not supported on R6LITE");
+  iface->tm.enabled = 0;
+  goto err;
+#endif
+
   iface->tm.enabled = 1;
 
   /* First, initialize interface configuration. */
@@ -349,7 +356,9 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   kh_init_inplace(uct_bxi_tag_addrs, &iface->tm.tag_addrs);
 
-  rxq_param.flags    = 0;
+  rxq_param.flags   = 0;
+  rxq_param.options = PTL_ME_OP_PUT | PTL_ME_MANAGE_LOCAL | PTL_ME_NO_TRUNCATE |
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_MAY_ALIGN;
   rxq_param.eqh      = iface->rx.eqh;
   rxq_param.nih      = uct_bxi_iface_md(iface)->nih;
   rxq_param.mp       = iface->config.rx.tag_mp;

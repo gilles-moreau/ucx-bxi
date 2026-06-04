@@ -59,7 +59,6 @@ typedef struct uct_bxi_recv_block {
 
 enum {
   UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL = UCS_BIT(1),
-  UCT_BXI_RXQ_FLAG_RMA_BLOCK     = UCS_BIT(2),
 };
 
 typedef struct uct_bxi_rxq_param {

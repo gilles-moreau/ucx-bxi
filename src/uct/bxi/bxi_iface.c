@@ -121,11 +121,11 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
                                                   ptl_event_t          *ev)
 {
-  ucs_status_t             status = UCS_OK;
-  uint8_t                  am_id  = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
-  uint16_t                 sn     = UCT_BXI_CONN_SN_GET(ev->hdr_data);
-  ptl_pt_index_t           pti    = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
-  uct_ep_conn_key_t           conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
+  ucs_status_t             status   = UCS_OK;
+  uint8_t                  am_id    = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
+  uint16_t                 sn       = UCT_BXI_CONN_SN_GET(ev->hdr_data);
+  ptl_pt_index_t           pti      = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
+  uct_ep_conn_key_t        conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
   uct_bxi_iface_ooo_op_t  *ooo_op, *ooo_tmp;
   uct_bxi_conn_id_t        id = {0};
   uct_bxi_ep_conn_t       *conn;
@@ -133,10 +133,10 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
   ucs_frag_list_ooo_type_t err;
 
   /* Fetch endpoint connection to get out-of-order list. */
-  id.pid.phys.nid      = ev->initiator.phys.nid;
-  id.pid.phys.pid      = ev->initiator.phys.pid;
-  id.pti      = pti;
-  id.conn_key = conn_key;
+  id.pid.phys.nid = ev->initiator.phys.nid;
+  id.pid.phys.pid = ev->initiator.phys.pid;
+  id.pti          = pti;
+  id.conn_key     = conn_key;
   uct_bxi_iface_get_conn(iface, id, &conn);
 
   /* Initialize ooo operation. */
@@ -148,8 +148,8 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
 
   err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
   if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
-    ucs_debug("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
-		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
+    ucs_debug("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.",
+              id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
     /* Message arrived in order, thus invoke active message callback. */
     status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
                                  0);
@@ -161,19 +161,16 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
     /* Previous messages arrived out of order and can now be completed. */
     while ((elem = ucs_frag_list_pull(&conn->ooo)) != NULL) {
       ooo_tmp = ucs_container_of(elem, uct_bxi_iface_ooo_op_t, elem);
-      ucs_debug("BXI: sn=%d, start=%p, length=%ld, am_id=%d", ooo_tmp->sn, ooo_tmp->start, ooo_tmp->size, ooo_tmp->am_id);
-      status = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
-		      ooo_tmp->start, ooo_tmp->size, 0);
+      status  = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
+                                    ooo_tmp->start, ooo_tmp->size, 0);
       ucs_mpool_put(ooo_tmp);
     }
   } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
     /* Out of order message. */
-    ucs_debug("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d, am_id=%d.", 
-		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn, am_id);
+    ucs_debug("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, "
+              "sn=%d, am_id=%d.",
+              id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn, am_id);
   } else if (err == UCS_FRAG_LIST_INSERT_DUP) {
-    /* Out of order message. */
-    ucs_debug("BXI: DUP connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.", 
-		  id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
   } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
     ucs_error("BXI: failed msg inserted. sn=%d", sn);
     status = UCS_ERR_IO_ERROR;
@@ -200,7 +197,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
                 "block=%p, nid=%d, pid=%d, match bits=%lx",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
@@ -310,9 +307,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       endpoint which implies some changes in the way resource are
   //       managed.
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
-                    UCT_IFACE_FLAG_GET_BCOPY | 
+                    UCT_IFACE_FLAG_GET_BCOPY |
 #if !HAVE_BXI3_R6LITE
-		    UCT_IFACE_FLAG_PUT_SHORT |
+                    UCT_IFACE_FLAG_PUT_SHORT |
 #endif
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
                     UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
@@ -331,8 +328,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //TODO: TEST UCT PEER FAILURE: UCT_IFACE_AM_SHORT is needed to support
   //      UCT_IFACE_FLAG_ERRHANDLE_PEER_FAILURE.
 
-#if HAVE_BXI3_R6LITE
-#else
+#if !HAVE_BXI3_R6LITE
   attr->cap.atomic32.op_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
@@ -378,7 +374,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
   //       option with MANAGE_LOCAL are not suitable has there are no way to
   //       leave space for this headroom...
-  attr->cap.tag.eager.max_zcopy = iface->config.seg_size * 2;
+  attr->cap.tag.eager.max_zcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
   attr->cap.tag.rndv.max_iov    = iface->config.max_iovecs;
@@ -799,9 +795,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   ucs_mpool_params_t       mp_params;
   uct_bxi_rxq_param_t      rxq_param;
 #if HAVE_BXI3_R6LITE
-  ptl_le_t                 le;
+  ptl_le_t le;
 #else
-  ptl_me_t                 me;
+  ptl_me_t me;
 #endif
 
   UCS_CLASS_CALL_SUPER_INIT(
@@ -883,16 +879,16 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Before setting TX operations, create the Memory Descriptor that
    * spans the whole virtual memory range. */
   mem_desc_param = (uct_bxi_mem_desc_param_t){
-          .eqh     = self->tx.eqh,
-          .start   = NULL,
-          .cth     = PTL_CT_NONE,
-          .length  = PTL_SIZE_MAX,
+          .eqh    = self->tx.eqh,
+          .start  = NULL,
+          .cth    = PTL_CT_NONE,
+          .length = PTL_SIZE_MAX,
 #if HAVE_BXI3_R6LITE
-          .options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
-#else
           .options = PTL_MD_EVENT_SEND_DISABLE,
+#else
+          .options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
 #endif
-          .flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
+          .flags = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
   };
   status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);
   if (status != UCS_OK) {
@@ -960,11 +956,11 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   }
 
 #if HAVE_BXI3_R6LITE
-  le.ct_handle         = PTL_CT_NONE;
-  le.uid               = PTL_UID_ANY;
-  le.start             = NULL;
-  le.length            = PTL_SIZE_MAX;
-  le.options = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
+  le.ct_handle = PTL_CT_NONE;
+  le.uid       = PTL_UID_ANY;
+  le.start     = NULL;
+  le.length    = PTL_SIZE_MAX;
+  le.options   = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
                PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
 
   /* RDMA operations are always matched on the same silent ME. */
@@ -1053,7 +1049,7 @@ err:
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
   uct_bxi_ep_conn_t *conn;
-  uct_bxi_md_t *md = uct_bxi_iface_md(self);
+  uct_bxi_md_t      *md = uct_bxi_iface_md(self);
 
   /* Destroy connection map. */
   kh_foreach_key (&self->conn_map, conn, {
@@ -1070,7 +1066,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   PtlMEUnlink(self->rx.rma.entry.meh);
 #endif
   PtlPTFree(md->nih, self->rx.rma.pti);
-
 
   /* Clean TX resources. */
   ucs_free(self->tx.short_desc);

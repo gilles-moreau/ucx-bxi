@@ -642,7 +642,7 @@ ucp_wireup_process_request(ucp_worker_h worker, ucp_ep_h ep,
             }
 
             /* add internal endpoint to hash */
-            ep->conn_sn = msg->conn_sn;
+            ep->conn_sn = ep->conn_key = msg->conn_sn;
             if (!ucp_ep_match_insert(worker, ep, remote_uuid, ep->conn_sn,
                                      UCS_CONN_MATCH_QUEUE_UNEXP)) {
                 if (worker->context->config.features & UCP_FEATURE_STREAM) {

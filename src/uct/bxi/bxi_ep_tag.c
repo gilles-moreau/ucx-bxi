@@ -186,32 +186,21 @@ err:
   return size;
 }
 
-//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
-//      eager, its size is limited by the seg_size that can be used in receiver's
-//      bounce buffer.
-ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
-                                        uint64_t imm, const uct_iov_t *iov,
-                                        size_t iovcnt, unsigned flags,
-                                        uct_completion_t *comp)
+static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
+        uct_bxi_iface_t *iface, uct_bxi_ep_t *ep, uct_tag_t tag, uint64_t imm,
+        unsigned flags, const uct_iov_t *iov, size_t iovcnt,
+        uct_completion_t *comp, uct_bxi_iface_send_op_t **op_p)
 {
-  ucs_status_t     status;
-  ptl_iovec_t     *ptl_iov;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  ucs_status_t             status;
+  ptl_iovec_t             *ptl_iov;
+  uct_bxi_gop_t           *gop = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
-
-  UCT_BXI_CHECK_EP(ep);
-  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
-                     "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface, ep);
 
   UCT_BXI_IFACE_GET_TX_OP_COMP_ERR(iface, &iface->tx.send_op_mp, op, ep, comp,
                                    uct_bxi_send_op_handler,
                                    status = UCS_ERR_NO_RESOURCE;
                                    goto err);
 
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
@@ -221,7 +210,6 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
             tag, 0, op, imm, gop->cth, gop->ct_value));
   } else {
-    //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(
             PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
                    ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -237,6 +225,34 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+
+err:
+  return status;
+}
+
+//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
+//      eager, its size is limited by the seg_size that can be used in receiver's
+//      bounce buffer.
+ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
+                                        uint64_t imm, const uct_iov_t *iov,
+                                        size_t iovcnt, unsigned flags,
+                                        uct_completion_t *comp)
+{
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_BXI_CHECK_EP(ep);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  status = uct_bxi_ep_tag_zcopy_op(iface, ep, tag, imm, flags, iov, iovcnt,
+                                   comp, &op);
+  if (status != UCS_INPROGRESS) {
+    goto err;
+  }
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -302,7 +318,15 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           iov->length, iface->config.max_msg_size);
   UCT_BXI_CHECK_IFACE_RES_PTR(iface, ep);
 
+  //if (iov->length <= iface->config.tm.eager_limit) {
+  //  status = uct_bxi_ep_tag_zcopy_op(iface, ep, tag, 0, flags, iov, iovcnt,
+  //                                   comp, &op);
+  //  goto out;
+  //}
+
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
+  //TODO: remove ptl_iovec but explicitly show buffer resolution in case
+  //      of GPU memory
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
@@ -311,8 +335,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
    * Reduce it off of the eager size that will be sent. */
   UCT_BXI_IFACE_GET_RX_RNDV_DESC(
           iface, &iface->tm.recv_block_mp, block, mem_type, ptl_iov->iov_base,
-          ptl_iov->iov_len, ep->conn->id, ep->conn->send,
-          uct_bxi_iface_block_handle_rndv, status = UCS_ERR_NO_RESOURCE;
+          ptl_iov->iov_len, iface->rx.ctrl.q->pti, ep->conn->id.conn_key,
+          ep->conn->send, uct_bxi_iface_block_handle_rndv,
+          status = UCS_ERR_NO_RESOURCE;
           goto err);
 
   me.start             = block->start;
@@ -335,13 +360,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   if (status != UCS_OK) {
     goto err_release_block;
   }
-
-  //FIXME: especially when the target is on the same node, we must ensure the
-  //       ME is linked to the NIC before sending data. Another possibility is
-  //       for the target to retry the GET.
-  //while (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_LINKED)) {
-  //  uct_bxi_iface_progress(tl_ep->iface);
-  //}
 
   /* Now, allocate a send descriptor and pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(
@@ -397,6 +415,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_ep_enable_flush(ep);
   /* Increment rndv send counter. */
   uct_bxi_rndv_inc_send_cnt(iface, ep->conn);
+
+out:
 
   return (ucs_status_ptr_t)op;
 

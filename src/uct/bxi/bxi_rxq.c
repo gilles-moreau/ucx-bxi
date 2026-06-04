@@ -88,7 +88,7 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
 
   block->flags   = 0;
   block->size    = rxq->config.blk_size;
-  block->start   = rxq->flags & UCT_BXI_RXQ_FLAG_RMA_BLOCK ? NULL : block + 1;
+  block->start   = block + 1;
   block->rxq     = rxq;
   block->list    = rxq->list;
   block->meh     = PTL_INVALID_HANDLE;
