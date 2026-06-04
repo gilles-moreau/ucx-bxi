@@ -120,7 +120,6 @@ typedef struct uct_bxi_iface_send_op {
   uct_bxi_iface_t       *iface;     /* Backpointer */
   uct_bxi_send_op_comp_t comp;      /* Handler called completion */
   ucs_list_link_t        elem;      /* Element on a TX outstanding list */
-  ucs_list_link_t        felem;     /* Element on fence list */
   uct_completion_t      *user_comp; /* User completion callback */
   uct_bxi_ep_t          *ep;        /* OP endpoint */
   size_t                 length;    /* Length of the OP */
