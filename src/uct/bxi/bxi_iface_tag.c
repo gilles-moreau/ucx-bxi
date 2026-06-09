@@ -23,9 +23,9 @@ uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag,
 {
   ucs_status_t    status;
   ptl_handle_me_t dummy;
-  consume_me.match_bits        = tag;
-  consume_me.match_id.phys.nid = pid.phys.nid;
-  consume_me.match_id.phys.pid = pid.phys.pid;
+
+  consume_me.match_bits = tag;
+  consume_me.match_id   = pid;
 
   status = uct_bxi_wrap(PtlMEAppend(uct_bxi_iface_md(iface)->nih,
                                     iface->rx.tag.q->pti, &consume_me,
@@ -36,28 +36,24 @@ uct_bxi_iface_consume_unexp_hdr(uct_bxi_iface_t *iface, uct_tag_t tag,
 }
 
 static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
-        uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block, ptl_event_t *ev)
+        uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
+        uct_bxi_recv_block_t *block, uct_bxi_conn_ooo_t *ooo)
 {
   ucs_status_t        status;
   uct_bxi_hdr_rndv_t *hdr;
   size_t              length;
-  uct_bxi_ep_conn_t  *conn = NULL;
-  uct_bxi_conn_id_t   cid;
   char                packed_rkey[UCT_BXI_MD_PACKED_RKEY_SIZE];
 
   /* There must always have space in overflow list. */
-  ucs_assert(ev->rlength == ev->mlength);
+  ucs_assert(ooo->rlength == ooo->mlength);
 
   /* Cache unexpected event for treatment in case of cancel. */
-  iface->tm.unexp_ev = ev;
+  iface->tm.unexp_ooo = ooo;
 
-  if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
+  if (uct_bxi_iface_is_rndv_hw(iface, ooo)) {
 
-    hdr          = UCS_PTR_BYTE_OFFSET(ev->start, iface->tm.rndv_hdr_offset);
-    length       = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
-    cid.pti      = UCT_BXI_RNDV_PTI_GET(ev->hdr_data);
-    cid.conn_key = UCT_BXI_RNDV_CONN_KEY_GET(ev->hdr_data);
-    cid.pid      = ev->initiator;
+    hdr    = UCS_PTR_BYTE_OFFSET(ooo->start, iface->tm.rndv_hdr_offset);
+    length = UCT_BXI_TAG_LENGTH_GET(ooo->hdr_data);
 
     /* Copy remote key so it can be used by UCP to complete the rendez-vous. 
      * It is needed to resolved remote address mapped with gdrcopy, see 
@@ -66,37 +62,33 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
 
     /* Increment receive counter for this PID. Since we dont know yet if 
      * the receive will be posted ever, we need to increment it. */
-    status = uct_bxi_iface_get_conn(iface, cid, &conn);
-    if (status != UCS_OK) {
-      goto out;
-    }
     uct_bxi_rndv_inc_recv_cnt(iface, conn);
 
-    status =
-            iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0, ev->match_bits,
-                                    (const void *)(hdr + 1), hdr->header_length,
-                                    hdr->remote_addr, length, packed_rkey);
-  } else if (uct_bxi_iface_is_rndv_sw(ev->hdr_data)) {
     status = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
-                                     ev->match_bits, (const void *)ev->start,
-                                     ev->mlength, 0, 0, NULL);
+                                     ooo->match_bits, (const void *)(hdr + 1),
+                                     hdr->header_length, hdr->remote_addr,
+                                     length, packed_rkey);
+  } else if (uct_bxi_iface_is_rndv_sw(ooo->hdr_data)) {
+    status = iface->tm.rndv_unexp.cb(iface->tm.rndv_unexp.arg, 0,
+                                     ooo->match_bits, (const void *)ooo->start,
+                                     ooo->mlength, 0, 0, NULL);
   } else {
-    status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ev->start,
-                                      ev->mlength, UCT_CB_PARAM_FLAG_FIRST,
-                                      ev->match_bits, ev->hdr_data, NULL);
+    status = iface->tm.eager_unexp.cb(iface->tm.eager_unexp.arg, ooo->start,
+                                      ooo->mlength, UCT_CB_PARAM_FLAG_FIRST,
+                                      ooo->match_bits, 0, NULL);
   }
 
   if (status != UCS_OK) {
     goto out;
   }
 
-  if (iface->tm.unexp_ev != NULL) {
+  if (iface->tm.unexp_ooo != NULL) {
     /* It means receive has not been posted. Otherwise, recv_cancel   
      * would have been called and event set to NULL, and the 
      * Portals4 unexpected header consumed. Its removal is needed 
      * otherwise, the next posted receive will match in the overflow 
      * list. */
-    uct_bxi_iface_consume_unexp_hdr(iface, ev->match_bits, ev->initiator);
+    uct_bxi_iface_consume_unexp_hdr(iface, ooo->match_bits, ooo->initiator);
   }
 
 out:
@@ -104,13 +96,12 @@ out:
 }
 
 ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
+                                                uct_bxi_conn_t       *conn,
                                                 uct_bxi_recv_block_t *block,
-                                                ptl_event_t          *ev)
+                                                uct_bxi_conn_ooo_t   *ooo)
 {
-  ucs_status_t       status = UCS_OK;
-  uct_bxi_conn_id_t  cid;
-  uct_bxi_ep_conn_t *conn = NULL;
-  ptl_match_bits_t   tag;
+  ucs_status_t     status = UCS_OK;
+  ptl_match_bits_t tag;
 
   /* Receive block has been consumed, notify UCP layer so it can remove 
    * the tag from its expected queues. Buffer may also be removed from 
@@ -119,16 +110,16 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
   uct_bxi_iface_tag_del_from_hash(iface, block->start);
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
-    uct_bxi_recv_block_update_cnt(block, ev->mlength);
+    uct_bxi_recv_block_update_cnt(block, ooo->mlength);
   }
 
   /* Now, perform protocol specific actions. */
-  if (uct_bxi_iface_is_rndv_hw(iface, ev)) {
+  if (uct_bxi_iface_is_rndv_hw(iface, ooo)) {
 
     /* Save stag and send size for rndv completion, see 
      * uct_bxi_recv_rndv_tag_handler. */
-    block->send_size = UCT_BXI_RNDV_LENGTH_GET(ev->hdr_data);
-    block->stag      = ev->match_bits;
+    block->send_size = UCT_BXI_TAG_LENGTH_GET(ooo->hdr_data);
+    block->stag      = ooo->match_bits;
 
     /* If rndv was not offloaded, then it must be handled in sw. */
     //NOTE: It has been kept to preserve compatibility with UCX testsuite.
@@ -136,20 +127,10 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
       /* Rendezvous was not offloaded during receive call, thus rndv recv 
        * counter not incremented, increment it now. */
 
-      /* Build rndv counter key and get the rndv counter. */
-      cid.pti      = UCT_BXI_RNDV_PTI_GET(ev->hdr_data);
-      cid.conn_key = UCT_BXI_RNDV_CONN_KEY_GET(ev->hdr_data);
-      cid.pid      = ev->initiator;
+      UCT_BXI_RNDV_TAG_SET(tag, conn->id.pti, conn->id.conn_key, conn->recv);
 
-      status = uct_bxi_iface_get_conn(iface, cid, &conn);
-      if (status != UCS_OK) {
-        return status;
-      }
-
-      UCT_BXI_RNDV_TAG_SET(tag, cid.pti, cid.conn_key, conn->recv);
-
-      uct_bxi_iface_complete_rndv(iface, block, ev->hdr_data, tag,
-                                  ev->initiator, block->send_size);
+      uct_bxi_iface_complete_rndv(iface, block, ooo->hdr_data, tag,
+                                  ooo->initiator, block->send_size);
 
       uct_bxi_rndv_inc_recv_cnt(iface, conn);
     }
@@ -159,18 +140,18 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
     uct_bxi_iface_completion_op(block->op);
   } else {
 
-    if (uct_bxi_iface_is_rndv_sw(ev->hdr_data)) {
+    if (uct_bxi_iface_is_rndv_sw(ooo->hdr_data)) {
       /* UCP will proceed with a normal software rendez-vous protocol. UCP 
        * requires original address, in case of GPU memory it differs from 
        * ev->start since we use the mapped by gdrcopy. */
-      block->ctx->rndv_cb(block->ctx, ev->match_bits, block->orig, ev->mlength,
-                          UCS_OK, 0);
+      block->ctx->rndv_cb(block->ctx, ooo->match_bits, block->orig,
+                          ooo->mlength, UCS_OK, 0);
 
     } else {
-      status = ev->mlength < ev->rlength ? UCS_ERR_MESSAGE_TRUNCATED : UCS_OK;
+      status = ooo->mlength < ooo->rlength ? UCS_ERR_MESSAGE_TRUNCATED : UCS_OK;
       /* Eager expected message completion. */
-      block->ctx->completed_cb(block->ctx, ev->match_bits, ev->hdr_data,
-                               ev->mlength, NULL, status);
+      block->ctx->completed_cb(block->ctx, ooo->match_bits, 0, ooo->mlength,
+                               NULL, status);
     }
 
     /* In case of offloaded rendez-vous, a GET operation has been 
@@ -330,7 +311,7 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
           UCT_IFACE_PARAM_VALUE(params, eager_arg, HW_TM_EAGER_ARG, NULL);
   iface->tm.rndv_unexp.arg =
           UCT_IFACE_PARAM_VALUE(params, rndv_arg, HW_TM_RNDV_ARG, NULL);
-  iface->tm.unexp_ev = NULL;
+  iface->tm.unexp_ooo = NULL;
 
   /*
    * For hardware rendezvous, payload is located before the header so that 

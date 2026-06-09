@@ -195,8 +195,8 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   op->am.am_id  = id;
   op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
   op->ep_fb     = ep->fence_beat;
-  UCT_BXI_CONN_HDR_SET(op->am.hdr, id, iface->rx.rma.pti, ep->conn->id.conn_key,
-                       ep->conn->sn++);
+  UCT_BXI_AM_HDR_SET(op->am.hdr, id, ep->conn);
+  ep->conn->sn++;
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -876,89 +876,6 @@ void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                           &purge_arg);
 }
 
-static UCS_F_ALWAYS_INLINE khint_t
-uct_bxi_conn_map_conn_hash(uct_bxi_ep_conn_t *conn)
-{
-  uint32_t crc = ucs_crc32(0, &conn->id, sizeof(conn->id));
-  conn->crc    = crc;
-  return crc;
-}
-
-char *buffer_to_hex_string(const void *buffer, size_t size)
-{
-  const uint8_t *byte_ptr = (const uint8_t *)buffer;
-
-  // Allocate memory for the hex string:
-  // Each byte is represented as 2 hex chars + null terminator.
-  char *hex_str = (char *)malloc(size * 2 + 1);
-  if (!hex_str) {
-    return NULL; // Allocation failed
-  }
-
-  for (size_t i = 0; i < size; i++) {
-    // Write 2-digit hex for the current byte
-    sprintf(hex_str + i * 2, "%02x", byte_ptr[i]);
-  }
-
-  hex_str[size * 2] = '\0'; // Null-terminate the string
-  return hex_str;
-}
-
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_conn_map_conn_equal(uct_bxi_ep_conn_t *conn1, uct_bxi_ep_conn_t *conn2)
-{
-  return (conn1->id.pid.phys.nid == conn2->id.pid.phys.nid) &&
-         (conn1->id.pid.phys.pid == conn2->id.pid.phys.pid) &&
-         (conn1->id.pti == conn2->id.pti) &&
-         (conn1->id.conn_key == conn2->id.conn_key);
-}
-
-__KHASH_IMPL(uct_bxi_conn_map, kh_inline, uct_bxi_ep_conn_t *, char, 0,
-             uct_bxi_conn_map_conn_hash, uct_bxi_conn_map_conn_equal);
-
-ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
-                                    uct_bxi_conn_id_t   id,
-                                    uct_bxi_ep_conn_t **conn_p)
-{
-  int                ret;
-  khiter_t           iter;
-  uct_bxi_ep_conn_t *conn;
-
-  conn = ucs_malloc(sizeof(uct_bxi_ep_conn_t), "bxi ep conn");
-  if (conn == NULL) {
-    ucs_fatal("BXI: failed to allocate bxi endpoint connection.");
-  }
-  memset(conn, 0, sizeof(*conn));
-
-  conn->id.pid      = id.pid;
-  conn->id.pti      = id.pti;
-  conn->id.conn_key = id.conn_key;
-
-  iter = kh_put(uct_bxi_conn_map, &iface->conn_map, conn, &ret);
-  ucs_assertv((ret != UCS_KH_PUT_FAILED), "ret %d", ret);
-
-  /* Get the connection or create it if it does not exist and add 
-   * it to the hash table. */
-  if (ret == UCS_KH_PUT_KEY_PRESENT) {
-    ucs_free(conn);
-    conn = kh_key(&iface->conn_map, iter);
-    goto out;
-  }
-
-  ucs_debug("BXI: creating connection. iface=%p, nid=%d, pid=%d, pti=%d, conn "
-            "key=%d.",
-            iface, id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
-
-  /* Initialize counters. */
-  conn->sn = conn->send = conn->recv = 1;
-  ucs_frag_list_init(0, &conn->ooo, -1 UCS_STATS_ARG(iface->super.stats));
-
-out:
-  *conn_p = conn;
-
-  return UCS_OK;
-}
-
 UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
   ucs_status_t      status = UCS_OK;
@@ -984,11 +901,11 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   id.pid = self->dev_addr.pid;
   id.pti = iface->tm.enabled ? self->iface_addr.ctrl : self->iface_addr.rma;
   id.conn_key = params->field_mask & UCT_EP_PARAM_FIELD_CONN_KEY ?
-                        params->conn_key & UCT_BXI_RNDV_CONN_KEY_MASK :
-                        UCT_EP_CONN_KEY_NULL & UCT_BXI_RNDV_CONN_KEY_MASK;
+                        params->conn_key & UCT_BXI_CONN_KEY_MASK :
+                        UCT_EP_CONN_KEY_NULL & UCT_BXI_CONN_KEY_MASK;
 
   /* Get endpoint connection based on triplet. */
-  status = uct_bxi_iface_get_conn(iface, id, &self->conn);
+  status = uct_bxi_conn_create(iface, id, &self->conn);
   if (status != UCS_OK) {
     goto err;
   }
@@ -1019,7 +936,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
                            ucs_empty_function_do_assert_void, NULL);
 
   /* Destroy endpoint connection. */
-  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, self->conn);
+  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, &self->conn->id);
   kh_del(uct_bxi_conn_map, &iface->conn_map, iter);
   ucs_free(self->conn);
 

@@ -1,57 +1,80 @@
 #ifndef BXI_IFACE_H
 #define BXI_IFACE_H
 
+#include "bxi_conn.h"
 #include "bxi_md.h"
 #include "bxi_rxq.h"
 
-#include <ucs/datastruct/frag_list.h>
+#include <ucs/algorithm/crc.h>
 #include <uct/base/uct_iov.inl>
 
 #define UCT_BXI_MD_PACKED_RKEY_SIZE sizeof(uint64_t) + sizeof(void *)
 
-#define UCT_BXI_RNDV_LENGTH_MASK   0xfffffffffful
-#define UCT_BXI_RNDV_CONN_KEY_MASK 0xfffful
-#define UCT_BXI_RNDV_CNT_MASK      0xfffful
-#define UCT_BXI_RNDV_PTI_MASK      0xfful
+/* Portals Header data connection header setter and getter. */
+#define UCT_BXI_CONN_PTI_MAX UINT8_MAX
+#define UCT_BXI_CONN_KEY_MAX UINT8_MAX
+#define UCT_BXI_CONN_SN_MAX  UINT16_MAX
+
+#define UCT_BXI_CONN_PTI_MASK 0xfful
+#define UCT_BXI_CONN_KEY_MASK 0xfful
+#define UCT_BXI_CONN_SN_MASK  0xfffful
+#define UCT_BXI_CONN_MASK     0xfffffffful
+
+#define UCT_BXI_CONN_HDR_SET(_hdr, _pti, _conn_key, _sn)                       \
+  _hdr |= ((_pti) & UCT_BXI_CONN_PTI_MASK);                                    \
+  _hdr  = (_hdr << 8);                                                         \
+  _hdr |= ((_conn_key) & UCT_BXI_CONN_KEY_MASK);                               \
+  _hdr  = (_hdr << 16);                                                        \
+  _hdr |= ((_sn) & UCT_BXI_CONN_SN_MASK);
+
+#define UCT_BXI_CONN_PTI_GET(_hdr) (((_hdr) >> 24) & UCT_BXI_CONN_PTI_MASK)
+#define UCT_BXI_CONN_KEY_GET(_hdr) (((_hdr) >> 16) & UCT_BXI_CONN_KEY_MASK)
+#define UCT_BXI_CONN_SN_GET(_hdr)  ((_hdr) & UCT_BXI_CONN_SN_MASK)
+
+/* Portals Header data AM setter and getter. */
+#define UCT_BXI_AM_ID_MASK 0xfful
+
+#define UCT_BXI_AM_HDR_SET(_hdr, _am_id, _conn)                                \
+  _hdr  = 0;                                                                   \
+  _hdr |= ((_am_id) & UCT_BXI_AM_ID_MASK);                                     \
+  _hdr  = (_hdr << 8);                                                         \
+  UCT_BXI_CONN_HDR_SET(_hdr, (_conn)->my_pti, (_conn)->id.conn_key,            \
+                       (_conn)->sn);
+
+#define UCT_BXI_AM_ID_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_AM_ID_MASK)
+
+/* Portals Header data TAG setter and getter. */
+#define UCT_BXI_TAG_LENGTH_MASK UCS_MASK(26)
+#define UCT_BXI_TAG_ID_MASK     0xful
+#define UCT_BXI_TAG_CNT_MASK    0xfffful
+#define UCT_BXI_TAG_LENGH_MAX   (2 << 26)
+
+#define UCT_BXI_TAG_HDR_SET(_hdr, _tag_id, _length, _conn)                     \
+  _hdr  = 0;                                                                   \
+  _hdr |= ((_tag_id) & UCT_BXI_TAG_ID_MASK);                                   \
+  _hdr  = (_hdr << 26);                                                        \
+  _hdr |= ((_length) & UCT_BXI_TAG_LENGTH_MASK);                               \
+  _hdr  = (_hdr << 8);                                                         \
+  UCT_BXI_CONN_HDR_SET(_hdr, (_conn)->my_pti, (_conn)->id.conn_key,            \
+                       (_conn)->sn);
+
+#define UCT_BXI_TAG_ID_GET(_hdr)     (((_hdr) >> 58) & UCT_BXI_TAG_ID_MASK)
+#define UCT_BXI_TAG_LENGTH_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_TAG_LENGTH_MASK)
+
+#define UCT_BXI_TAG_ID_EAGER   0
+#define UCT_BXI_TAG_ID_RNDV_HW 1
+#define UCT_BXI_TAG_ID_RNDV_SW 2
 
 #define UCT_BXI_RNDV_SW_HDR         0xdeadbeefdeadbeef
 #define UCT_BXI_RNDV_MAX_HDR_LENGTH 128 /* Bytes */
 
-#define UCT_BXI_RNDV_LENGTH_GET(_hdr)                                          \
-  (((_hdr) >> 24) & UCT_BXI_RNDV_LENGTH_MASK)
-#define UCT_BXI_RNDV_CONN_KEY_GET(_hdr)                                        \
-  (((_hdr) >> 8) & UCT_BXI_RNDV_CONN_KEY_MASK)
-#define UCT_BXI_RNDV_PTI_GET(_hdr) ((_hdr) & UCT_BXI_RNDV_PTI_MASK)
-
-#define UCT_BXI_RNDV_HDR_SET(_hdr, _length, _conn_key, _pti)                   \
-  _hdr  = ((_length) & UCT_BXI_RNDV_LENGTH_MASK);                              \
-  _hdr  = (_hdr << 16);                                                        \
-  _hdr |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
-  _hdr  = (_hdr << 8);                                                         \
-  _hdr |= ((_pti) & UCT_BXI_RNDV_PTI_MASK);
-
 #define UCT_BXI_RNDV_TAG_SET(_tag, _pti, _conn_key, _cnt)                      \
   _tag  = 0;                                                                   \
-  _tag |= ((_pti) & UCT_BXI_RNDV_PTI_MASK);                                    \
+  _tag |= ((_pti) & UCT_BXI_CONN_PTI_MASK);                                    \
   _tag  = (_tag << 8);                                                         \
-  _tag |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
+  _tag |= ((_conn_key) & UCT_BXI_CONN_KEY_MASK);                               \
   _tag  = (_tag << 16);                                                        \
-  _tag |= ((_cnt) & UCT_BXI_RNDV_CNT_MASK);
-
-#define UCT_BXI_CONN_AM_ID_GET(_hdr) ((uint8_t)(((_hdr) >> 40) & 0xfful))
-#define UCT_BXI_CONN_PTI_GET(_hdr)   ((ptl_pt_index_t)(((_hdr) >> 32) & 0xfful))
-#define UCT_BXI_CONN_KEY_GET(_hdr)                                             \
-  ((uct_ep_conn_key_t)(((_hdr) >> 16) & UCT_BXI_RNDV_CONN_KEY_MASK))
-#define UCT_BXI_CONN_SN_GET(_hdr) ((_hdr) & 0xffff)
-
-#define UCT_BXI_CONN_HDR_SET(_hdr, _am_id, _pti, _conn_key, _sn)               \
-  _hdr  = ((_am_id) & 0xfful);                                                 \
-  _hdr  = (_hdr << 8);                                                         \
-  _hdr |= ((_pti) & 0xfful);                                                   \
-  _hdr  = (_hdr << 16);                                                        \
-  _hdr |= ((_conn_key) & UCT_BXI_RNDV_CONN_KEY_MASK);                          \
-  _hdr  = (_hdr << 16);                                                        \
-  _hdr |= ((_sn) & 0xfffful);
+  _tag |= ((_cnt) & UCT_BXI_TAG_CNT_MASK);
 
 /* Operation flags */
 enum {
@@ -202,6 +225,32 @@ typedef struct uct_bxi_iface_config {
   } tm;
 } uct_bxi_iface_config_t;
 
+static UCS_F_ALWAYS_INLINE khint_t
+uct_bxi_conn_map_conn_hash(uct_bxi_conn_id_t *conn)
+{
+  uint32_t crc = ucs_crc32(0, conn, sizeof(*conn));
+  ucs_debug("BXI: id. crc=%u, nid=%d, pid=%d, pti=%d, conn key=%d.", crc,
+            conn->pid.phys.nid, conn->pid.phys.pid, conn->pti, conn->conn_key);
+  return crc;
+}
+
+static UCS_F_ALWAYS_INLINE int
+uct_bxi_conn_map_conn_equal(uct_bxi_conn_id_t *conn1, uct_bxi_conn_id_t *conn2)
+{
+  ucs_debug("BXI: equal. nid=%d, pid=%d, pti=%d, conn key=%d.",
+            conn1->pid.phys.nid, conn1->pid.phys.pid, conn1->pti,
+            conn1->conn_key);
+  ucs_debug("BXI: equal. nid=%d, pid=%d, pti=%d, conn key=%d.",
+            conn2->pid.phys.nid, conn2->pid.phys.pid, conn2->pti,
+            conn2->conn_key);
+  return (conn1->pid.phys.nid == conn2->pid.phys.nid) &&
+         (conn1->pid.phys.pid == conn2->pid.phys.pid) &&
+         (conn1->pti == conn2->pti) && (conn1->conn_key == conn2->conn_key);
+}
+
+KHASH_INIT(uct_bxi_conn_map, uct_bxi_conn_id_t *, uct_bxi_conn_t *, 1,
+           uct_bxi_conn_map_conn_hash, uct_bxi_conn_map_conn_equal);
+
 #define uct_bxi_tag_addr_hash(_ptr) kh_int64_hash_func((uintptr_t)(_ptr))
 KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
            kh_int64_hash_equal)
@@ -214,32 +263,6 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
   _conn_sn |= ((_conn_sn) & UCT_BXI_RNDV_CONN_SN_PTI_MASK);                    \
   _conn_sn  = (_conn_sn << 8);                                                 \
   _conn_sn |= ((_cnt) & UCT_BXI_RNDV_CONN_SN_CNT_MASK);
-
-/* Triplet to access a rendezvous counter. */
-typedef struct uct_bxi_conn_id {
-  ptl_process_t     pid;      /* Portals Process ID */
-  ptl_pt_index_t    pti;      /* Portals Table Index */
-  uct_ep_conn_key_t conn_key; /* Connection key */
-} UCS_S_PACKED uct_bxi_conn_id_t;
-
-typedef struct uct_bxi_iface_ooo_op {
-  uint8_t              am_id;
-  void                *start;
-  size_t               size;
-  ucs_frag_list_elem_t elem; /* Element in ooo connection list */
-  uint16_t             sn;
-} uct_bxi_iface_ooo_op_t;
-
-typedef struct uct_bxi_ep_conn {
-  uct_bxi_conn_id_t id;   /* Counter connection ID */
-  uint16_t          recv; /* Counter of receive rndv requests */
-  uint16_t          send; /* Counter of send rndv requests */
-  uint16_t          sn;   /* Message sequence number */
-  ucs_frag_list_t   ooo;  /* Out of Order queue */
-  uint32_t          crc;
-} uct_bxi_ep_conn_t;
-
-KHASH_DECLARE(uct_bxi_conn_map, uct_bxi_ep_conn_t *, char);
 
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
@@ -290,11 +313,11 @@ typedef struct uct_bxi_iface {
       void                   *arg; /* User defined arg */
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
-    ucs_mpool_t  recv_block_mp;   /* MP of exp block */
-    ptl_event_t *unexp_ev;        /* Cached unexp event, used for cancel */
-    unsigned int rndv_hdr_offset; /* Offset of rndv hdr in payload */
-    int          sched_window;    /* Is scheduling window opened? */
-  } tm;                           /* Tag matching */
+    ucs_mpool_t         recv_block_mp;   /* MP of exp block */
+    uct_bxi_conn_ooo_t *unexp_ooo;       /* Cached unexp ooo, used for cancel */
+    unsigned int        rndv_hdr_offset; /* Offset of rndv hdr in payload */
+    int                 sched_window;    /* Is scheduling window opened? */
+  } tm;                                  /* Tag matching */
 
   struct {
     ptl_handle_eq_t     eqh;          /* Event Queue for OP completion. */
@@ -322,7 +345,6 @@ typedef struct uct_bxi_iface {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;
     } rma;
-    ucs_mpool_t ooo_mp; /* Memory pool of Out-of-order operations */
   } rx;
   size_t                    num_eps;
   ucs_list_link_t           eps;      /* List of uct ep */
@@ -354,8 +376,9 @@ ucs_status_t uct_bxi_iface_flush(uct_iface_h tl_iface, unsigned flags,
 ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags);
 
 ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
+                                                uct_bxi_conn_t       *conn,
                                                 uct_bxi_recv_block_t *block,
-                                                ptl_event_t          *ev);
+                                                uct_bxi_conn_ooo_t   *ooo);
 
 ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
                                     const uct_iface_params_t     *params,
@@ -399,30 +422,30 @@ uct_bxi_iface_tag_del_from_hash(uct_bxi_iface_t *iface, void *buffer)
 
 //TODO: use khash map specific implementation
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_hw(uct_bxi_iface_t *iface,
-                                                        ptl_event_t     *ev)
+                                                        uct_bxi_conn_ooo_t *ooo)
 {
-  return ev->rlength == iface->config.tm.eager_limit + 1;
+  return ooo->rlength == iface->config.tm.eager_limit + 1;
 }
 
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_is_rndv_sw(ptl_hdr_data_t hdr)
 {
-  return hdr == UCT_BXI_RNDV_SW_HDR;
+  return UCT_BXI_TAG_ID_GET(hdr) == UCT_BXI_TAG_ID_RNDV_SW;
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_inc_send_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
+uct_bxi_rndv_inc_send_cnt(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn)
 {
   conn->send++;
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_inc_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
+uct_bxi_rndv_inc_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn)
 {
   conn->recv++;
 }
 
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_rndv_dec_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_ep_conn_t *conn)
+uct_bxi_rndv_dec_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn)
 {
   conn->recv--;
 }
@@ -540,10 +563,6 @@ uct_bxi_iface_completion_flush_op(uct_bxi_iface_send_op_t *op)
   uct_bxi_iface_release_flush_op(op);
 }
 
-ucs_status_t uct_bxi_iface_get_conn(uct_bxi_iface_t    *iface,
-                                    uct_bxi_conn_id_t   id,
-                                    uct_bxi_ep_conn_t **conn_p);
-
 /* Complete a hardware initiated rendezvous. */
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_complete_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
@@ -554,7 +573,7 @@ uct_bxi_iface_complete_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
   ptl_pt_index_t pti;
 
   /* Retrieve protocol data. */
-  pti = UCT_BXI_RNDV_PTI_GET(hdr);
+  pti = UCT_BXI_CONN_PTI_GET(hdr);
 
   //TODO: GPU/CPU compatibility, see uct_bxi_pack_rndv.
   //if (block->mem_type == UCS_MEMORY_TYPE_HOST) {

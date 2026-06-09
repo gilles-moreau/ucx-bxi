@@ -25,22 +25,19 @@
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
 typedef struct uct_bxi_ep            uct_bxi_ep_t;
+typedef struct uct_bxi_recv_block    uct_bxi_recv_block_t;
+typedef struct uct_bxi_conn_ooo      uct_bxi_conn_ooo_t;
+typedef struct uct_bxi_conn          uct_bxi_conn_t;
+
+typedef ucs_status_t (*uct_bxi_block_handler)(uct_bxi_iface_t      *iface,
+                                              uct_bxi_conn_t       *conn,
+                                              uct_bxi_recv_block_t *block,
+                                              uct_bxi_conn_ooo_t   *ooo);
 
 /*********************************/
 /********** BXI TYPES   **********/
 /*********************************/
 #define UCT_BXI_PT_NULL ((ptl_pt_index_t) - 1)
-
-enum {
-  UCT_BXI_OP_FLAG_OVERFLOW  = UCS_BIT(0),
-  UCT_BXI_OP_FLAG_OFFLOADED = UCS_BIT(1),
-};
-
-/* Operation types. */
-typedef enum {
-  UCT_BXI_OP_AM_BCOPY = 0,
-  UCT_BXI_OP_BLOCK,
-} uct_bxi_op_type_t;
 
 #define uct_bxi_rc_log(rc)                                                     \
   switch (rc) {                                                                \

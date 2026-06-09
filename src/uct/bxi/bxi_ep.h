@@ -21,7 +21,7 @@ typedef struct uct_bxi_ep {
   uct_bxi_iface_addr_t  iface_addr;
   ucs_list_link_t       elem;       /* Elem is the uct ep list */
   uint8_t               conn_state; /* Connection state. */
-  uct_bxi_ep_conn_t    *conn;       /* Rndv counters. */
+  uct_bxi_conn_t       *conn;       /* Connection. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
   uint16_t              fence_beat; /* Endpoint local fence beat */
   ucs_queue_head_t      pending_q;  /* Head of pending queue */

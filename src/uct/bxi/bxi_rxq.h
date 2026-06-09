@@ -4,13 +4,7 @@
 #include "bxi.h"
 #include <uct/base/uct_iface.h>
 
-typedef struct uct_bxi_rxq        uct_bxi_rxq_t;
-typedef struct uct_bxi_op_ctx     uct_bxi_op_ctx_t;
-typedef struct uct_bxi_recv_block uct_bxi_recv_block_t;
-
-typedef ucs_status_t (*uct_bxi_block_handler)(uct_bxi_iface_t      *iface,
-                                              uct_bxi_recv_block_t *block,
-                                              ptl_event_t          *ev);
+typedef struct uct_bxi_rxq uct_bxi_rxq_t;
 
 enum {
   UCT_BXI_RECV_BLOCK_FLAG_IN_USE          = UCS_BIT(0),

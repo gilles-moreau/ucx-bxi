@@ -1,3 +1,5 @@
+#include <portals4.h>
+#include <unistd.h>
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -118,67 +120,18 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 };
 
 static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
+                                                  uct_bxi_conn_t       *conn,
                                                   uct_bxi_recv_block_t *block,
-                                                  ptl_event_t          *ev)
+                                                  uct_bxi_conn_ooo_t   *ooo)
 {
-  ucs_status_t             status   = UCS_OK;
-  uint8_t                  am_id    = UCT_BXI_CONN_AM_ID_GET(ev->hdr_data);
-  uint16_t                 sn       = UCT_BXI_CONN_SN_GET(ev->hdr_data);
-  ptl_pt_index_t           pti      = UCT_BXI_CONN_PTI_GET(ev->hdr_data);
-  uct_ep_conn_key_t        conn_key = UCT_BXI_CONN_KEY_GET(ev->hdr_data);
-  uct_bxi_iface_ooo_op_t  *ooo_op, *ooo_tmp;
-  uct_bxi_conn_id_t        id = {0};
-  uct_bxi_ep_conn_t       *conn;
-  ucs_frag_list_elem_t    *elem;
-  ucs_frag_list_ooo_type_t err;
+  ucs_status_t status = UCS_OK;
+  uint8_t      am_id  = UCT_BXI_AM_ID_GET(ooo->hdr_data);
 
-  /* Fetch endpoint connection to get out-of-order list. */
-  id.pid.phys.nid = ev->initiator.phys.nid;
-  id.pid.phys.pid = ev->initiator.phys.pid;
-  id.pti          = pti;
-  id.conn_key     = conn_key;
-  uct_bxi_iface_get_conn(iface, id, &conn);
+  status = uct_iface_invoke_am(&iface->super, am_id, ooo->start, ooo->mlength,
+                               0);
 
-  /* Initialize ooo operation. */
-  ooo_op        = ucs_mpool_get(&iface->rx.ooo_mp);
-  ooo_op->size  = ev->mlength;
-  ooo_op->start = ev->start;
-  ooo_op->am_id = am_id;
-  ooo_op->sn    = sn;
-
-  err = ucs_frag_list_insert(&conn->ooo, &ooo_op->elem, sn);
-  if (ucs_likely(err == UCS_FRAG_LIST_INSERT_FAST)) {
-    ucs_debug("BXI: OK connection. nid=%d, pid=%d, pti=%d, conn key=%d, sn=%d.",
-              id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn);
-    /* Message arrived in order, thus invoke active message callback. */
-    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
-                                 0);
-    ucs_mpool_put(ooo_op);
-  } else if ((err == UCS_FRAG_LIST_INSERT_FIRST) ||
-             (err == UCS_FRAG_LIST_INSERT_READY)) {
-    status = uct_iface_invoke_am(&iface->super, am_id, ev->start, ev->mlength,
-                                 0);
-    /* Previous messages arrived out of order and can now be completed. */
-    while ((elem = ucs_frag_list_pull(&conn->ooo)) != NULL) {
-      ooo_tmp = ucs_container_of(elem, uct_bxi_iface_ooo_op_t, elem);
-      status  = uct_iface_invoke_am(&iface->super, ooo_tmp->am_id,
-                                    ooo_tmp->start, ooo_tmp->size, 0);
-      ucs_mpool_put(ooo_tmp);
-    }
-  } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
-    /* Out of order message. */
-    ucs_debug("BXI: OOO connection. nid=%d, pid=%d, pti=%d, conn key=%d, "
-              "sn=%d, am_id=%d.",
-              id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key, sn, am_id);
-  } else if (err == UCS_FRAG_LIST_INSERT_DUP) {
-  } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
-    ucs_error("BXI: failed msg inserted. sn=%d", sn);
-    status = UCS_ERR_IO_ERROR;
-    goto err;
-  }
-
-  uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ev->start,
-                         ev->mlength);
+  uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ooo->start,
+                         ooo->mlength);
 
 err:
   return status;
@@ -191,6 +144,10 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
   ptl_event_t           ev;
   int                   ret;
   uct_bxi_recv_block_t *block;
+  uct_bxi_conn_t       *conn;
+  uint16_t              sn;
+  uct_bxi_conn_id_t     id = {0};
+  uct_bxi_conn_ooo_t    ooo;
 
   while (1) {
     ret = PtlEQGet(iface->rx.eqh, &ev);
@@ -208,8 +165,36 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
       switch (ev.type) {
       case PTL_EVENT_PUT:
       case PTL_EVENT_PUT_OVERFLOW:
+        /* Fetch endpoint connection to get out-of-order list. */
+        id.pid      = ev.initiator;
+        id.pti      = UCT_BXI_CONN_PTI_GET(ev.hdr_data);
+        id.conn_key = UCT_BXI_CONN_KEY_GET(ev.hdr_data);
+        conn        = uct_bxi_conn_get(iface, id);
+        if (ucs_unlikely(conn == NULL)) {
+          status = uct_bxi_conn_create(iface, id, &conn);
+          if (status != UCS_OK) {
+            goto out;
+          }
+        }
+
+        /* Insert to connection frag list to handle out-of-order messages. 
+         * Handler is called if messages arrived in order. */
+        sn     = UCT_BXI_CONN_SN_GET(ev.hdr_data);
+        status = uct_bxi_conn_insert(iface, conn, block, &ev, block->handler,
+                                     sn);
+        if (status != UCS_OK) {
+          goto out;
+        }
+        break;
       case PTL_EVENT_GET:
-        status = block->handler(iface, block, &ev);
+        /* GET are not subject to out-of-order check.*/
+        ooo.hdr_data   = ev.hdr_data;
+        ooo.match_bits = ev.match_bits;
+        ooo.mlength    = ev.mlength;
+        ooo.rlength    = ev.rlength;
+        ooo.start      = ev.start;
+
+        status = block->handler(iface, conn, block, &ooo);
         break;
       case PTL_EVENT_AUTO_UNLINK:
         /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
@@ -665,13 +650,6 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
 }
 
-static ucs_mpool_ops_t uct_bxi_ooo_mpool_ops = {
-        .chunk_alloc   = ucs_mpool_chunk_malloc,
-        .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = NULL,
-        .obj_cleanup   = NULL,
-        .obj_str       = NULL};
-
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   uct_bxi_iface_send_op_t *op = obj;
@@ -819,24 +797,6 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
           PtlEQAlloc(md->nih, self->config.max_events, &self->rx.eqh));
   if (status != UCS_OK) {
     goto err;
-  }
-
-  /* Initialize MP of Out-of-order operation */
-  //FIXME: using tx mp parameters for now
-  ucs_mpool_params_reset(&mp_params);
-  mp_params.max_chunk_size  = config->tx.mp.max_chunk_size;
-  mp_params.elems_per_chunk = config->tx.mp.bufs_grow;
-  mp_params.elem_size       = sizeof(uct_bxi_iface_ooo_op_t);
-  mp_params.max_elems       = -1;
-  mp_params.alignment       = UCS_SYS_CACHE_LINE_SIZE;
-  mp_params.align_offset    = sizeof(uct_bxi_iface_ooo_op_t);
-  mp_params.ops             = &uct_bxi_ooo_mpool_ops;
-  mp_params.name            = "ooo-mp";
-  mp_params.grow_factor     = config->tx.mp.grow_factor;
-
-  status = ucs_mpool_init(&mp_params, &self->rx.ooo_mp);
-  if (status != UCS_OK) {
-    goto err_clean_short_desc;
   }
 
   /* Create RX Queues for AM messages. Block are posted to the Priority List */
@@ -1048,11 +1008,11 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 {
-  uct_bxi_ep_conn_t *conn;
-  uct_bxi_md_t      *md = uct_bxi_iface_md(self);
+  uct_bxi_conn_t *conn;
+  uct_bxi_md_t   *md = uct_bxi_iface_md(self);
 
   /* Destroy connection map. */
-  kh_foreach_key (&self->conn_map, conn, {
+  kh_foreach_value (&self->conn_map, conn, {
     ucs_info("BXI: unassigned endpoint connection. conn=%p", conn);
     ucs_free(conn);
   })

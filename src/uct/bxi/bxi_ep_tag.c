@@ -55,8 +55,9 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
 }
 
 static ucs_status_t uct_bxi_iface_block_handle_rndv(uct_bxi_iface_t      *iface,
+                                                    uct_bxi_conn_t       *conn,
                                                     uct_bxi_recv_block_t *block,
-                                                    ptl_event_t          *ev)
+                                                    uct_bxi_conn_ooo_t   *ooo)
 {
   /* Block was posted during rendez-vous. Event means target has successfully
    * read data, initiator's operation can thus be completed. Block is released 
@@ -93,6 +94,7 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  ptl_hdr_data_t   hdr;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -103,10 +105,11 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                uct_bxi_send_op_handler, 1);
 
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, length, ep->conn);
+  ep->conn->sn++;
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)data,
                                length, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, 0));
+                               ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut short return %d", status);
@@ -133,9 +136,15 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   ssize_t          size  = 0;
   uct_bxi_gop_t   *gop;
   uct_bxi_iface_send_op_t *op;
+  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* Right now, imm is used by UCP only for sync protocol by setting imm to 
+   * the address of the local endpoint. But we need ptl hdr to add ordering 
+   * metadata so we do not support it. */
+  ucs_assert(imm == 0);
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     gop  = arg;
@@ -158,10 +167,11 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
       goto err;
     }
 
-    //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+    UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, size, ep->conn);
+    ep->conn->sn++;
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, imm));
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
   }
 
   if (status == UCS_ERR_NO_RESOURCE) {
@@ -195,6 +205,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
   ptl_iovec_t             *ptl_iov;
   uct_bxi_gop_t           *gop = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
+  ptl_hdr_data_t           hdr;
 
   UCT_BXI_IFACE_GET_TX_OP_COMP_ERR(iface, &iface->tx.send_op_mp, op, ep, comp,
                                    uct_bxi_send_op_handler,
@@ -204,6 +215,8 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
   ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
   uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
 
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, iov->length, ep->conn);
+  ep->conn->sn++;
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
@@ -213,7 +226,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
     status = uct_bxi_wrap(
             PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
                    ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                   ep->iface_addr.tag, tag, 0, op, imm));
+                   ep->iface_addr.tag, tag, 0, op, hdr));
   }
 
   if (status != UCS_OK) {
@@ -247,6 +260,11 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_ep_get_zcopy");
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* Right now, imm is used by UCP only for sync protocol by setting imm to 
+   * the address of the local endpoint. But we need ptl hdr to add ordering 
+   * metadata so we do not support it. */
+  ucs_assert(imm == 0);
 
   status = uct_bxi_ep_tag_zcopy_op(iface, ep, tag, imm, flags, iov, iovcnt,
                                    comp, &op);
@@ -389,8 +407,9 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
             ep->conn->id.conn_key);
 
-  UCT_BXI_RNDV_HDR_SET(hdr, ptl_iov->iov_len, ep->conn->id.conn_key,
-                       uct_bxi_rxq_get_addr(iface->rx.ctrl.q));
+  ucs_assert(ptl_iov->iov_len <= UCT_BXI_TAG_LENGH_MAX);
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, ptl_iov->iov_len, ep->conn);
+  ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     ucs_assert(gop != NULL);
@@ -460,6 +479,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
   ssize_t                  size;
+  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_LENGTH(header_length, 0, iface->config.seg_size,
@@ -479,11 +499,11 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
           header_length, &size, status = UCS_ERR_NO_RESOURCE;
           goto err);
 
-  //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_SW, 0, ep->conn);
+  ep->conn->sn++;
   status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                size, PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op,
-                               UCT_BXI_RNDV_SW_HDR));
+                               ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv request return %d", status);
@@ -686,7 +706,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
   uct_bxi_conn_id_t     cid;
-  uct_bxi_ep_conn_t    *conn = NULL;
+  uct_bxi_conn_t       *conn = NULL;
   ptl_match_bits_t      tag;
 
   /* Must be removed for both eager and rndv requests. */
@@ -696,13 +716,13 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     /* Posted receive was matched in overflow list, unexpected header was then 
      * consumed and ME unlinked already. Event data was cached in the interface 
      * to be retrieved now. */
-    ucs_assert(iface->tm.unexp_ev != NULL);
+    ucs_assert(iface->tm.unexp_ooo != NULL);
 
     if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
-      uct_bxi_recv_block_update_cnt(block, iface->tm.unexp_ev->mlength);
+      uct_bxi_recv_block_update_cnt(block, iface->tm.unexp_ooo->mlength);
     }
 
-    if (uct_bxi_iface_is_rndv_hw(iface, iface->tm.unexp_ev)) {
+    if (uct_bxi_iface_is_rndv_hw(iface, iface->tm.unexp_ooo)) {
 
       if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED) {
         ucs_assert(block->op->ep != NULL);
@@ -713,8 +733,8 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 
       /* Save stag and send size for rndv completion, see 
        * uct_bxi_recv_rndv_tag_handler. */
-      block->send_size = UCT_BXI_RNDV_LENGTH_GET(iface->tm.unexp_ev->hdr_data);
-      block->stag      = iface->tm.unexp_ev->match_bits;
+      block->send_size = UCT_BXI_TAG_LENGTH_GET(iface->tm.unexp_ooo->hdr_data);
+      block->stag      = iface->tm.unexp_ooo->match_bits;
 
       //TODO: GPU/CPU compatibility, see uct_bxi_pack_rndv
       //if (block->mem_type == UCS_MEMORY_TYPE_HOST) {
@@ -727,15 +747,13 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 
       if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
 
-        cid.pid      = iface->tm.unexp_ev->initiator;
-        cid.pti      = UCT_BXI_RNDV_PTI_GET(iface->tm.unexp_ev->hdr_data);
-        cid.conn_key = UCT_BXI_RNDV_CONN_KEY_GET(iface->tm.unexp_ev->hdr_data);
+        cid.pid      = iface->tm.unexp_ooo->initiator;
+        cid.pti      = UCT_BXI_CONN_PTI_GET(iface->tm.unexp_ooo->hdr_data);
+        cid.conn_key = UCT_BXI_CONN_KEY_GET(iface->tm.unexp_ooo->hdr_data);
         /* Rendezvous was not offloaded during receive call, thus rndv recv 
-       * counter not incremented, increment it now. */
-        status = uct_bxi_iface_get_conn(iface, cid, &conn);
-        if (status != UCS_OK) {
-          goto out;
-        }
+         * counter not incremented, increment it now. */
+        conn = uct_bxi_conn_get(iface, cid);
+        ucs_assert(conn != NULL);
 
         //NOTE: counter was incremented during unexpected handler already, so
         //      decrement by one to create the correct tag.
@@ -743,8 +761,8 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
 
         /* Rendezvous was not offloaded although sender sent a hw rndv request.
          * Complete the rendezvous. */
-        uct_bxi_iface_complete_rndv(iface, block, iface->tm.unexp_ev->hdr_data,
-                                    tag, iface->tm.unexp_ev->initiator,
+        uct_bxi_iface_complete_rndv(iface, block, iface->tm.unexp_ooo->hdr_data,
+                                    tag, iface->tm.unexp_ooo->initiator,
                                     block->send_size);
       }
 
@@ -755,7 +773,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
       status = UCS_INPROGRESS;
       /* Reset to NULL to let uct_bxi_iface_block_handle_tag_unexp know the ME 
        * do not need to be consumed. */
-      iface->tm.unexp_ev = NULL;
+      iface->tm.unexp_ooo = NULL;
       goto out;
 
     } else {
@@ -767,7 +785,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
       }
       /* Reset to NULL to let uct_bxi_iface_block_handle_tag_unexp know the ME 
        * do not need to be consumed. */
-      iface->tm.unexp_ev = NULL;
+      iface->tm.unexp_ooo = NULL;
     }
   } else {
     /* Cancellation was issued from ucp_request_cancel control flow, meaning ME 
@@ -900,9 +918,9 @@ void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop)
 
 ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
 {
-  ucs_status_t      status;
-  uct_bxi_ep_t     *ep    = ucs_derived_of(uct_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface = ucs_derived_of(uct_ep->iface, uct_bxi_iface_t);
+  ucs_status_t      status = UCS_OK;
+  uct_bxi_ep_t     *ep     = ucs_derived_of(uct_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t  *iface  = ucs_derived_of(uct_ep->iface, uct_bxi_iface_t);
   uct_bxi_conn_id_t id;
 
   /* Should only be called in tag-matching datapath. */
@@ -913,12 +931,12 @@ ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
    * Connection Key. */
   id.pid      = ep->dev_addr.pid;
   id.pti      = iface->rx.ctrl.q->pti;
-  id.conn_key = conn_key & UCT_BXI_RNDV_CONN_KEY_MASK;
+  id.conn_key = conn_key & UCT_BXI_CONN_KEY_MASK;
 
   /* Get base endpoint counter based on triplet. */
-  status = uct_bxi_iface_get_conn(iface, id, &ep->conn);
-  if (status != UCS_OK) {
-    goto err;
+  ep->conn = uct_bxi_conn_get(iface, id);
+  if (ep->conn == NULL) {
+    status = uct_bxi_conn_create(iface, id, &ep->conn);
   }
 
 err:
