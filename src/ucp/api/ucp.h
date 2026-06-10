@@ -723,6 +723,7 @@ typedef enum {
     UCP_OP_ATTR_FIELD_MEMH          = UCS_BIT(8),  /**< memory handle field */
     UCP_OP_ATTR_FIELD_SCHEDH        = UCS_BIT(9),  /**< schedule handle field */
     UCP_OP_ATTR_FIELD_EPH           = UCS_BIT(10), /**< endpoint handle field */
+    UCP_OP_ATTR_FIELD_DEPS          = UCS_BIT(11), /**< dependencies and their number fields */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -750,8 +751,8 @@ typedef enum {
                                                         of a single operation.
                                                         This flag and UCP_OP_ATTR_FLAG_FAST_CMPL
                                                         are mutually exclusive. */
-    UCP_OP_ATTR_FLAG_OP_OFFLOAD     = UCS_BIT(20)  /**< allow to offload the operation
-                                                        so it can be triggered later based 
+    UCP_OP_ATTR_FLAG_OP_OFFLOAD     = UCS_BIT(20),  /**< allow to offload the operation
+                                                        so it can be triggered later based
                                                         on buffer dependencies. */
 } ucp_op_attr_t;
 
@@ -1834,19 +1835,39 @@ typedef struct {
 
     /**
      * Scheduler handle.
-     * If the handle is provided, dependencies with other previous offloaded 
-     * operations will be checked to get the operation offload context necessary 
+     * If the handle is provided, dependencies with other previous offloaded
+     * operations will be checked to get the operation offload context necessary
      * to trigger the operation upon subsequent events.
      */
     ucp_sched_h schedh;
 
     /**
+     * Dependencies.
+     * If dependencies are provided, the scheduler will check these operations
+     * and get their necessary context to trigger the oeration upon subsequent
+     * events.
+     */
+    ucp_sched_task_h *deps;
+
+    /**
+     * Number of dependencies.
+     */
+    size_t num_deps;
+
+    /**
+     * Task hanldler.
+     * In this task handler will stored be the task context so it can be given
+     * to another operation as dependency.
+     */
+    ucp_sched_task_h task;
+
+    /**
      * Endpoint handle.
-     * Endpoint is required by the receive operation in case the size of the 
-     * message exceeds rendez-vous threshold. It is used to set up the GET 
-     * operation. Note that this can be used only actual message size matches 
-     * the receive size which thus prevents the use during usual MPI P2P 
-     * communication. However, it is suited for collectives since they guarranty 
+     * Endpoint is required by the receive operation in case the size of the
+     * message exceeds rendez-vous threshold. It is used to set up the GET
+     * operation. Note that this can be used only actual message size matches
+     * the receive size which thus prevents the use during usual MPI P2P
+     * communication. However, it is suited for collectives since they guarranty
      * same message size.
      */
     ucp_ep_h reply_ep;
@@ -3548,17 +3569,20 @@ ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
  *
  * An scheduler is a communication context for creating dependencies between
  * operations.
- * When an offloading scheduler is passed to a communication primitive, see 
- * @ref ??, a lookup will be performed to determine dependency through 
+ * When an offloading scheduler is passed to a communication primitive, see
+ * @ref ??, a lookup will be performed to determine dependency through
  * implicit data dependency checking.
  *
  * @param [in]  worker  UCP worker that is used for the offload operation.
- * @param [out] ctx     Scheduler  handle   
+ * @param [in]  mode    Flag to know if dependencies will be explicitely
+                        set or implicitely determined (UCP_SCHED_MODE_IMPLICIT).
+ * @param [out] ctx     Scheduler  handle
  *
- * @return error code if resources might not be available for example 
+ * @return error code if resources might not be available for example
  */
-ucs_status_t ucp_sched_create(ucp_worker_h          worker,
-                                      ucp_sched_h  *ctx);
+ucs_status_t ucp_sched_create(ucp_worker_h              worker,
+                                      ucp_sched_mode_t  mode,
+                                      ucp_sched_h       *ctx);
 
 void ucp_sched_fini(ucp_sched_h ctx);
 
@@ -3885,6 +3909,27 @@ ucp_atomic_op_nbx(ucp_ep_h ep, ucp_atomic_op_t opcode, const void *buffer,
  */
 ucs_status_t ucp_request_check_status(void *request);
 
+
+/**
+ * @ingroup UCP_COMM
+ * @brief Get the scheduled task of the non blocking request of a communication
+ * operation.
+ *
+ * This routine ...
+ *
+ * @param [in]  request     Non-blocking request returned by a call to
+ *                          @a ucp_tag_send_nbx or @a ucp_tag_recv_nbx.
+ *
+ * @return UCS_PTR_IS_ERR(_ptr) - The previous operation failed and returned
+ *                                this error.
+ * @return NULL                 - The previous operation completed immediately so
+ *                                there is no task for this operation or the operation
+ *                                was not added to the scheduler. There is no need to
+ *                                add it as a dependency.
+ * @return otherwise            - The corresponding task that can be used as a
+ *                                dependency for other operation to schedule.
+ */
+ucp_sched_task_h ucp_request_get_task(void *req);
 
 /**
  * @ingroup UCP_COMM

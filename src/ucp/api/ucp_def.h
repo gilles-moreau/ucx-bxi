@@ -11,6 +11,7 @@
 #ifndef UCP_DEF_H_
 #define UCP_DEF_H_
 
+#include "ucs/sys/compiler_def.h"
 #include <ucs/memory/memory_type.h>
 #include <ucs/type/status.h>
 #include <ucs/config/types.h>
@@ -279,13 +280,36 @@ typedef uint64_t                         ucp_datatype_t;
 
 /**
  * @ingroup UCP_COMM
- * @brief UCP Scheduler 
+ * @brief UCP Scheduler
  *
  * UCP scheduler is a communication context to create dependencies between
  * operations.
  */
 typedef struct ucp_sched       *ucp_sched_h;
 
+
+/**
+ * @ingroup UCP_COMM
+ * @brief Scheduler mode
+ * 
+ * Scheduler can create dependencies between operations based on
+ * explicit given dependencies, or based on implicit dependencies 
+ * found with buffer overlap
+ */
+typedef enum {
+    UCP_SCHED_MODE_EXPLICIT = UCS_BIT(0),
+    UCP_SCHED_MODE_IMPLICIT = UCS_BIT(1)
+} ucp_sched_mode_t;
+
+/**
+ * @ingroup UCP_COMM
+ * @brief UCP Task
+ *
+ * UCP task is an opaque object that identifies an operation
+ * and is used to create dependencies between operations thanks
+ * to the UCP scheduler.
+ */
+typedef struct ucp_sched_task       *ucp_sched_task_h;
 
 /**
  * @ingroup UCP_CONTEXT
@@ -637,7 +661,7 @@ typedef ucs_status_t (*ucp_am_callback_t)(void *arg, void *data, size_t length,
  * @param [in]  header        User defined active message header.
  *                            If @a header_length is 0, this value is undefined
  *                            and must not be accessed.
- * @param [in]  header_length Active message header length in bytes. 
+ * @param [in]  header_length Active message header length in bytes.
  * @param [in]  data          Points to the received data if @a
  *                            UCP_AM_RECV_ATTR_FLAG_RNDV flag is not set in
  *                            @ref ucp_am_recv_param_t.recv_attr. Otherwise
@@ -810,8 +834,8 @@ typedef struct ucp_ep_params {
  *     ep_attrs.transports.entry_size = sizeof(ucp_transport_entry_t);
  *     status = ucp_ep_query(ep, &ep_attrs);
  *     if (status == UCS_OK) {
- *         // ep_attrs.transports.num_entries = number of returned entries 
- *         // ... process transport info ... 
+ *         // ep_attrs.transports.num_entries = number of returned entries
+ *         // ... process transport info ...
  *     }
  *   }
  * @endcode
@@ -830,7 +854,7 @@ typedef struct {
     /**
      * The name of a transport layer used by this endpoint. This '\0'-terminated
      * string is valid until the endpoint is closed using a
-     * @ref ucp_ep_close_nbx call. 
+     * @ref ucp_ep_close_nbx call.
      */
     const char *transport_name;
 
@@ -849,7 +873,7 @@ typedef struct {
  * @brief Structure containing an array of transport layers and device names
  * used by an endpoint.
  *
- * The caller is responsible for allocation and deallocation of 
+ * The caller is responsible for allocation and deallocation of
  * this structure.
  */
 typedef struct {

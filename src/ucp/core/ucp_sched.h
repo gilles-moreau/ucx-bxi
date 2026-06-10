@@ -13,6 +13,7 @@ typedef struct ucp_request ucp_request_t;
 
 enum {
   UCP_SCHED_OFFLOAD_ENABLED = UCS_BIT(0),
+  UCP_SCHED_IMPLICIT = UCS_BIT(1),
 };
 
 enum {
@@ -44,9 +45,10 @@ typedef struct ucp_sched {
 } ucp_sched_t;
 
 ucs_status_t ucp_sched_send(ucp_request_t *req);
+ucs_status_t ucp_sched_send_deps(ucp_request_t *req, ucp_sched_task_h * deps, size_t num_deps);
 ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self);
 ucs_status_t ucp_sched_recv(ucp_request_t *req);
 
-ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *ctx_p);
+ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sched_h *ctx_p);
 
 #endif

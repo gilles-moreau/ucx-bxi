@@ -201,6 +201,22 @@ ucs_status_t ucp_stream_recv_request_test(void *request, size_t *length_p)
     return status;
 }
 
+ucp_sched_task_h ucp_request_get_task(void *request) {
+  ucp_request_t * req;
+  if (UCS_STATUS_IS_ERR(request)){
+    return request;
+  } else if (request == NULL){
+    /* The operation completed immediately.
+     * It means that there is no need to add a dependency for this operation
+     * since it is already completed */
+    return NULL;
+  } else {
+    /* Operation has been scheduled so we return the task to be added as dependency */
+    req = (ucp_request_t *)((ucp_request_t *)request -1);
+    return req->task;
+  }
+}
+
 static UCS_F_ALWAYS_INLINE void
 ucp_request_release_common(void *request, uint8_t cb_flag, const char *debug_name)
 {
@@ -327,7 +343,7 @@ int ucp_request_pending_add(ucp_request_t *req)
     uct_ep_h uct_ep;
 
     uct_ep = ucp_ep_get_lane(req->send.ep, req->send.lane);
-    status = uct_ep_pending_add(uct_ep, &req->send.uct, 
+    status = uct_ep_pending_add(uct_ep, &req->send.uct,
                                 req->flags & UCP_REQUEST_FLAG_SCHEDULED);
     if (status == UCS_OK) {
         ucs_trace_data("ep %p: added pending uct request %p to lane[%d]=%p",

@@ -1,4 +1,5 @@
 #include "ucp_sched.h"
+#include "api/ucp_def.h"
 
 #include <ucp/core/ucp_ep.h>
 #include <ucp/core/ucp_request.h>
@@ -9,6 +10,26 @@
 #include <ucs/profile/profile.h>
 #include <uct/api/uct.h>
 #include <uct/base/uct_iface.h>
+
+unsigned ucp_sched_set_task_deps(ucp_sched_task_h task, ucp_sched_task_h *deps, size_t num_deps)
+{
+  unsigned offloaded = UCP_SCHED_TASK_OFFLOADED;
+  for (int i=0; i<num_deps; ++i) {
+    ucp_sched_task_h dep = deps[i];
+    if (dep != NULL) {
+      /* To reduce the number of dependencies to ckeck later on */
+      if (!(dep->flags & UCP_SCHED_TASK_COMPLETED)) {
+        /* Add task to the list of dependencies. */
+        task->deps[task->num_deps++] = dep;
+
+        /* Task may be offloaded only if all dependent tasks have been
+          * offloaded. */
+        offloaded &= dep->flags & UCP_SCHED_TASK_OFFLOADED;
+      }
+    }
+  }
+  return offloaded;
+}
 
 // Add a region to the sched
 UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
@@ -135,6 +156,12 @@ ucp_sched_offload_send(ucp_sched_h sched, ucp_sched_task_t *stask)
 
 UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
 {
+  return ucp_sched_send_deps(req, NULL, 0);
+}
+
+UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send_deps, (req, deps, num_deps),
+                  ucp_request_t *req, ucp_sched_task_h *deps, size_t num_deps)
+{
   ucs_status_t      status = UCS_OK;
   ucp_sched_h       sched  = req->schedh;
   ucp_sched_task_t *task, *stask;
@@ -158,20 +185,21 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
   stask->ep       = req->send.ep;
   stask->num_deps = 0;
 
-  /* Loop over tasks in the recv schedule to find dependencies. */
-  ucs_list_for_each (task, &sched->schedule, elem) {
-    if (task->flags & UCP_SCHED_TASK_SEND) {
-      if ((task->ep == stask->ep) && (task->tag == stask->tag) &&
-          !(task->flags & UCP_SCHED_TASK_OFFLOADED)) {
-        stask->deps[stask->num_deps++] = task;
+  if (sched->flags & UCP_SCHED_MODE_IMPLICIT) {
+    /* Loop over tasks in the recv schedule to find dependencies. */
+    ucs_list_for_each (task, &sched->schedule, elem) {
+      if (task->flags & UCP_SCHED_TASK_SEND) {
+        if ((task->ep == stask->ep) && (task->tag == stask->tag) &&
+            !(task->flags & UCP_SCHED_TASK_OFFLOADED)) {
+          stask->deps[stask->num_deps++] = task;
 
-        //NOTE: task cannot be offloaded, otherwise we would have to manually
-        //      increment the counter to count for the non-offloaded dependency.
-        offloaded = 0;
-      }
-    } else { /* UCP_SCHED_TASK_RECV */
-      ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
-                    UCS_PTR_BYTE_OFFSET(task->buffer, task->size));
+          //NOTE: task cannot be offloaded, otherwise we would have to manually
+          //      increment the counter to count for the non-offloaded dependency.
+          offloaded = 0;
+        }
+      } else { /* UCP_SCHED_TASK_RECV */
+        ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
+                      UCS_PTR_BYTE_OFFSET(task->buffer, task->size));
       if (ucp_sched_check_overlap(stask->buffer, stask->size, task->buffer,
                                   task->size) &&
           !(task->flags & UCP_SCHED_TASK_COMPLETED)) {
@@ -186,6 +214,9 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
         offloaded &= task->flags & UCP_SCHED_TASK_OFFLOADED;
       }
     }
+  } else {
+    /* Add explicit dependencies to task */
+    offloaded &= ucp_sched_set_task_deps(stask, deps, num_deps);
   }
 
   if (stask->num_deps > 0) {
@@ -215,7 +246,7 @@ err:
   return status;
 }
 
-ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
+ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sched_h *sched_p)
 {
   ucs_status_t status = UCS_OK;
   ucp_sched_h  sched;
@@ -230,6 +261,10 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
   sched->flags  = 0;
   sched->count  = 0;
   sched->worker = worker;
+
+  if (mode & UCP_SCHED_MODE_IMPLICIT) {
+    sched->flags |= UCP_SCHED_IMPLICIT;
+  }
   ucs_list_head_init(&sched->schedule);
 
   /* If offload interface has been activated, enable scheduling on it. */

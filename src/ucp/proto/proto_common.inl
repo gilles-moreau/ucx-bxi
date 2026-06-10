@@ -302,7 +302,11 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
         req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
 
-        status = ucp_sched_send(req);
+        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_DEPS) {
+            status = ucp_sched_send_deps(req, param->deps, param->num_deps);
+        } else {
+            status = ucp_sched_send(req);
+        }
         if (status != UCS_OK) {
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);
