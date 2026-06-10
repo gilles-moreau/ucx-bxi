@@ -7,6 +7,7 @@
 #include <common/test.h>
 
 #include "test_ucp_tag.h"
+#include "ucp/api/ucp_def.h"
 #include "ucp_datatype.h"
 #include "ucs/type/status.h"
 
@@ -36,15 +37,15 @@ public:
 
     static void get_test_variants(std::vector<ucp_test_variant> &variants)
     {
-        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+        add_variant_values(variants, test_ucp_tag::get_test_variants,
                            VARIANT_OFFLOAD_DEFAULT);
 
         if (!RUNNING_ON_VALGRIND) {
-            add_variant_values(variants, test_ucp_tag::get_test_variants, 
+            add_variant_values(variants, test_ucp_tag::get_test_variants,
                                VARIANT_OFFLOAD_PROTOV1, "proto_v1");
         }
 
-        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+        add_variant_values(variants, test_ucp_tag::get_test_variants,
                            VARIANT_OFFLOAD_RECVEP, "reply_ep");
     }
 
@@ -477,7 +478,7 @@ UCS_TEST_P(test_ucp_tag_offload, eager_multi_recv,
     request_wait(rreq);
 }
 
-// Test that a posted request is cancelled during the handling of the 
+// Test that a posted request is cancelled during the handling of the
 // corresponding unexpected message.
 UCS_TEST_P(test_ucp_tag_offload, rndv_recv_matched_cancel)
 {
@@ -493,7 +494,7 @@ UCS_TEST_P(test_ucp_tag_offload, rndv_recv_matched_cancel)
     ucs_status_ptr_t sreq     = ucp_tag_send_nbx(sender().ep(), sendbuf.data(),
                                                  sendbuf.size(), tag, &param);
 
-    // Tweak progress only the sender to make sure the rndv control message 
+    // Tweak progress only the sender to make sure the rndv control message
     // has arrived but has not been pushed to unexpected list on the receiver.
     for (int i = 0; i < 3; ++i) {
         progress({&sender()});
@@ -520,7 +521,7 @@ public:
 
     static void get_test_variants(std::vector<ucp_test_variant> &variants)
     {
-        add_variant_values(variants, test_ucp_tag::get_test_variants, 
+        add_variant_values(variants, test_ucp_tag::get_test_variants,
                            VARIANT_OFFLOAD_RECVEP, "reply_ep");
     }
 
@@ -539,8 +540,8 @@ public:
 
 };
 
-// Test that create a number of endpoint that connects between 
-// each other using the connection key. The connection key is 
+// Test that create a number of endpoint that connects between
+// each other using the connection key. The connection key is
 // used during rendezvous.
 UCS_TEST_P(test_ucp_tag_conn_key, multi_ep_rndv_2sided)
 {
@@ -569,7 +570,7 @@ UCS_TEST_P(test_ucp_tag_conn_key, multi_ep_rndv_2sided)
             /* Connect receive side with connection key. */
             receiver().connect(&sender(), recv_ep_params, ep_idx);
 
-            /* Force a first message to be sent to activate the tag interface. 
+            /* Force a first message to be sent to activate the tag interface.
              * Use this length to activate it also in the case of multiple ifaces.*/
             send_recv(sender(), tag, sender().ucph()->config.ext.tm_thresh + 1);
 
@@ -622,11 +623,11 @@ public:
         test_ucp_tag_offload::init();
     }
 
-    ucs_status_t make_sched(entity &se, ucp_sched_h *sched_p) {
+    ucs_status_t make_sched(entity &se, ucp_sched_mode_t mode, ucp_sched_h *sched_p) {
         ucs_status_t status;
         ucp_sched_h sched;
 
-        status = ucp_sched_create(se.worker(), &sched);
+        status = ucp_sched_create(se.worker(), mode, &sched);
         if (status != UCS_OK) {
             goto err;
         }
@@ -642,7 +643,7 @@ err:
 
     ucs_status_ptr_t send_sched(ucp_test_base::entity &e,
                                 size_t length, uint8_t *buf,
-                                ucp_tag_t tag, ucp_sched_h sched, 
+                                ucp_tag_t tag, ucp_sched_h sched,
                                 int is_rndv) {
         ucp_request_param_t param = {};
         
@@ -652,9 +653,10 @@ err:
         return ucp_tag_send_nbx(e.ep(), buf, length, tag, &param);
     }
 
-    ucs_status_ptr_t recv_sched(ucp_test_base::entity &e, 
+    ucs_status_ptr_t send_sched_deps(ucp_test_base::entity &e,
                                 size_t length, uint8_t *buf,
-                                ucp_tag_t tag, ucp_sched_h sched, 
+                                ucp_tag_t tag, ucp_sched_h sched,
+                                ucp_sched_task_h *deps, size_t num_deps,
                                 int is_rndv) {
         ucp_request_param_t param = {};
         
@@ -668,6 +670,10 @@ err:
 
     }
 
+    ucp_sched_task_h get_task(ucs_status_ptr_t req) {
+        return ucp_request_get_task(req);
+    }
+
     ucs_status_t pingpong_offload_exp(size_t length, int is_rndv) {
         ucp_sched_h s_sched, r_sched;
         ucs_status_ptr_t req;
@@ -676,30 +682,30 @@ err:
 
         activate_offload(sender());
 
-        ASSERT_UCS_OK(make_sched(sender(), &s_sched));
-        ASSERT_UCS_OK(make_sched(receiver(), &r_sched));
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_IMPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_IMPLICIT, &r_sched));
 
         // Get eager length
         const ucp_tag_t tag = 0x11;
         std::vector<uint8_t> send_buf(length);
         std::vector<uint8_t> recv_buf(length);
 
-        // Setup the pong operations with 1) the receive and 2) the send 
+        // Setup the pong operations with 1) the receive and 2) the send
         // which will be triggered.
-        req = recv_sched(receiver(), length, recv_buf.data(), 
+        req = recv_sched(receiver(), length, recv_buf.data(),
                            tag, r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.push_back(req);
 
-        req = send_sched(receiver(), length, recv_buf.data(), tag, 
+        req = send_sched(receiver(), length, recv_buf.data(), tag,
                            r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
-        //FIXME: add counter check or progress to make sure no operation has 
+        //FIXME: add counter check or progress to make sure no operation has
         //       completed.
 
         param.op_attr_mask = !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
@@ -734,8 +740,8 @@ err:
 
         activate_offload(sender());
 
-        ASSERT_UCS_OK(make_sched(sender(), &s_sched));
-        ASSERT_UCS_OK(make_sched(receiver(), &r_sched));
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_IMPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_IMPLICIT, &r_sched));
 
         // Get eager length
         const ucp_tag_t tag = 0x11;
@@ -749,29 +755,29 @@ err:
             return UCS_PTR_RAW_STATUS(req);
         }
 
-        // Progress only the sender so that message is not inserted into the 
+        // Progress only the sender so that message is not inserted into the
         // matching lists of the receiver, but received by transport.
         request_wait(req, {&sender()});
 
         // Prepare receive from which receiver's send depends
-        req = recv_sched(receiver(), length, recv_buf.data(), tag, 
+        req = recv_sched(receiver(), length, recv_buf.data(), tag,
                            r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.push_back(req);
 
-        // Prepare the triggered send operation of the receiver 
-        req = send_sched(receiver(), length, recv_buf.data(), tag, 
+        // Prepare the triggered send operation of the receiver
+        req = send_sched(receiver(), length, recv_buf.data(), tag,
                            r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
 
-        // Prepare the receive operation of the sender. In case of rndv, 
+        // Prepare the receive operation of the sender. In case of rndv,
         // it must be offloaded so offload it anyway.
-        req = recv_sched(sender(), length, send_buf.data(), tag, 
+        req = recv_sched(sender(), length, send_buf.data(), tag,
                            s_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -786,8 +792,8 @@ err:
         return UCS_OK;
     }
 
-    /* Two sends (from the same sender) must be received before 
-     * the operation is triggered. */ 
+    /* Two sends (from the same sender) must be received before
+     * the operation is triggered. */
     ucs_status_t gather_pingpong_offload_exp(size_t length, int is_rndv) {
         ucp_sched_h s_sched, r_sched;
         ucs_status_ptr_t req;
@@ -796,15 +802,15 @@ err:
 
         activate_offload(sender());
 
-        ASSERT_UCS_OK(make_sched(sender(), &s_sched));
-        ASSERT_UCS_OK(make_sched(receiver(), &r_sched));
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_IMPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_IMPLICIT, &r_sched));
 
         const ucp_tag_t g1 = 0x11, g2 = 0x22, g = 0x33;
         std::vector<uint8_t> recv_buf(length);
         std::vector<uint8_t> send_buf(length);
 
         // Gather on first half of the pong buffer.
-        req = recv_sched(receiver(), length/2, recv_buf.data(), 
+        req = recv_sched(receiver(), length/2, recv_buf.data(),
                            g1, r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -812,22 +818,22 @@ err:
         reqs.push_back(req);
 
         // Second half
-        req = recv_sched(receiver(), length/2, recv_buf.data() + length/2, 
+        req = recv_sched(receiver(), length/2, recv_buf.data() + length/2,
                            g2, r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.push_back(req);
 
-        // Schedule triggered send operation of the receiver 
-        req = send_sched(receiver(), length, recv_buf.data(), g, r_sched, 
+        // Schedule triggered send operation of the receiver
+        req = send_sched(receiver(), length, recv_buf.data(), g, r_sched,
                            is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
 
-        // Prepare the receive operation of the sender. No offload 
+        // Prepare the receive operation of the sender. No offload
         // sched is provided since sender's operations are not offloaded.
         req = ucp_tag_recv_nbx(sender().worker(), send_buf.data(),
                                 length, g, 0xffff, &param);
@@ -837,7 +843,7 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Finally, send the gather operations.
-        // Last operations must not be offloaded since they would 
+        // Last operations must not be offloaded since they would
         // otherwise have a dependency on the previous receive.
         req = send_sched(sender(), length/2, send_buf.data(), g1, s_sched, 
                          is_rndv);
@@ -861,7 +867,7 @@ err:
         return UCS_OK;
     }
 
-    /* One receive will trigger two sends. */ 
+    /* One receive will trigger two sends. */
     ucs_status_t scatter_pingpong_offload_exp(size_t length, int is_rndv) {
         ucp_sched_h s_sched, r_sched;
         ucp_request_param_t param = {0};
@@ -870,15 +876,15 @@ err:
 
         activate_offload(sender());
 
-        ASSERT_UCS_OK(make_sched(sender(), &s_sched));
-        ASSERT_UCS_OK(make_sched(receiver(), &r_sched));
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_IMPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_IMPLICIT, &r_sched));
 
         const ucp_tag_t s1 = 0x11, s2 = 0x22, s = 0x33;
         std::vector<uint8_t> recv_buf(length);
         std::vector<uint8_t> send_buf(length);
 
         // Receive full buffer.
-        req = recv_sched(receiver(), length, recv_buf.data(), s, 
+        req = recv_sched(receiver(), length, recv_buf.data(), s,
                            r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -886,7 +892,7 @@ err:
         reqs.push_back(req);
 
         // Split sends in the pong. First half.
-        req = send_sched(receiver(), length/2, recv_buf.data(), s1, 
+        req = send_sched(receiver(), length/2, recv_buf.data(), s1,
                            r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -894,15 +900,15 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Second half
-        req = send_sched(receiver(), length/2, recv_buf.data() + length/2, 
+        req = send_sched(receiver(), length/2, recv_buf.data() + length/2,
                            s2, r_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
 
-        // Prepare the first receive operation of the sender. 
-        req = recv_sched(sender(), length/2, send_buf.data(), s1, s_sched, 
+        // Prepare the first receive operation of the sender.
+        req = recv_sched(sender(), length/2, send_buf.data(), s1, s_sched,
                            is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -910,7 +916,7 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // And the second
-        req = recv_sched(sender(), length/2, send_buf.data(), s2, s_sched, 
+        req = recv_sched(sender(), length/2, send_buf.data(), s2, s_sched,
                            is_rndv);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -918,9 +924,9 @@ err:
         reqs.insert(reqs.begin(), req);
 
         // Finally, send full buffer.
-        // Last operations must not be offloaded since they would otherwise have a 
+        // Last operations must not be offloaded since they would otherwise have a
         // dependency on the previous receive.
-        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(), 
+        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(),
                                length, s, &param);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
@@ -934,23 +940,346 @@ err:
 
         return UCS_OK;
     }
+
+    ucs_status_t pingpong_sched_exp(size_t length, int is_rndv) {
+        ucp_sched_h s_sched, r_sched;
+        ucs_status_ptr_t req;
+        // ucp_request_param_t param = {0};
+        std::vector<ucs_status_ptr_t> reqs;
+        ucp_sched_task_h recv_task;
+        ucp_sched_task_h *deps;
+
+        // activate_offload(sender());
+
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
+
+        // Get eager length
+        const ucp_tag_t tag = 0x11;
+        std::vector<uint8_t> send_buf(length);
+        std::vector<uint8_t> recv_buf(length);
+        std::vector<uint8_t> reply_send_buf(length);
+        std::vector<uint8_t> reply_recv_buf(length);
+
+        // Setup the pong operations with 1) the receive and 2) the send
+        // which will be scheduled.
+        req = recv_sched(receiver(), length, recv_buf.data(),
+                           tag, r_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        // Prepare send dependencies
+        recv_task = get_task(req);
+        deps = (ucp_sched_task_h *)malloc(sizeof(ucp_sched_task_h));
+        if (deps == NULL) {
+            return UCS_ERR_NO_MEMORY;
+        }
+        deps[0] = recv_task;
+
+        req = send_sched_deps(receiver(), length, reply_send_buf.data(), tag,
+                           r_sched, deps, 1, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+        //FIXME: add counter check or progress to make sure no operation has
+        //       completed.
+
+        // Prepare the receive operation of the sender. In case of rndv,
+        // it must be offloaded so offload it anyway.
+        req = recv_sched(sender(), length, reply_recv_buf.data(), tag,
+                           s_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Last operation must not be offloaded since it would otherwise have a
+        // dependency on the previous receive.
+        // req = ucp_tag_send_nbx(sender().ep(), send_buf.data(), length,
+        //                        tag, &param);
+        req = send_sched(sender(), length, send_buf.data(), tag, s_sched,
+                            is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        requests_wait(reqs);
+
+        free(deps);
+        delete_offload_sched(s_sched);
+        delete_offload_sched(r_sched);
+
+        return UCS_OK;
+    }
+
+    ucs_status_t pingpong_sched_unexp(size_t length, int is_rndv) {
+        ucp_sched_h s_sched, r_sched;
+        ucs_status_ptr_t req;
+        // ucp_request_param_t param = {0};
+        std::vector<ucs_status_ptr_t> reqs;
+        ucp_sched_task_h recv_task;
+        ucp_sched_task_h *deps;
+
+        // activate_offload(sender());
+
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
+
+        // Get eager length
+        const ucp_tag_t tag = 0x11;
+        std::vector<uint8_t> send_buf(length);
+        std::vector<uint8_t> recv_buf(length);
+        std::vector<uint8_t> reply_send_buf(length);
+        std::vector<uint8_t> reply_recv_buf(length);
+
+        // First, send the first operation from the sender
+        req = send_sched(sender(), length, send_buf.data(),
+                               tag, s_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+
+        // Progress only the sender so that message is not inserted into the
+        // matching lists of the receiver, but received by transport.
+        request_wait(req, {&sender()});
+
+        // Prepare receive from which receiver's send depends
+        req = recv_sched(receiver(), length, recv_buf.data(), tag,
+                           r_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        recv_task = get_task(req);
+        deps = (ucp_sched_task_h *)malloc(sizeof(ucp_sched_task_h));
+        if (deps == NULL) {
+            return UCS_ERR_NO_MEMORY;
+        }
+        deps[0] = recv_task;
+
+        // Prepare the scheduled send operation of the receiver
+        req = send_sched_deps(receiver(), length, reply_send_buf.data(), tag,
+                           r_sched, deps, 1, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Prepare the receive operation of the sender. In case of rndv,
+        // it must be offloaded so offload it anyway.
+        req = recv_sched(sender(), length, reply_recv_buf.data(), tag,
+                           s_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        requests_wait(reqs);
+
+        free(deps);
+        delete_offload_sched(s_sched);
+        delete_offload_sched(r_sched);
+
+        return UCS_OK;
+    }
+
+    /* Two sends (from the same sender) must be received before
+     * the operation is scheduled. */
+    ucs_status_t gather_pingpong_sched_exp(size_t length, int is_rndv) {
+        ucp_sched_h s_sched, r_sched;
+        ucs_status_ptr_t req;
+        ucp_request_param_t param = {0};
+        std::vector<ucs_status_ptr_t> reqs;
+        ucp_sched_task_h recv1_task;
+        ucp_sched_task_h recv2_task;
+        ucp_sched_task_h *deps;
+
+        // activate_offload(sender());
+
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
+
+        const ucp_tag_t g1 = 0x11, g2 = 0x22, g = 0x33;
+        std::vector<uint8_t> recv_buf(length);
+        std::vector<uint8_t> send_buf(length);
+        std::vector<uint8_t> reply_recv_buf(length);
+        std::vector<uint8_t> reply_send_buf(length);
+
+        // Gather on first half of the pong buffer.
+        req = recv_sched(receiver(), length/2, recv_buf.data(),
+                           g1, r_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+        recv1_task = get_task(req);
+
+        // Second half
+        req = recv_sched(receiver(), length/2, recv_buf.data() + length/2,
+                           g2, r_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+        recv2_task = get_task(req);
+
+        deps = (ucp_sched_task_h *)malloc(sizeof(ucp_sched_task_h) * 2);
+        if (deps == NULL) {
+            return UCS_ERR_NO_MEMORY;
+        }
+        deps[0] = recv1_task;
+        deps[1] = recv2_task;
+
+        // Schedule send operation of the receiver
+        req = send_sched_deps(receiver(), length, reply_send_buf.data(), g, r_sched,
+                           deps, 2, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Prepare the receive operation of the sender. No offload
+        // sched is provided since sender's operations are not offloaded.
+        req = recv_sched(sender(), length, reply_recv_buf.data(), g, s_sched,
+                           is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Finally, send the gather operations.
+        // Last operations must not be offloaded since they would
+        // otherwise have a dependency on the previous receive.
+        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(),
+                               length/2, g1, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        req = ucp_tag_send_nbx(sender().ep(), send_buf.data() + length/2,
+                               length/2, g2, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        requests_wait(reqs);
+
+        free(deps);
+        delete_offload_sched(s_sched);
+        delete_offload_sched(r_sched);
+
+        return UCS_OK;
+    }
+
+    /* One receive will trigger two sends. */
+    ucs_status_t scatter_pingpong_sched_exp(size_t length, int is_rndv) {
+        ucp_sched_h s_sched, r_sched;
+        ucp_request_param_t param = {0};
+        ucs_status_ptr_t req;
+        std::vector<ucs_status_ptr_t> reqs;
+        ucp_sched_task_h recv_task;
+        ucp_sched_task_h *deps;
+
+        // activate_offload(sender());
+
+        ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
+        ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
+
+        const ucp_tag_t s1 = 0x11, s2 = 0x22, s = 0x33;
+        std::vector<uint8_t> recv_buf(length);
+        std::vector<uint8_t> send_buf(length);
+        std::vector<uint8_t> reply_recv_buf(length);
+        std::vector<uint8_t> reply_send_buf(length);
+
+        // Receive full buffer.
+        req = recv_sched(receiver(), length, recv_buf.data(), s,
+                           r_sched, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        recv_task = get_task(req);
+        deps = (ucp_sched_task_h *)malloc(sizeof(ucp_sched_task_h));
+        if (deps == NULL) {
+            return UCS_ERR_NO_MEMORY;
+        }
+        deps[0] = recv_task;
+
+        // Split sends in the pong. First half.
+        req = send_sched_deps(receiver(), length/2, reply_send_buf.data(), s1,
+                           r_sched, deps, 1, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Second half
+        req = send_sched_deps(receiver(), length/2, reply_send_buf.data() + length/2,
+                           s2, r_sched, deps, 1, is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Prepare the first receive operation of the sender.
+        req = recv_sched(sender(), length/2, reply_recv_buf.data(), s1, s_sched,
+                           is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // And the second
+        req = recv_sched(sender(), length/2, reply_recv_buf.data(), s2, s_sched,
+                           is_rndv);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.insert(reqs.begin(), req);
+
+        // Finally, send full buffer.
+        // Last operations must not be offloaded since they would otherwise have a
+        // dependency on the previous receive.
+        req = ucp_tag_send_nbx(sender().ep(), send_buf.data(),
+                               length, s, &param);
+        if (UCS_PTR_IS_ERR(req)) {
+            return UCS_PTR_RAW_STATUS(req);
+        }
+        reqs.push_back(req);
+
+        requests_wait(reqs);
+
+        free(deps);
+        delete_offload_sched(s_sched);
+        delete_offload_sched(r_sched);
+
+        return UCS_OK;
+    }
 };
 
 //FIXME: add SKIP condition to check if interface support operation offload
-UCS_TEST_P(test_ucp_tag_sched, pingpong_eager_exp, 
+UCS_TEST_P(test_ucp_tag_sched, pingpong_eager_exp,
            "TM_THRESH=0")
 {
     //FIXME: Get correct size. The size depends on the UCS_ALLOCA_MAX stuff
     ASSERT_UCS_OK(pingpong_offload_exp(512, 0));
 }
 
-UCS_TEST_P(test_ucp_tag_sched, pingpong_eager_unexp, 
+UCS_TEST_P(test_ucp_tag_sched, pingpong_eager_unexp,
            "TM_THRESH=0")
 {
    ASSERT_UCS_OK(pingpong_offload_unexp(512, 0));
 }
 
-UCS_TEST_P(test_ucp_tag_sched, pingpong_rndv_exp, 
+UCS_TEST_P(test_ucp_tag_sched, pingpong_rndv_exp,
            "RNDV_THRESH=1000", "TM_THRESH=0")
 {
    ASSERT_UCS_OK(pingpong_offload_exp(2048, 1));
@@ -962,7 +1291,7 @@ UCS_TEST_P(test_ucp_tag_sched, pingpong_gather_eager_exp,
    ASSERT_UCS_OK(gather_pingpong_offload_exp(512, 0));
 }
 
-UCS_TEST_P(test_ucp_tag_sched, pingpong_gather_rndv_exp, 
+UCS_TEST_P(test_ucp_tag_sched, pingpong_gather_rndv_exp,
            "RNDV_THRESH=1000", "TM_THRESH=0")
 {
    ASSERT_UCS_OK(gather_pingpong_offload_exp(2048, 1));
@@ -974,10 +1303,55 @@ UCS_TEST_P(test_ucp_tag_sched, pingpong_scatter_eager_exp,
    ASSERT_UCS_OK(scatter_pingpong_offload_exp(512, 0));
 }
 
-UCS_TEST_P(test_ucp_tag_sched, pingpong_scatter_rndv_exp, 
+UCS_TEST_P(test_ucp_tag_sched, pingpong_scatter_rndv_exp,
            "RNDV_THRESH=1000", "TM_THRESH=0")
 {
    ASSERT_UCS_OK(scatter_pingpong_offload_exp(2048, 1));
+}
+
+// explicit dependencies
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_eager_exp,
+           "TM_THRESH=0")
+{
+    //FIXME: Get correct size. The size depends on the UCS_ALLOCA_MAX stuff
+    ASSERT_UCS_OK(pingpong_sched_exp(512, 0));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_eager_unexp,
+           "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(pingpong_sched_unexp(512, 0));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_rndv_exp,
+           "RNDV_THRESH=1000", "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(pingpong_sched_exp(2048, 1));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_gather_eager_exp,
+           "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(gather_pingpong_sched_exp(512, 0));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_gather_rndv_exp,
+           "RNDV_THRESH=1000", "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(gather_pingpong_sched_exp(2048, 1));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_scatter_eager_exp,
+           "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(scatter_pingpong_sched_exp(512, 0));
+}
+
+UCS_TEST_P(test_ucp_tag_sched, explct_pingpong_scatter_rndv_exp,
+           "RNDV_THRESH=1000", "TM_THRESH=0")
+{
+   ASSERT_UCS_OK(scatter_pingpong_sched_exp(2048, 1));
 }
 
 UCP_INSTANTIATE_TAG_OFFLOAD_TEST_CASE(test_ucp_tag_sched)
