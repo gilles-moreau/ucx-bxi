@@ -271,6 +271,33 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_cancel, (worker, req, mode),
     return status;
 }
 
+static UCS_F_ALWAYS_INLINE int
+ucp_tag_offload_is_rndv(ucp_worker_h worker, ucp_ep_h ep, ucp_request_t *req,
+                        size_t msg_length)
+{
+    const ucp_proto_threshold_elem_t *thresh_elem;
+    ucp_proto_select_param_t          select_param;
+    ucp_proto_query_attr_t            proto_attr;
+
+    if (!(req->recv.op_attr & UCP_OP_ATTR_FLAG_OP_OFFLOAD)) {
+        return 0;
+    }
+
+    ucp_proto_select_param_init(&select_param, UCP_OP_ID_TAG_SEND, 
+                                req->recv.op_attr,0, req->recv.dt_iter.dt_class,
+                                &req->recv.dt_iter.mem_info, 1);
+
+    thresh_elem = ucp_proto_select_lookup(worker, &ucp_ep_config(ep)->proto_select, 
+                                          ep->cfg_index, UCP_WORKER_CFG_INDEX_NULL,
+                                          &select_param, msg_length);
+
+    ucp_proto_config_query(worker, &thresh_elem->proto_config, 
+                           msg_length, &proto_attr);
+
+    return !strcmp(proto_attr.desc, "rendezvous tag offload");
+        
+}
+
 static UCS_F_ALWAYS_INLINE ucs_status_t
 ucp_tag_offload_do_post(ucp_request_t *req)
 {
@@ -293,9 +320,11 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     mdi = context->tl_rscs[wiface->rsc_index].md_index;
 
     /* Do not use bounce buffer for receives to GPU memory to avoid
-     * cost of h2d transfers (i.e. cuda_copy from staging to dest memory). */
+     * cost of h2d transfers (i.e. cuda_copy from staging to dest memory). 
+     * Also if request is offloaded, we must use original buffer. */
     if ((length >= worker->tm.offload.zcopy_thresh) ||
-        !UCP_MEM_IS_HOST(req->recv.dt_iter.mem_info.type)) {
+        !UCP_MEM_IS_HOST(req->recv.dt_iter.mem_info.type) ||
+        req->recv.op_attr & UCP_OP_ATTR_FLAG_OP_OFFLOAD) {
         if (length > wiface->attr.cap.tag.recv.max_zcopy) {
             /* Post maximum allowed length. If sender sends smaller message
              * (which is allowed per MPI standard), max recv should fit it.
@@ -349,11 +378,14 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
-    req->recv.uct_ctx.reply_ep = NULL;
+    req->recv.uct_ctx.reply_ep        = NULL;
+    req->recv.uct_ctx.is_rndv         = 0;
     if (req->recv.reply_ep != NULL) {
         reply_ep = ucp_ep_get_tag_uct_ep(req->recv.reply_ep);
         if (reply_ep != NULL && !ucp_wireup_ep_test(reply_ep)) {
             req->recv.uct_ctx.reply_ep = reply_ep;
+            req->recv.uct_ctx.is_rndv  = 
+                ucp_tag_offload_is_rndv(worker, req->recv.reply_ep, req, length);
         }
     }
 

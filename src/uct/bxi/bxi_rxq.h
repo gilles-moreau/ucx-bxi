@@ -48,6 +48,7 @@ typedef struct uct_bxi_recv_block {
                                         the block */
   ptl_handle_md_t       mdh;         /* Memory Descriptor used for GET */
   ptl_size_t            ct_value;    /* SW counter tracking HW counter */
+  ptl_size_t            rndv_thresh; /* Rendez-vous threshold */
   uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 

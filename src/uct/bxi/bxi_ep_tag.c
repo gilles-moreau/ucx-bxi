@@ -145,6 +145,8 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
    * the address of the local endpoint. But we need ptl hdr to add ordering 
    * metadata so we do not support it. */
   ucs_assert(imm == 0);
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, size, ep->conn);
+  ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     gop  = arg;
@@ -155,7 +157,7 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
 
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, imm, gop->cth,
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
             gop->ct_value));
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
@@ -167,8 +169,6 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
       goto err;
     }
 
-    UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, size, ep->conn);
-    ep->conn->sn++;
     status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
                                  size, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, hdr));
@@ -221,7 +221,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
             ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-            tag, 0, op, imm, gop->cth, gop->ct_value));
+            tag, 0, op, hdr, gop->cth, gop->ct_value));
   } else {
     status = uct_bxi_wrap(
             PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
@@ -518,10 +518,12 @@ err:
 }
 
 static UCS_F_ALWAYS_INLINE int
-uct_bxi_tag_recv_is_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block)
+uct_bxi_tag_recv_is_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
+                         int is_rndv)
 {
-  return (block->size > iface->config.tm.eager_limit) &&
-         (block->size <= iface->config.max_msg_size);
+  return ((block->size > iface->config.tm.eager_limit) &&
+          (block->size <= iface->config.max_msg_size)) ||
+         is_rndv;
 }
 
 static UCS_F_ALWAYS_INLINE void
@@ -547,10 +549,10 @@ uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
                        ep->conn->recv);
   /* TriggeredGet at current counter value plus eager_limit + 1, as defined by 
    * Barrett and al. */
-  status = uct_bxi_wrap(PtlTriggeredGet(
-          block->mdh, start, block->op->length, ep->dev_addr.pid,
-          ep->iface_addr.ctrl, tag, 0, block->op, block->cth,
-          block->ct_value + iface->config.tm.eager_limit + 1));
+  status = uct_bxi_wrap(PtlTriggeredGet(block->mdh, start, block->op->length,
+                                        ep->dev_addr.pid, ep->iface_addr.ctrl,
+                                        tag, 0, block->op, block->cth,
+                                        block->ct_value + block->rndv_thresh));
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
   }
@@ -631,6 +633,8 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
    * directly. */
   block->op->comp.comp++;
   block->op->rndv.block = block;
+  block->rndv_thresh =
+          ctx->is_rndv ? block->size : iface->config.tm.eager_limit + 1;
 
   /* Initialise ME params with default value, they may be changed during 
    * protocol configuration below. For eager message and without scheduling
@@ -641,8 +645,8 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   me.match_id.phys.pid = PTL_PID_ANY;
   me.uid               = PTL_UID_ANY;
 
-  if (ucs_unlikely(uct_bxi_tag_recv_is_rndv(iface, block) ||
-                   iface->tm.sched_window)) {
+  if (uct_bxi_tag_recv_is_rndv(iface, block, ctx->is_rndv) ||
+      iface->tm.sched_window) {
     /* Counter is needed. */
     block->flags |= UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
     /* Update ME parameters. */
@@ -650,7 +654,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
     me.options   |= PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW |
                   PTL_ME_EVENT_CT_BYTES;
 
-    if (uct_bxi_tag_recv_is_rndv(iface, block)) {
+    if (uct_bxi_tag_recv_is_rndv(iface, block, ctx->is_rndv)) {
       block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV;
 
       if (ep != NULL) {
@@ -843,7 +847,7 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV) {
     /* thresh = current counter value + eager limit + 1 + 
      * completion of get (+1) */
-    thresh = block->ct_value + iface->config.tm.eager_limit + 2;
+    thresh = block->ct_value + block->rndv_thresh + 1;
   } else {
     thresh = block->ct_value + block->size;
   }

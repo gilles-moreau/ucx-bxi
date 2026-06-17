@@ -711,19 +711,15 @@ err:
         //FIXME: add counter check or progress to make sure no operation has 
         //       completed.
 
-        // Prepare the receive operation of the sender. In case of rndv, 
-        // it must be offloaded so offload it anyway.
         param.op_attr_mask = !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
         param.reply_ep     = !is_rndv ? NULL : sender().ep();
-        ucp_tag_recv_nbx(sender().worker(), send_buf.data(),
-                         length, tag, 0xffff, &param);
+        req = ucp_tag_recv_nbx(sender().worker(), send_buf.data(),
+                               length, tag, 0xffff, &param);
         if (UCS_PTR_IS_ERR(req)) {
             return UCS_PTR_RAW_STATUS(req);
         }
         reqs.insert(reqs.begin(), req);
 
-        // Last operation must not be offloaded since it would otherwise have a 
-        // dependency on the previous receive.
         req = send_sched(sender(), length, send_buf.data(), tag, 
                            s_sched, is_rndv);
         if (UCS_PTR_IS_ERR(req)) {

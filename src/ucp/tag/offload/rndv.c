@@ -32,8 +32,7 @@ ucp_tag_rndv_offload_proto_probe(const ucp_proto_init_params_t *init_params)
                   context, init_params->ep_config_key),
            .super.max_length = SIZE_MAX,
            .super.min_iov    = 0,
-           .super.min_frag_offs =
-                  ucs_offsetof(uct_iface_attr_t, cap.tag.eager.max_bcopy),
+           .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
            .super.max_frag_offs =
                   ucs_offsetof(uct_iface_attr_t, cap.tag.rndv.max_zcopy),
            .super.max_iov_offs =

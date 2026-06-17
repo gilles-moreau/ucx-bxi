@@ -1840,10 +1840,11 @@ struct uct_tag_context {
      void (*rndv_cb)(uct_tag_context_t *self, uct_tag_t stag, const void *header,
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
-     /** 
-      * Reply endpoint to enable offloaded rendezvous (only needed for BXI).
-      */ 
+     /** Reply endpoint to enable offloaded rendezvous (only needed for BXI). */ 
      uct_ep_h reply_ep;
+
+     /** Notify UCT that expected protocol on this context is rendezvous. */ 
+     int is_rndv;
 
      /** A placeholder for the private data used by the transport. */
      char priv[UCT_TAG_PRIV_LEN];
