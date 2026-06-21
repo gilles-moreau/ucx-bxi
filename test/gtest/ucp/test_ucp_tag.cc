@@ -190,6 +190,11 @@ void test_ucp_tag::check_offload_support(bool offload_required)
     }
 }
 
+bool test_ucp_tag::is_offload_enabled()
+{
+    return ucp_ep_config_key_has_tag_lane(&ucp_ep_config(sender().ep())->key);
+}
+
 int test_ucp_tag::get_worker_index(int buf_index)
 {
     int worker_index = 0;

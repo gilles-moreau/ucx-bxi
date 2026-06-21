@@ -271,31 +271,55 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_tag_offload_cancel, (worker, req, mode),
     return status;
 }
 
-static UCS_F_ALWAYS_INLINE int
-ucp_tag_offload_is_rndv(ucp_worker_h worker, ucp_ep_h ep, ucp_request_t *req,
-                        size_t msg_length)
+static UCS_F_ALWAYS_INLINE void
+ucp_tag_offload_set_recv_flags(ucp_worker_h worker, ucp_ep_h reply_ep, 
+                               ucp_request_t *req, size_t msg_length, 
+                               unsigned *flags_p, uct_ep_h *ep_p)
 {
     const ucp_proto_threshold_elem_t *thresh_elem;
     ucp_proto_select_param_t          select_param;
     ucp_proto_query_attr_t            proto_attr;
+    unsigned flags = 0;
+    uct_ep_h ep = NULL;
 
-    if (!(req->recv.op_attr & UCP_OP_ATTR_FLAG_OP_OFFLOAD)) {
-        return 0;
+    /* First, check if reply ep was provided. */
+    if (reply_ep == NULL) {
+        goto check_schedule;
+    } else {
+        flags |= UCT_TAG_RECV_REPLY_EP;
     }
 
+    /* Second, lookup protocol to check for rendezvous. */
     ucp_proto_select_param_init(&select_param, UCP_OP_ID_TAG_SEND, 
                                 req->recv.op_attr,0, req->recv.dt_iter.dt_class,
                                 &req->recv.dt_iter.mem_info, 1);
 
-    thresh_elem = ucp_proto_select_lookup(worker, &ucp_ep_config(ep)->proto_select, 
-                                          ep->cfg_index, UCP_WORKER_CFG_INDEX_NULL,
+    thresh_elem = ucp_proto_select_lookup(worker, &ucp_ep_config(reply_ep)->proto_select, 
+                                          reply_ep->cfg_index, UCP_WORKER_CFG_INDEX_NULL,
                                           &select_param, msg_length);
 
     ucp_proto_config_query(worker, &thresh_elem->proto_config, 
                            msg_length, &proto_attr);
 
-    return !strcmp(proto_attr.desc, "rendezvous tag offload");
+    if (!strcmp(proto_attr.desc, "rendezvous tag offload")) {
+        ep = ucp_ep_get_tag_uct_ep(req->recv.reply_ep);
+        ucs_assert(ep != NULL);
+
+        /* Check if ep is still wireup, if so rndv cannot be offloaded. */
+        if (ucp_wireup_ep_test(ep)) {
+             ep = NULL;
+             goto check_schedule;
+        }
+
+        flags |= UCT_TAG_RECV_RNDV;
+    }
         
+check_schedule:
+    /* Third, set schedule flag. */
+    flags |= req->recv.op_attr & UCP_OP_ATTR_FLAG_OP_OFFLOAD ? UCT_TAG_SCHEDULE : 0;
+
+    *flags_p = flags;
+    *ep_p    = ep;
 }
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
@@ -305,7 +329,6 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     ucp_context_t *context = worker->context;
     size_t length          = req->recv.dt_iter.length;
     ucp_mem_desc_t *rdesc  = NULL;
-    uct_ep_h reply_ep      = NULL;
     ucp_worker_iface_t *wiface;
     ucs_status_t status;
     ucp_md_index_t mdi;
@@ -378,16 +401,9 @@ ucp_tag_offload_do_post(ucp_request_t *req)
     req->recv.uct_ctx.tag_consumed_cb = ucp_tag_offload_tag_consumed;
     req->recv.uct_ctx.completed_cb    = ucp_tag_offload_completed;
     req->recv.uct_ctx.rndv_cb         = ucp_tag_offload_rndv_cb;
-    req->recv.uct_ctx.reply_ep        = NULL;
-    req->recv.uct_ctx.is_rndv         = 0;
-    if (req->recv.reply_ep != NULL) {
-        reply_ep = ucp_ep_get_tag_uct_ep(req->recv.reply_ep);
-        if (reply_ep != NULL && !ucp_wireup_ep_test(reply_ep)) {
-            req->recv.uct_ctx.reply_ep = reply_ep;
-            req->recv.uct_ctx.is_rndv  = 
-                ucp_tag_offload_is_rndv(worker, req->recv.reply_ep, req, length);
-        }
-    }
+    ucp_tag_offload_set_recv_flags(worker, req->recv.reply_ep, req, length, 
+                                   &req->recv.uct_ctx.flags,
+                                   &req->recv.uct_ctx.reply_ep);
 
     status = uct_iface_tag_recv_zcopy(wiface->iface, req->recv.tag.tag,
                                       req->recv.tag.tag_mask, &iov, 1,

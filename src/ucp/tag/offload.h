@@ -102,6 +102,9 @@ ucp_tag_offload_try_post(ucp_worker_t *worker, ucp_request_t *req,
         }
     }
 
+    /* Remove offload flag if set since request cannot be offload. */
+    req->recv.op_attr &= ~UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+
     ++worker->tm.expected.sw_all_count;
     ++req_queue->sw_count;
     req_queue->block_count += !!(req->flags & UCP_REQUEST_FLAG_BLOCK_OFFLOAD);

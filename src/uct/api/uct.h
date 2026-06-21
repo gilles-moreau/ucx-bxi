@@ -592,10 +592,11 @@ enum uct_tag_flags {
                                                  to be successful, and the callback 
                                                  is not called. */
     UCT_TAG_CANCEL_MATCHED    = UCS_BIT(2), /**< Inform the transport that tag has been
-                                                 matched in software. For transports
-                                                 that support unexpected hw matching, 
-                                                 posted receive does not need to be 
-                                                 explicitly cancelled on the hw. */
+                                                 matched in software. Needed for BXI. */
+    UCT_TAG_RECV_REPLY_EP     = UCS_BIT(3), /**< Whether tag receive is provided a reply 
+                                                 ep for rendezvous. Needed for BXI. */
+    UCT_TAG_RECV_RNDV         = UCS_BIT(4), /**< Whether receive is expecting a 
+                                                 rendezvous. Needed for BXI. */
 };
 
 
@@ -1843,8 +1844,8 @@ struct uct_tag_context {
      /** Reply endpoint to enable offloaded rendezvous (only needed for BXI). */ 
      uct_ep_h reply_ep;
 
-     /** Notify UCT that expected protocol on this context is rendezvous. */ 
-     int is_rndv;
+     /** Flags from @ref uct_tag_flags. */
+     unsigned flags;
 
      /** A placeholder for the private data used by the transport. */
      char priv[UCT_TAG_PRIV_LEN];

@@ -921,7 +921,6 @@ err:
 
 static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
 {
-  khiter_t         iter;
   uct_bxi_iface_t *iface =
           ucs_derived_of(self->super.super.iface, uct_bxi_iface_t);
 
@@ -934,11 +933,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_ep_t)
   /* Purge all request from the pending queue. */
   uct_bxi_ep_pending_purge(&self->super.super,
                            ucs_empty_function_do_assert_void, NULL);
-
-  /* Destroy endpoint connection. */
-  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, &self->conn->id);
-  kh_del(uct_bxi_conn_map, &iface->conn_map, iter);
-  ucs_free(self->conn);
 
   ucs_list_del(&self->elem);
   iface->num_eps--;

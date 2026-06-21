@@ -83,6 +83,7 @@ enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCE     = UCS_BIT(2),
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCED    = UCS_BIT(3),
   UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(4),
+  UCT_BXI_IFACE_SEND_OP_FLAG_COMPLETED = UCS_BIT(5),
 
   // Operation type
   UCT_BXI_IFACE_SEND_OP_TYPE_START     = UCS_BIT(10),
@@ -339,8 +340,9 @@ typedef struct uct_bxi_iface {
       uct_bxi_rxq_t *q;
     } tag;
     struct {
-      uct_bxi_rxq_t *q;
-    } ctrl; /* Control RXQ for internal protocols. */
+      uct_bxi_rxq_t  *q;
+      ptl_handle_me_t meh; /* Zero length get ME */
+    } ctrl;                /* Control RXQ for internal protocols. */
     struct {
       ptl_pt_index_t      pti;
       uct_bxi_mem_entry_t entry;

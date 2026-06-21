@@ -42,7 +42,11 @@ static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
   /* Whether rendezvous was offloaded or not, handler is called after the 
    * completion of GET which is always performed on MD with counter,  so 
    * corresponding sw counter must be incremented. */
-  uct_bxi_recv_block_update_cnt(block, 1);
+  uct_bxi_recv_block_update_cnt(block);
+
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_COMPLETED) {
+    return;
+  }
 
   /* Invoke tag-related callback. */
   block->ctx->completed_cb(
@@ -336,12 +340,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           iov->length, iface->config.max_msg_size);
   UCT_BXI_CHECK_IFACE_RES_PTR(iface, ep);
 
-  //if (iov->length <= iface->config.tm.eager_limit) {
-  //  status = uct_bxi_ep_tag_zcopy_op(iface, ep, tag, 0, flags, iov, iovcnt,
-  //                                   comp, &op);
-  //  goto out;
-  //}
-
   //TODO: sometimes, implement support for PTL_IOVEC for MD.
   //TODO: remove ptl_iovec but explicitly show buffer resolution in case
   //      of GPU memory
@@ -517,52 +515,69 @@ err:
   return status;
 }
 
-static UCS_F_ALWAYS_INLINE int
-uct_bxi_tag_recv_is_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
-                         int is_rndv)
-{
-  return ((block->size > iface->config.tm.eager_limit) &&
-          (block->size <= iface->config.max_msg_size)) ||
-         is_rndv;
-}
-
 static UCS_F_ALWAYS_INLINE void
-uct_bxi_iface_tag_recv_rndv_zcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
-                                  uct_bxi_recv_block_t *block, ptl_me_t *me)
+uct_bxi_iface_block_init_trigget(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                                 uct_bxi_recv_block_t *block, ptl_me_t *me,
+                                 unsigned flags)
 {
   ucs_status_t     status = UCS_OK;
-  ptl_size_t       start;
   ptl_match_bits_t tag;
 
-  //TODO: fix this.....
-  //if (ucs_likely(block->mem_type == UCS_MEMORY_TYPE_HOST)) {
-  //  start             = (ptl_size_t)UCS_PTR_BYTE_OFFSET(block->start,
-  //                                                      iface->tm.rndv_hdr_offset);
-  //  block->op->length = block->size - iface->tm.rndv_hdr_offset;
-  //} else {
-  //ucs_assert(block->mem_type == UCS_MEMORY_TYPE_CUDA);
-  start             = (ptl_size_t)block->start;
-  block->op->length = block->size;
-  //}
+  /* There are three main cases for the triggered get:
+   * - No offloaded rendez-vous, no schedule => no counters.
+   * - Offloaded rendez-vous => with counters, counted by bytes to handle 
+   *   eager send and rendez-vous recv (mpi standard). 
+   *   Rendez-vous is offloaded only if size > eager_limit.
+   *   UCT_TAG_RECV_REPLY_EP must be set.
+   * - Schedule => with counters, counted by event. UCT_TAG_SCHEDULE must 
+   *   be set. Rendez-vous is offloaded iff UCT_TAG_RECV_RNDV. 
+   *   UCT_TAG_RECV_REPLY_EP and UCT_TAG_SCHEDULE must be set as well.
+   **/
 
-  UCT_BXI_RNDV_TAG_SET(tag, ep->iface_addr.ctrl, ep->conn->id.conn_key,
-                       ep->conn->recv);
-  /* TriggeredGet at current counter value plus eager_limit + 1, as defined by 
-   * Barrett and al. */
-  status = uct_bxi_wrap(PtlTriggeredGet(block->mdh, start, block->op->length,
-                                        ep->dev_addr.pid, ep->iface_addr.ctrl,
-                                        tag, 0, block->op, block->cth,
-                                        block->ct_value + block->rndv_thresh));
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
+  if (flags & (UCT_TAG_SCHEDULE | UCT_TAG_RECV_RNDV)) {
+    /* Counter is needed. */
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
+    /* Update ME parameters. */
+    me->ct_handle  = block->cth;
+    me->options   |= PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
+
+    if (flags & UCT_TAG_RECV_RNDV) {
+      ucs_assert(flags & UCT_TAG_RECV_REPLY_EP);
+      ucs_assert(ep != NULL);
+      block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV |
+                      UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED |
+                      UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED;
+
+      block->op->length = block->size;
+      UCT_BXI_RNDV_TAG_SET(tag, ep->iface_addr.ctrl, ep->conn->id.conn_key,
+                           ep->conn->recv);
+
+      //TODO: think about adding the operation to the send queue of the endpoint.
+      //      Problem rn is that this cannot be supported without reply_ep.
+      //      Except if we put the send queue to the conn structure?
+      status = uct_bxi_wrap(PtlTriggeredGet(
+              block->mdh, (ptl_size_t)block->start, block->op->length,
+              ep->dev_addr.pid, ep->iface_addr.ctrl, tag, 0, block->op,
+              block->cth, block->ct_value + 1));
+      if (status != UCS_OK) {
+        ucs_fatal("BXI: PtlTriggeredGet request return %d", status);
+      }
+
+      ucs_debug(
+              "BXI: recv trig get. ep=%p, start=%lu, length=%lu, tag=0x%016lx, "
+              "nid=%u, pid=%u, pti=%d, conn_key=%d, op=%p, recv block=%p, ct "
+              "value=%lu",
+              ep, (ptl_size_t)block->start, block->op->length, tag,
+              ep->dev_addr.pid.phys.nid, ep->dev_addr.pid.phys.pid,
+              ep->iface_addr.ctrl, ep->conn->id.conn_key, block->op, block,
+              block->ct_value);
+
+      /* Increment rndv receive counter. */
+      uct_bxi_rndv_inc_recv_cnt(iface, ep->conn);
+    }
+  } else {
+    me->ct_handle = PTL_CT_NONE;
   }
-
-  ucs_debug("BXI: recv trig get. ep=%p, start=%lu, length=%lu, tag=0x%016lx, "
-            "nid=%u, pid=%u, pti=%d, conn_key=%d, op=%p, recv block=%p, ct "
-            "value=%lu",
-            ep, start, block->op->length, tag, ep->dev_addr.pid.phys.nid,
-            ep->dev_addr.pid.phys.pid, ep->iface_addr.ctrl,
-            ep->conn->id.conn_key, block->op, block, block->ct_value);
 }
 
 //TODO: better handler receive completion mecanisms. It's a mess right now.
@@ -633,8 +648,6 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
    * directly. */
   block->op->comp.comp++;
   block->op->rndv.block = block;
-  block->rndv_thresh =
-          ctx->is_rndv ? block->size : iface->config.tm.eager_limit + 1;
 
   /* Initialise ME params with default value, they may be changed during 
    * protocol configuration below. For eager message and without scheduling
@@ -645,25 +658,8 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   me.match_id.phys.pid = PTL_PID_ANY;
   me.uid               = PTL_UID_ANY;
 
-  if (uct_bxi_tag_recv_is_rndv(iface, block, ctx->is_rndv) ||
-      iface->tm.sched_window) {
-    /* Counter is needed. */
-    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
-    /* Update ME parameters. */
-    me.ct_handle  = block->cth;
-    me.options   |= PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW |
-                  PTL_ME_EVENT_CT_BYTES;
-
-    if (uct_bxi_tag_recv_is_rndv(iface, block, ctx->is_rndv)) {
-      block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV;
-
-      if (ep != NULL) {
-        ucs_assert(ep->conn_state & UCT_BXI_EP_CONN_CONNECTED);
-        /* Then this means the rendezvous may be offloaded. */
-        block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED;
-      }
-    }
-  }
+  /* Set portals counter according to flags. */
+  uct_bxi_iface_block_init_trigget(iface, ep, block, &me, ctx->flags);
 
   me.start       = block->start;
   me.length      = block->size;
@@ -674,15 +670,6 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   status = uct_bxi_recv_block_exp_activate(iface->rx.tag.q, block, &me);
   if (status != UCS_OK) {
     goto err_release_op;
-  }
-
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED) {
-    /* Post triggered get after to increase the chance of hw expected match. */
-    uct_bxi_iface_tag_recv_rndv_zcopy(iface, ep, block, &me);
-
-    /* Increment rndv receive counter. */
-    uct_bxi_rndv_inc_recv_cnt(iface, ep->conn);
-    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED;
   }
 
   /* Update interface available resources. */
@@ -723,7 +710,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
     ucs_assert(iface->tm.unexp_ooo != NULL);
 
     if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
-      uct_bxi_recv_block_update_cnt(block, iface->tm.unexp_ooo->mlength);
+      uct_bxi_recv_block_update_cnt(block);
     }
 
     if (uct_bxi_iface_is_rndv_hw(iface, iface->tm.unexp_ooo)) {
@@ -845,11 +832,10 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
   }
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV) {
-    /* thresh = current counter value + eager limit + 1 + 
-     * completion of get (+1) */
-    thresh = block->ct_value + block->rndv_thresh + 1;
+    /* thresh = current counter value + 1 (first match) + 1 (get) */
+    thresh = block->ct_value + 2;
   } else {
-    thresh = block->ct_value + block->size;
+    thresh = block->ct_value + 1;
   }
 
   status = uct_bxi_wrap(

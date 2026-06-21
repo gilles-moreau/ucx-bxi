@@ -145,7 +145,9 @@ static void ucp_proto_eager_tag_offload_bcopy_probe_common(
         .super.exclude_map   = 0,
         .super.reg_mem_info  = ucp_mem_info_unknown,
         .lane_type           = UCP_LANE_TYPE_TAG,
-        .tl_cap_flags        = UCT_IFACE_FLAG_TAG_EAGER_BCOPY
+        .tl_cap_flags        =  (op_id == UCP_OP_ID_TAG_SEND_SYNC) ? 
+            UCT_IFACE_FLAG_TAG_EAGER_BCOPY | UCT_IFACE_FLAG_TAG_IMM_DATA : 
+            UCT_IFACE_FLAG_TAG_EAGER_BCOPY,
     };
 
     /* offload proto can not be used if no tag offload lane configured */

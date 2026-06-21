@@ -474,7 +474,8 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
       switch (ev.type) {
       case PTL_EVENT_REPLY:
         /* This event is generated after TAG GET operation completion. */
-        if (uct_bxi_iface_op_is_inlined(iface, ev.mlength)) {
+        if (ev.mlength > 0 && uct_bxi_iface_op_is_inlined(iface, ev.mlength) &&
+            uct_bxi_ep_is_intra_node(op->ep)) {
           //NOTE: for small size messages, host memory may not be coherent with
           //      completion of the operation, thus force NIC synchronization.
           //TODO: test with PTL_MD_VOLATILE unset
@@ -1011,11 +1012,10 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   uct_bxi_conn_t *conn;
   uct_bxi_md_t   *md = uct_bxi_iface_md(self);
 
-  /* Destroy connection map. */
-  kh_foreach_value (&self->conn_map, conn, {
-    ucs_info("BXI: unassigned endpoint connection. conn=%p", conn);
-    ucs_free(conn);
-  })
+  /* Destroy connection map. Connections and sequence number can outlive 
+   * endpoints, so to preserve ordering they must be kept until infterface 
+   * destruction. */
+  kh_foreach_value (&self->conn_map, conn, { ucs_free(conn); })
     ;
   kh_destroy_inplace(uct_bxi_conn_map, &self->conn_map);
 

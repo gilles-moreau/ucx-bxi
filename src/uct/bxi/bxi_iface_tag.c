@@ -110,7 +110,7 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
   uct_bxi_iface_tag_del_from_hash(iface, block->start);
 
   if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
-    uct_bxi_recv_block_update_cnt(block, ooo->mlength);
+    uct_bxi_recv_block_update_cnt(block);
   }
 
   /* Now, perform protocol specific actions. */
@@ -160,10 +160,14 @@ ucs_status_t uct_bxi_iface_block_handle_tag_exp(uct_bxi_iface_t      *iface,
       ucs_assert(block->op->ep != NULL);
       uct_bxi_recv_block_cancel_triggered(block);
       uct_bxi_rndv_dec_recv_cnt(iface, block->op->ep->conn);
-    }
 
-    /* Operation will not be used, it may be released. */
-    uct_bxi_iface_release_op(block->op);
+      /* Mark operation as completed to avoid multiple tag completions. */
+      block->op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_COMPLETED;
+      uct_bxi_iface_completion_op(block->op);
+    } else {
+      /* No other event is expected so operation can be released. */
+      uct_bxi_iface_release_op(block->op);
+    }
 
     uct_bxi_recv_block_release(block);
   }
@@ -276,6 +280,8 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   ucs_status_t        status = UCS_OK;
   ucs_mpool_params_t  mp_param;
   uct_bxi_rxq_param_t rxq_param;
+  ptl_me_t            zero_ctrl;
+  uct_bxi_md_t       *md = uct_bxi_iface_md(iface);
 
   if (!config->tm.enable) {
     /* HW tag matching data structure should not be initialized. */
@@ -386,6 +392,26 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto err_release_blockrecvmp;
   }
 
+  /* Add a zero size permanent ME in the unexpected queue of the control 
+   * list to match any wrongfully triggered get during send/receive 
+   * desynchronization (mpi). */
+  zero_ctrl.length            = 0;
+  zero_ctrl.ct_handle         = PTL_CT_NONE;
+  zero_ctrl.match_bits        = 0;
+  zero_ctrl.ignore_bits       = ~0;
+  zero_ctrl.min_free          = 0;
+  zero_ctrl.match_id.phys.nid = PTL_NID_ANY;
+  zero_ctrl.match_id.phys.pid = PTL_PID_ANY;
+  zero_ctrl.uid               = PTL_UID_ANY;
+  zero_ctrl.options           = PTL_ME_OP_GET | PTL_ME_EVENT_COMM_DISABLE |
+                      PTL_ME_EVENT_LINK_DISABLE | PTL_ME_EVENT_UNLINK_DISABLE;
+  status = uct_bxi_wrap(PtlMEAppend(md->nih, iface->rx.ctrl.q->pti, &zero_ctrl,
+                                    PTL_OVERFLOW_LIST, NULL,
+                                    &iface->rx.ctrl.meh));
+  if (status != UCS_OK) {
+    goto err_clean_ctrl_rxq;
+  }
+
   /* Memory pool of Generic operation. These are counters that are 
    * used to implement dependencies between sends and receives. */
   ucs_mpool_params_reset(&mp_param);
@@ -406,6 +432,8 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   return status;
 
+err_clean_zerome:
+  PtlMEUnlink(iface->rx.ctrl.meh);
 err_clean_ctrl_rxq:
   uct_bxi_rxq_fini(iface->rx.ctrl.q);
 err_release_blockrecvmp:
@@ -433,6 +461,7 @@ void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
 
   /* Release TAG RX queue. */
   uct_bxi_rxq_fini(iface->rx.tag.q);
+  PtlMEUnlink(iface->rx.ctrl.meh);
   uct_bxi_rxq_fini(iface->rx.ctrl.q);
 
   /* Receive block memory pool.*/

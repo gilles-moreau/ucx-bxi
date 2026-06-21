@@ -127,6 +127,7 @@ protected:
     void wait_for_unexpected_msg(ucp_worker_h worker, double sec);
 
     void check_offload_support(bool offload_required);
+    bool is_offload_enabled();
 
     virtual bool is_external_request();
     virtual bool need_reply_ep() const;
