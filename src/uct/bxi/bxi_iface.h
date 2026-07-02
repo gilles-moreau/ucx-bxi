@@ -230,20 +230,12 @@ static UCS_F_ALWAYS_INLINE khint_t
 uct_bxi_conn_map_conn_hash(uct_bxi_conn_id_t *conn)
 {
   uint32_t crc = ucs_crc32(0, conn, sizeof(*conn));
-  ucs_debug("BXI: id. crc=%u, nid=%d, pid=%d, pti=%d, conn key=%d.", crc,
-            conn->pid.phys.nid, conn->pid.phys.pid, conn->pti, conn->conn_key);
   return crc;
 }
 
 static UCS_F_ALWAYS_INLINE int
 uct_bxi_conn_map_conn_equal(uct_bxi_conn_id_t *conn1, uct_bxi_conn_id_t *conn2)
 {
-  ucs_debug("BXI: equal. nid=%d, pid=%d, pti=%d, conn key=%d.",
-            conn1->pid.phys.nid, conn1->pid.phys.pid, conn1->pti,
-            conn1->conn_key);
-  ucs_debug("BXI: equal. nid=%d, pid=%d, pti=%d, conn key=%d.",
-            conn2->pid.phys.nid, conn2->pid.phys.pid, conn2->pti,
-            conn2->conn_key);
   return (conn1->pid.phys.nid == conn2->pid.phys.nid) &&
          (conn1->pid.phys.pid == conn2->pid.phys.pid) &&
          (conn1->pti == conn2->pti) && (conn1->conn_key == conn2->conn_key);

@@ -154,7 +154,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
 
     switch (ret) {
     case PTL_OK:
-      ucs_debug("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
+      ucs_trace("BXI: RX event. iface=%p, type=%s, size=%lu, start=%p, pti=%d, "
                 "block=%p, nid=%d, pid=%d, match bits=%lx",
                 iface, uct_bxi_event_str[ev.type], ev.mlength, ev.start,
                 ev.pt_index, ev.user_ptr, ev.initiator.phys.nid,
