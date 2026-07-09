@@ -1,15 +1,19 @@
 #include "ucp_sched.h"
 #include "api/ucp_def.h"
 
+#include <string.h>
 #include <ucp/core/ucp_ep.h>
 #include <ucp/core/ucp_request.h>
 #include <ucp/core/ucp_worker.h>
 #include <ucp/proto/proto_common.h>
+#include <ucp/rndv/proto_rndv.h>
 #include <ucs/datastruct/khash.h>
 #include <ucs/datastruct/list.h>
 #include <ucs/profile/profile.h>
 #include <uct/api/uct.h>
 #include <uct/base/uct_iface.h>
+#include <ucs/async/eventfd.h>
+#include <ucs/async/async_fwd.h>
 
 unsigned ucp_sched_set_task_deps(ucp_sched_task_h task, ucp_sched_task_h *deps, size_t num_deps)
 {
@@ -101,13 +105,35 @@ int ucp_sched_check_overlap(void *a_buf, size_t a_size, void *b_buf,
   return a_start < b_end && b_start < a_end;
 }
 
+/**
+ * @brief callback that progress worker while fd @a id is readable
+ *
+ * @param [in] id     fd of the scheduler
+ * @param [in] events unused, the type of event used for polling on the fd
+ * @param [in] arg    worker to progress
+ */
+void ucp_sched_progress(int id, ucs_event_set_types_t events, void *arg) {
+  ucp_worker_h worker = (ucp_worker_h)arg;
+  // Several events can't be detected at a time
+  while(ucs_async_eventfd_poll(id) == UCS_OK) {
+    ucp_worker_progress(worker);
+  }
+}
+
 ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 {
   ucp_request_t     *req   = ucs_container_of(self, ucp_request_t, send.uct);
   const ucp_proto_t *proto = req->send.proto_config->proto;
   //TODO: bug when protocol is a rndv protocol since priv is not the same...
-  const ucp_proto_common_lane_priv_t *spriv = req->send.proto_config->priv;
-  ucp_sched_task_t                   *stask = req->task;
+  ucp_sched_task_t                      *stask = req->task;
+  ucp_lane_index_t lane;
+  if (strcmp(proto->name, "tag/rndv")==0){
+    const ucp_proto_rndv_ctrl_priv_t    *rpriv = req->send.proto_config->priv;
+    lane = rpriv->lane;
+  } else {
+    const ucp_proto_common_lane_priv_t  *spriv = req->send.proto_config->priv;
+    lane = spriv->lane;
+  }
 
   if (stask->flags & UCP_SCHED_TASK_OFFLOADED) {
     goto start_send;
@@ -115,7 +141,7 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 
   for (int i = 0; i < stask->num_deps; i++) {
     if (!(stask->deps[i]->flags & UCP_SCHED_TASK_COMPLETED)) {
-      req->send.lane = spriv->lane; /* Save for pending_add */
+      req->send.lane = lane; /* Save for pending_add */
       /* Return no resource so request can be added to pending list. */
       return UCS_ERR_NO_RESOURCE;
     }
@@ -258,6 +284,22 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sc
     goto err;
   }
 
+#if ENABLE_MT
+  if (worker->flags & UCP_WORKER_FLAG_THREAD_MULTI) {
+    /* Set progress thread callback */
+    status = ucs_async_eventfd_create(&sched->fd);
+    if (status != UCS_OK) {
+      goto err_fd;
+    }
+    status = ucs_async_set_event_handler(worker->async.mode, sched->fd, 
+                                         UCS_EVENT_SET_EVREAD , 
+                                         ucp_sched_progress, worker, &worker->async);
+    if (status != UCS_OK) {
+      goto err_evfd_handler;
+    }
+  }
+#endif
+
   sched->flags  = 0;
   sched->count  = 0;
   sched->worker = worker;
@@ -283,6 +325,13 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sc
   *sched_p = sched;
 err:
   return status;
+#if ENABLE_MT
+err_evfd_handler:
+    ucs_async_eventfd_destroy(sched->fd);
+err_fd:
+    ucs_mpool_put(sched);
+    return status;
+#endif
 }
 
 void ucp_sched_fini(ucp_sched_h sched)
@@ -293,6 +342,13 @@ void ucp_sched_fini(ucp_sched_h sched)
                                   sched->tasks_mp[i].comph);
     }
   }
+
+#if ENABLE_MT
+  if (sched->worker->flags & UCP_WORKER_FLAG_THREAD_MULTI) {
+    ucs_async_remove_handler(sched->fd, 1);
+    ucs_async_eventfd_destroy(sched->fd);
+  }
+#endif
 
   ucs_trace_req("schedule released %p", sched);
 

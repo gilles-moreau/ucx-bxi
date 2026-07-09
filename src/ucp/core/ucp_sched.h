@@ -6,6 +6,8 @@
 
 #include <ucs/datastruct/list.h>
 
+#include <config.h>
+
 typedef struct ucp_request ucp_request_t;
 
 #define UCP_SCHED_MAX_SCHEDULE_SIZE 256
@@ -41,6 +43,9 @@ typedef struct ucp_sched {
   unsigned         flags;
   ucs_list_link_t  schedule;
   size_t           count;
+#if ENABLE_MT
+  int              fd; /* used for progress thread polling */
+#endif
   ucp_worker_h     worker;
 } ucp_sched_t;
 

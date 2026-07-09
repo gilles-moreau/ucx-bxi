@@ -22,7 +22,7 @@
 #include <ucp/dt/datatype_iter.inl>
 #include <ucp/dt/dt.inl>
 #include <inttypes.h>
-
+#include <ucs/async/eventfd.h>
 
 UCS_PTR_MAP_IMPL(request, 0);
 
@@ -85,7 +85,7 @@ UCS_PTR_MAP_IMPL(request, 0);
             (_req)->_cb((_req) + 1, (_status), ## __VA_ARGS__); \
         } \
         if (ucs_unlikely((_req)->flags & UCP_REQUEST_FLAG_SCHEDULED)) { \
-            ucp_sched_task_complete((_req)->task); \
+            ucp_sched_task_complete((_req)->schedh, (_req)->task); \
         } \
         if (ucs_unlikely(_flags & UCP_REQUEST_FLAG_RELEASED)) { \
             ucp_request_put(_req); \
