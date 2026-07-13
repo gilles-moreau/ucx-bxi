@@ -169,7 +169,7 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
         id.pid      = ev.initiator;
         id.pti      = UCT_BXI_CONN_PTI_GET(ev.hdr_data);
         id.conn_key = UCT_BXI_CONN_KEY_GET(ev.hdr_data);
-        conn        = uct_bxi_conn_get(iface, id);
+        conn        = uct_bxi_conn_get(iface, &id);
         if (ucs_unlikely(conn == NULL)) {
           status = uct_bxi_conn_create(iface, id, &conn);
           if (status != UCS_OK) {
@@ -199,7 +199,11 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
       case PTL_EVENT_AUTO_UNLINK:
         /* A receive block from the PTL_OVERFLOW_LIST has been filled. 
          * Link it back, all included data has been processed already. */
-        status = uct_bxi_recv_block_unexp_activate(block);
+        if (block->pending_ooo == 0) {
+          status = uct_bxi_recv_block_unexp_activate(block);
+        } else {
+          block->flags |= UCT_BXI_RECV_BLOCK_FLAG_PENDING_LINK;
+        }
         break;
       case PTL_EVENT_AUTO_FREE:
         /* AUTO_FREE are generated for on TAG RXQ because block are posted 
@@ -627,7 +631,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.max_num_eps      = config->super.max_num_eps;
   iface->config.max_events       = config->max_events;
   iface->config.seg_size         = config->seg_size;
-  iface->config.tx.max_queue_len = config->tx.max_queue_len;
+  iface->config.tx.max_queue_len = config->tx.max_queue_len; //FIXME: not used?
   iface->config.rx.max_queue_len = config->rx.max_queue_len;
   iface->config.rx.num_seg       = config->rx.num_seg;
   //NOTE: There can only be as many ACK in the EQ as the maximal number of
@@ -922,7 +926,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   le.start     = NULL;
   le.length    = PTL_SIZE_MAX;
   le.options   = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
-               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
+                 PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
 
   /* RDMA operations are always matched on the same silent ME. */
   status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,

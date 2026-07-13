@@ -377,23 +377,23 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
 // value.
 static inline ptl_interface_t uct_bxi_parse_device(const char *ptl_device)
 {
-  ptl_interface_t iface = 0;
+  int iface = 0;
   if (strstr(ptl_device, "bxi") == NULL) {
     // Device name from simulator, thus return 0
     iface = 0;
   } else {
     sscanf(ptl_device + 3, "%d", &iface);
   }
-  return iface;
+  return (ptl_interface_t)iface;
 }
 
 ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p)
 {
-  ucs_status_t            status     = UCS_OK;
-  static const char      *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR,
-                                        UCT_BXI3_MD_NETDEV_DIR, "/sys/class/net"};
+  ucs_status_t       status     = UCS_OK;
+  static const char *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR,
+                                   UCT_BXI3_MD_NETDEV_DIR, "/sys/class/net"};
   uct_md_resource_desc_t *resources;
   int                     i = 0;
   int                     is_up;

@@ -229,7 +229,15 @@ typedef struct uct_bxi_iface_config {
 static UCS_F_ALWAYS_INLINE khint_t
 uct_bxi_conn_map_conn_hash(uct_bxi_conn_id_t *conn)
 {
-  uint32_t crc = ucs_crc32(0, conn, sizeof(*conn));
+  uint32_t crc;
+
+  /* Compute crc one field at a time, otherwise padding within struct may 
+   * introduce unspecified value. */
+  crc = ucs_crc32(0, &conn->pid.phys.nid, sizeof(ptl_nid_t));
+  crc = ucs_crc32(crc, &conn->pid.phys.pid, sizeof(ptl_pid_t));
+  crc = ucs_crc32(crc, &conn->pti, sizeof(ptl_pt_index_t));
+  crc = ucs_crc32(crc, &conn->conn_key, sizeof(uct_ep_conn_key_t));
+
   return crc;
 }
 

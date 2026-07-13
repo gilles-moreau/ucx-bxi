@@ -880,7 +880,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 {
   ucs_status_t      status = UCS_OK;
   uct_bxi_iface_t  *iface  = ucs_derived_of(params->iface, uct_bxi_iface_t);
-  uct_bxi_conn_id_t id;
+  uct_bxi_conn_id_t id     = {0};
 
   UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 

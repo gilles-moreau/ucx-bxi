@@ -42,7 +42,7 @@ ucs_status_t uct_bxi_conn_insert(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
                                  uct_bxi_recv_block_t *block, ptl_event_t *ev,
                                  uct_bxi_block_handler handler, uint16_t sn);
 
-uct_bxi_conn_t *uct_bxi_conn_get(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id);
+uct_bxi_conn_t *uct_bxi_conn_get(uct_bxi_iface_t *iface, uct_bxi_conn_id_t *id);
 
 ucs_status_t uct_bxi_conn_create(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id,
                                  uct_bxi_conn_t **conn_p);

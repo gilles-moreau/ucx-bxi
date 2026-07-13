@@ -86,14 +86,15 @@ static void uct_bxi_rxq_block_init(ucs_mpool_t *mp, void *obj, void *chunk)
   uct_bxi_rxq_t        *rxq   = ucs_container_of(mp, uct_bxi_rxq_t, mp);
   uct_bxi_recv_block_t *block = (uct_bxi_recv_block_t *)obj;
 
-  block->flags   = 0;
-  block->size    = rxq->config.blk_size;
-  block->start   = block + 1;
-  block->rxq     = rxq;
-  block->list    = rxq->list;
-  block->meh     = PTL_INVALID_HANDLE;
-  block->cth     = PTL_CT_NONE;
-  block->handler = rxq->handler;
+  block->flags       = 0;
+  block->size        = rxq->config.blk_size;
+  block->start       = block + 1;
+  block->rxq         = rxq;
+  block->list        = rxq->list;
+  block->meh         = PTL_INVALID_HANDLE;
+  block->cth         = PTL_CT_NONE;
+  block->handler     = rxq->handler;
+  block->pending_ooo = 0;
 }
 
 static void uct_bxi_rxq_block_cleanup(ucs_mpool_t *mp, void *obj)

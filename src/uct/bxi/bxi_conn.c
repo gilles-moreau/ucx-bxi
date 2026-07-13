@@ -1,5 +1,6 @@
 #include "bxi_conn.h"
 #include "bxi_iface.h"
+#include "bxi_rxq.h"
 
 ucs_status_t uct_bxi_conn_insert(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
                                  uct_bxi_recv_block_t *block, ptl_event_t *ev,
@@ -14,8 +15,9 @@ ucs_status_t uct_bxi_conn_insert(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
   ucs_assert(ooo != NULL);
 
   /* Init ooo data, only needed if message is ooo. */
-  ooo->block      = block;
-  ooo->handler    = handler;
+  ooo->block   = block;
+  ooo->handler = handler; //FIXME: will always be block handler? Then no
+                          //       need to pass it as argument.
   ooo->initiator  = ev->initiator;
   ooo->start      = ev->start;
   ooo->mlength    = ev->mlength;
@@ -52,24 +54,31 @@ ucs_status_t uct_bxi_conn_insert(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
         ucs_error("BXI: handle failed.");
         goto err;
       }
+
+      if ((--block->pending_ooo == 0) &&
+          block->flags & UCT_BXI_RECV_BLOCK_FLAG_PENDING_LINK) {
+        status = uct_bxi_recv_block_unexp_activate(block);
+        goto err;
+      }
+
       ucs_mpool_put(ooo_tmp);
     }
   } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
+    block->pending_ooo++;
   } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
     ucs_error("BXI: failed msg inserted. sn=%d", sn);
     status = UCS_ERR_IO_ERROR;
-    goto err;
   }
 
 err:
   return status;
 }
 
-uct_bxi_conn_t *uct_bxi_conn_get(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id)
+uct_bxi_conn_t *uct_bxi_conn_get(uct_bxi_iface_t *iface, uct_bxi_conn_id_t *id)
 {
   khiter_t iter;
 
-  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, &id);
+  iter = kh_get(uct_bxi_conn_map, &iface->conn_map, id);
   if (ucs_likely(iter != kh_end(&iface->conn_map))) {
     return kh_value(&iface->conn_map, iter);
   }

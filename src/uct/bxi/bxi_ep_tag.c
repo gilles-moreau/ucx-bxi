@@ -696,8 +696,8 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
   ucs_status_t          status = UCS_OK;
   uct_bxi_recv_block_t *block  = *(uct_bxi_recv_block_t **)ctx->priv;
   uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_conn_id_t     cid;
-  uct_bxi_conn_t       *conn = NULL;
+  uct_bxi_conn_id_t     cid    = {0};
+  uct_bxi_conn_t       *conn   = NULL;
   ptl_match_bits_t      tag;
 
   /* Must be removed for both eager and rndv requests. */
@@ -743,7 +743,7 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
         cid.conn_key = UCT_BXI_CONN_KEY_GET(iface->tm.unexp_ooo->hdr_data);
         /* Rendezvous was not offloaded during receive call, thus rndv recv 
          * counter not incremented, increment it now. */
-        conn = uct_bxi_conn_get(iface, cid);
+        conn = uct_bxi_conn_get(iface, &cid);
         ucs_assert(conn != NULL);
 
         //NOTE: counter was incremented during unexpected handler already, so
@@ -911,7 +911,7 @@ ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
   ucs_status_t      status = UCS_OK;
   uct_bxi_ep_t     *ep     = ucs_derived_of(uct_ep, uct_bxi_ep_t);
   uct_bxi_iface_t  *iface  = ucs_derived_of(uct_ep->iface, uct_bxi_iface_t);
-  uct_bxi_conn_id_t id;
+  uct_bxi_conn_id_t id     = {0};
 
   /* Should only be called in tag-matching datapath. */
   ucs_assert(iface->tm.enabled);
@@ -924,7 +924,7 @@ ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
   id.conn_key = conn_key & UCT_BXI_CONN_KEY_MASK;
 
   /* Get base endpoint counter based on triplet. */
-  ep->conn = uct_bxi_conn_get(iface, id);
+  ep->conn = uct_bxi_conn_get(iface, &id);
   if (ep->conn == NULL) {
     status = uct_bxi_conn_create(iface, id, &ep->conn);
   }

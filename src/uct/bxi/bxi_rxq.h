@@ -13,7 +13,7 @@ enum {
   UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(3),
   UCT_BXI_RECV_BLOCK_FLAG_LINKED          = UCS_BIT(4),
   UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED     = UCS_BIT(5),
-  UCT_BXI_RECV_BLOCK_FLAG_ONGOING_OOO     = UCS_BIT(6),
+  UCT_BXI_RECV_BLOCK_FLAG_PENDING_LINK    = UCS_BIT(6),
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -28,11 +28,12 @@ typedef struct uct_bxi_recv_block_params {
 
 typedef struct uct_bxi_recv_block {
   unsigned              flags;
-  const void           *orig;        /* Original address, GPU address */
-  void                 *start;       /* Address of the receive block, may be 
+  const void           *orig;      /* Original address, GPU address */
+  void                 *start;     /* Address of the receive block, may be 
                                         GDR mapped address for GPU mem */
-  ssize_t               size;        /* Size of the receive block */
-  size_t                send_size;   /* Actual size sent on the receive block */
+  ssize_t               size;      /* Size of the receive block */
+  size_t                send_size; /* Actual size sent on the receive block */
+  size_t                capacity;
   size_t                eager_limit; /* Cached eager limit for easy access 
                                         in release */
   uct_bxi_rxq_t        *rxq;         /* Back reference to the RX Queue */
@@ -48,6 +49,7 @@ typedef struct uct_bxi_recv_block {
                                         the block */
   ptl_handle_md_t       mdh;         /* Memory Descriptor used for GET */
   ptl_size_t            ct_value;    /* SW counter tracking HW counter */
+  int                   pending_ooo; /* Number of pending ooo */
   uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
 } uct_bxi_recv_block_t;
 
