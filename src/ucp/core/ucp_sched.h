@@ -19,12 +19,16 @@ enum {
   UCP_SCHED_TASK_OFFLOADED     = UCS_BIT(0),
   UCP_SCHED_TASK_RELEASE_SCHED = UCS_BIT(1),
   UCP_SCHED_TASK_COMPLETED     = UCS_BIT(2),
+  UCP_SCHED_TASK_SEND          = UCS_BIT(3),
+  UCP_SCHED_TASK_RECV          = UCS_BIT(4),
 };
 
 typedef struct ucp_sched_task {
   unsigned               flags;
   void                  *buffer;
   size_t                 size;
+  ucp_ep_h               ep;
+  uct_tag_t              tag;
   uct_gop_h              comph; /* Transport completion handle */
   ucs_list_link_t        elem;  /* Element in the schedule list */
   struct ucp_sched_task *deps[UCP_SCHED_MAX_DEPS];
