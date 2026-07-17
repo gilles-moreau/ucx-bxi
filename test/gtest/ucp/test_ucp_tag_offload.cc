@@ -7,6 +7,7 @@
 #include <common/test.h>
 
 #include "test_ucp_tag.h"
+#include "ucp/api/ucp.h"
 #include "ucp/api/ucp_def.h"
 #include "ucp_datatype.h"
 #include "ucs/type/status.h"
@@ -659,7 +660,24 @@ err:
                                 ucp_sched_task_h *deps, size_t num_deps,
                                 int is_rndv) {
         ucp_request_param_t param = {};
-        
+        ucp_deps_param_t deps_param;
+
+        param.op_attr_mask   = UCP_OP_ATTR_FIELD_SCHEDH
+                               | UCP_OP_ATTR_FLAG_NO_IMM_CMPL
+                               | UCP_OP_ATTR_FIELD_SCHED_DEPS;
+        param.schedh         = sched;
+        deps_param.deps      = deps;
+        deps_param.num_deps  = num_deps;
+        param.deps           = &deps_param;
+        return ucp_tag_send_nbx(e.ep(), buf, length, tag, &param);
+    }
+
+    ucs_status_ptr_t recv_sched(ucp_test_base::entity &e,
+                                size_t length, uint8_t *buf,
+                                ucp_tag_t tag, ucp_sched_h sched,
+                                int is_rndv) {
+        ucp_request_param_t param = {};
+
         param.op_attr_mask  = UCP_OP_ATTR_FIELD_SCHEDH | 
             UCP_OP_ATTR_FLAG_OP_OFFLOAD;
         param.op_attr_mask |= !is_rndv ? 0 : UCP_OP_ATTR_FIELD_EPH;
@@ -949,7 +967,7 @@ err:
         ucp_sched_task_h recv_task;
         ucp_sched_task_h *deps;
 
-        // activate_offload(sender());
+        activate_offload(sender());
 
         ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
         ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
@@ -1024,7 +1042,7 @@ err:
         ucp_sched_task_h recv_task;
         ucp_sched_task_h *deps;
 
-        // activate_offload(sender());
+        activate_offload(sender());
 
         ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
         ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
@@ -1099,7 +1117,7 @@ err:
         ucp_sched_task_h recv2_task;
         ucp_sched_task_h *deps;
 
-        // activate_offload(sender());
+        activate_offload(sender());
 
         ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
         ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));
@@ -1187,7 +1205,7 @@ err:
         ucp_sched_task_h recv_task;
         ucp_sched_task_h *deps;
 
-        // activate_offload(sender());
+        activate_offload(sender());
 
         ASSERT_UCS_OK(make_sched(sender(), UCP_SCHED_MODE_EXPLICIT, &s_sched));
         ASSERT_UCS_OK(make_sched(receiver(), UCP_SCHED_MODE_EXPLICIT, &r_sched));

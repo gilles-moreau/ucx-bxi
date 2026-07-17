@@ -1,10 +1,13 @@
 #ifndef UCP_SCHED_H_
 #define UCP_SCHED_H_
 
+#include <ucp/api/ucp.h>
 #include <ucp/api/ucp_def.h>
 #include <uct/api/uct_def.h>
 
 #include <ucs/datastruct/list.h>
+#include <ucs/datastruct/queue.h>
+#include "ucs/datastruct/queue_types.h"
 
 #include <config.h>
 
@@ -34,9 +37,27 @@ typedef struct ucp_sched_task {
   uct_tag_t              tag;
   uct_gop_h              comph; /* Transport completion handle */
   ucs_list_link_t        elem;  /* Element in the schedule list */
+  ucs_queue_elem_t       qelem; /* Element in the ready queue */
+  uct_pending_req_t     *pend_req; /* Pending request to progress send operation */
   struct ucp_sched_task *deps[UCP_SCHED_MAX_DEPS];
+  struct ucp_sched_task *succs[UCP_SCHED_MAX_DEPS]; /* tasks depending on this one */
   size_t                 num_deps;
+  size_t                 num_succs; /* number of tasks depending on this one */
+  size_t                 rem_deps; /* number of not yet completed dependencies (remaining dependencies) */
 } ucp_sched_task_t;
+
+typedef unsigned (*ucp_sched_set_deps_func_t)(ucp_sched_h sched, ucp_request_t *req, ucp_sched_task_h task, ucp_deps_param_t *deps_param);
+typedef void (*ucp_sched_task_complete_func_t)(ucp_sched_h sched, ucp_sched_task_h task);
+typedef void (*ucp_sched_init_recv_task_func_t)(ucp_sched_h sched, ucp_request_t *req);
+typedef ucp_sched_task_h (*ucp_sched_init_send_task_func_t)(ucp_sched_h sched, ucp_request_t *req);
+
+
+typedef struct ucp_sched_ops {
+  ucp_sched_init_recv_task_func_t init_recv_task;
+  ucp_sched_init_send_task_func_t init_send_task;
+  ucp_sched_set_deps_func_t       set_deps;
+  ucp_sched_task_complete_func_t  complete_cb;
+} ucp_sched_ops_t ;
 
 typedef struct ucp_sched {
   ucp_sched_task_t tasks_mp[UCP_SCHED_MAX_SCHEDULE_SIZE];
@@ -46,13 +67,15 @@ typedef struct ucp_sched {
 #if ENABLE_MT
   int              fd; /* used for progress thread polling */
 #endif
+  int              cbq_id; /* id of the callback in the progress callbackq */
+  ucp_sched_ops_t  ops;
+  ucs_queue_head_t ready; 
   ucp_worker_h     worker;
 } ucp_sched_t;
 
-ucs_status_t ucp_sched_send(ucp_request_t *req);
-ucs_status_t ucp_sched_send_deps(ucp_request_t *req, ucp_sched_task_h * deps, size_t num_deps);
+ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, ucp_deps_param_t *deps_param);
 ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self);
-ucs_status_t ucp_sched_recv(ucp_request_t *req);
+ucs_status_t ucp_sched_recv(ucp_sched_h sched, ucp_request_t *req);
 
 ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sched_h *ctx_p);
 

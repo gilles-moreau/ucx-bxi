@@ -1,5 +1,11 @@
 #include "ucp_sched.h"
+#include "api/ucp.h"
 #include "api/ucp_def.h"
+#include "ucs/datastruct/callbackq.h"
+#include "ucs/datastruct/queue.h"
+#include "ucs/datastruct/queue_types.h"
+#include "ucs/sys/compiler_def.h"
+#include "ucs/type/status.h"
 
 #include <string.h>
 #include <ucp/core/ucp_ep.h>
@@ -15,31 +21,65 @@
 #include <ucs/async/eventfd.h>
 #include <ucs/async/async_fwd.h>
 
-unsigned ucp_sched_set_task_deps(ucp_sched_task_h task, ucp_sched_task_h *deps, size_t num_deps)
-{
-  unsigned offloaded = UCP_SCHED_TASK_OFFLOADED;
-  for (int i=0; i<num_deps; ++i) {
-    ucp_sched_task_h dep = deps[i];
-    if (dep != NULL) {
-      /* To reduce the number of dependencies to ckeck later on */
-      if (!(dep->flags & UCP_SCHED_TASK_COMPLETED)) {
-        /* Add task to the list of dependencies. */
-        task->deps[task->num_deps++] = dep;
-
-        /* Task may be offloaded only if all dependent tasks have been
-          * offloaded. */
-        offloaded &= dep->flags & UCP_SCHED_TASK_OFFLOADED;
+void ucp_sched_task_ready_succs(ucp_sched_h sched, ucp_sched_task_h task) {
+  ucp_sched_task_h succ;
+  if (task->flags & UCP_SCHED_TASK_COMPLETED) {
+    for (int i=0; i<task->num_succs; i++) {
+      succ = task->succs[i];
+      succ->rem_deps--;
+      if (succ->rem_deps == 0 && !(succ->flags & UCP_SCHED_TASK_OFFLOADED)) {
+        ucs_queue_push(&sched->ready, &succ->qelem);
       }
     }
   }
-  return offloaded;
+}
+
+unsigned ucp_sched_progress_cb(void *arg) {
+  ucs_status_t status;
+  unsigned count = 0;
+  ucp_sched_h sched = arg;
+  ucp_sched_task_h task;
+  ucs_queue_iter_t iter;
+  ucs_queue_for_each_safe(task, iter, &sched->ready, qelem) {
+    /* progress task */
+    status = task->pend_req->func(task->pend_req);
+    if (status == UCS_OK) {
+      /* pending request completed so it should be removed from the queue */
+      ucs_queue_del_iter(&sched->ready, iter);
+      count++;
+    }
+  }
+  return count;
+}
+
+ucp_sched_task_h ucp_sched_task_init(ucp_sched_h sched) {
+  ucp_sched_task_t *task  = &sched->tasks_mp[sched->count++];
+  task->flags             = 0;
+  task->num_deps          = 0;
+  task->num_succs         = 0;
+  task->rem_deps          = 0;
+  return task;
+}
+
+void ucp_sched_recv_task_init(ucp_sched_h sched, ucp_request_t *req) {
+  /* Assign task from the schedule pool. */
+  req->task         = ucp_sched_task_init(sched);
+  req->task->flags  = UCP_SCHED_TASK_RECV;
+}
+
+void ucp_sched_recv_task_init_implicit(ucp_sched_h sched, ucp_request_t *req) {
+  /* Assign task from the schedule pool. */
+  ucp_sched_recv_task_init(sched, req);
+  req->task->buffer = req->recv.dt_iter.type.contig.buffer;
+  req->task->size   = req->recv.dt_iter.length;
+  /* Append receive task to schedule. */
+  ucs_list_add_head(&sched->schedule, &req->task->elem);
 }
 
 // Add a region to the sched
-UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
+UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (sched, req), ucp_sched_h sched, ucp_request_t *req)
 {
   ucs_status_t        status = UCS_OK;
-  ucp_sched_h         sched  = req->schedh;
   ucp_worker_iface_t *wiface;
 
   ucs_assert(sched != NULL);
@@ -52,13 +92,7 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_recv, (req), ucp_request_t *req)
     return UCS_ERR_NO_MEMORY;
   }
   /* Assign task from the schedule pool. */
-  req->task         = &sched->tasks_mp[sched->count++];
-  req->task->buffer = req->recv.dt_iter.type.contig.buffer;
-  req->task->size   = req->recv.dt_iter.length;
-  req->task->flags  = UCP_SCHED_TASK_RECV;
-
-  /* Append receive task to schedule. */
-  ucs_list_add_head(&sched->schedule, &req->task->elem);
+  sched->ops.init_recv_task(sched, req);
 
   if ((sched->flags & UCP_SCHED_OFFLOAD_ENABLED) &&
       (req->flags & UCP_REQUEST_FLAG_OFFLOADED)) {
@@ -94,6 +128,24 @@ ucs_status_t ucp_sched_task_remove(ucp_sched_h sched, ucp_request_t *req)
   return UCS_OK;
 }
 
+// Remove a region from the sched
+ucs_status_t ucp_sched_remove_task(ucp_sched_h sched, ucp_sched_task_h task)
+{
+  if (task->flags & UCP_SCHED_TASK_COMPLETED) {
+    ucs_list_del(&(task->elem));
+  }
+  return UCS_OK;
+}
+
+// Task completion callback
+void ucp_sched_task_implicit_complete_cb(ucp_sched_h sched, ucp_sched_task_h task) {
+  // Remove region from the sched to optimize regions overlap search
+  // FIXME can it create an error on send tasks if elem is not added to a list?  
+  ucp_sched_remove_task(sched, task);
+  // Check for tasks ready to be progressed
+  ucp_sched_task_ready_succs(sched, task);
+}
+
 // Check if two memory regions overlap
 int ucp_sched_check_overlap(void *a_buf, size_t a_size, void *b_buf,
                             size_t b_size)
@@ -105,6 +157,81 @@ int ucp_sched_check_overlap(void *a_buf, size_t a_size, void *b_buf,
   return a_start < b_end && b_start < a_end;
 }
 
+unsigned ucp_sched_set_task_explicit_deps(ucp_sched_h schedh, ucp_request_t *req, ucp_sched_task_h task, ucp_deps_param_t *deps_param)
+{
+  ucp_sched_task_h *deps;
+  size_t num_deps = 0;
+  unsigned offloaded = UCP_SCHED_TASK_OFFLOADED;
+
+  if (deps_param->num_deps > 0) {
+    num_deps = deps_param->num_deps;
+    deps = deps_param->deps;
+  }
+  for (int i=0; i<num_deps; ++i) {
+    ucp_sched_task_h dep = deps[i];
+    if (dep != NULL) {
+      /* To reduce the number of dependencies to ckeck later on */
+      if (!(dep->flags & UCP_SCHED_TASK_COMPLETED)) {
+        /* Add dep to the list of dependencies. */
+        task->deps[task->num_deps++] = dep;
+        task->rem_deps++;
+
+        /* Add task to the list of successors of dep */
+        dep->succs[dep->num_succs++] = task;
+
+        /* Task may be offloaded only if all dependent tasks have been
+          * offloaded. */
+        offloaded &= dep->flags & UCP_SCHED_TASK_OFFLOADED;
+      }
+    }
+  }
+  return offloaded;
+}
+
+unsigned ucp_sched_set_task_implicit_deps(ucp_sched_h schedh, ucp_request_t *req, ucp_sched_task_h stask, ucp_deps_param_t *deps_param) {
+  unsigned offloaded = UCP_SCHED_TASK_OFFLOADED;
+  ucp_sched_task_t *task;
+  
+  /* Loop over tasks in the recv schedule to find dependencies. */
+  ucs_list_for_each (task, &schedh->schedule, elem) {
+    if (task->flags & UCP_SCHED_TASK_SEND) {
+      if ((task->ep == stask->ep) && (task->tag == stask->tag) &&
+          !(task->flags & UCP_SCHED_TASK_OFFLOADED)) {
+        stask->deps[stask->num_deps++] = task;
+        stask->rem_deps++;
+
+        /* Add stask to the list of successors of task */
+        task->succs[task->num_succs++] = stask;
+
+        //NOTE: task cannot be offloaded, otherwise we would have to manually
+        //      increment the counter to count for the non-offloaded dependency.
+        offloaded = 0;
+      }
+    } else { /* UCP_SCHED_TASK_RECV */
+      ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
+                    UCS_PTR_BYTE_OFFSET(task->buffer, task->size));
+      if (ucp_sched_check_overlap(stask->buffer, stask->size, task->buffer,
+                                  task->size) &&
+          !(task->flags & UCP_SCHED_TASK_COMPLETED)) {
+        /* Task has overlapping memory range with non-completed task, thus
+        * add it to the list of dependencies. */
+
+        /* Add task to the list of dependencies. */
+        stask->deps[stask->num_deps++] = task;
+        stask->rem_deps++;
+
+        /* Add stask to the list of successors of task */
+          task->succs[task->num_succs++] = stask;
+
+        /* Task may be offloaded only if all dependent tasks have been 
+        * offloaded. */
+        offloaded &= task->flags & UCP_SCHED_TASK_OFFLOADED;
+      }
+    }
+  }
+  return offloaded;
+}
+
 /**
  * @brief callback that progress worker while fd @a id is readable
  *
@@ -113,10 +240,12 @@ int ucp_sched_check_overlap(void *a_buf, size_t a_size, void *b_buf,
  * @param [in] arg    worker to progress
  */
 void ucp_sched_progress(int id, ucs_event_set_types_t events, void *arg) {
-  ucp_worker_h worker = (ucp_worker_h)arg;
+  ucp_sched_h sched = arg;
   // Several events can't be detected at a time
   while(ucs_async_eventfd_poll(id) == UCS_OK) {
-    ucp_worker_progress(worker);
+    UCP_WORKER_THREAD_CS_ENTER_CONDITIONAL(sched->worker);
+    ucp_sched_progress_cb(sched);
+    UCP_WORKER_THREAD_CS_EXIT_CONDITIONAL(sched->worker);
   }
 }
 
@@ -139,12 +268,17 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
     goto start_send;
   }
 
-  for (int i = 0; i < stask->num_deps; i++) {
-    if (!(stask->deps[i]->flags & UCP_SCHED_TASK_COMPLETED)) {
-      req->send.lane = lane; /* Save for pending_add */
-      /* Return no resource so request can be added to pending list. */
-      return UCS_ERR_NO_RESOURCE;
-    }
+  // for (int i = 0; i < stask->num_deps; i++) {
+  //   if (!(stask->deps[i]->flags & UCP_SCHED_TASK_COMPLETED)) {
+  //     req->send.lane = lane; /* Save for pending_add */
+  //     /* Return no resource so request can be added to pending list. */
+  //     return UCS_ERR_NO_RESOURCE;
+  //   }
+  // }
+  if (stask->rem_deps != 0) {
+    req->send.lane = lane; /* Save for pending_add */ /* FIXME is it still
+    * needed since pending_add will not be caled anymore */
+    return UCS_OK;
   }
 
 start_send:
@@ -180,17 +314,29 @@ ucp_sched_offload_send(ucp_sched_h sched, ucp_sched_task_t *stask)
   return uct_iface_tag_sched_send(wiface->iface, &stask->comph, gops, length);
 }
 
-UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send, (req), ucp_request_t *req)
-{
-  return ucp_sched_send_deps(req, NULL, 0);
+ucp_sched_task_h ucp_sched_send_task_init(ucp_sched_h sched, ucp_request_t *req) {
+  ucp_sched_task_t *stask = ucp_sched_task_init(sched);
+  stask->pend_req  = &req->send.uct; 
+  stask->flags    = UCP_SCHED_TASK_SEND;
+  stask->tag      = req->send.msg_proto.tag;
+  stask->ep       = req->send.ep;
+  return stask;
 }
 
-UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send_deps, (req, deps, num_deps),
-                  ucp_request_t *req, ucp_sched_task_h *deps, size_t num_deps)
+ucp_sched_task_h ucp_sched_send_task_init_implicit(ucp_sched_h sched, ucp_request_t *req) {
+  ucp_sched_task_t *stask = ucp_sched_send_task_init(sched, req);
+  stask->buffer    = req->send.state.dt_iter.type.contig.buffer;
+  stask->size      = req->send.state.dt_iter.length;
+  /* FIXME how to handle send->send dependencies in the implicit mode? 
+   * Should the list elem be added to the scheduler's schedule list? */
+  // ucs_list_add_head(&sched->schedule, &stask->elem);
+  return stask;
+}
+
+ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, ucp_deps_param_t *deps_param)
 {
   ucs_status_t      status = UCS_OK;
-  ucp_sched_h       sched  = req->schedh;
-  ucp_sched_task_t *task, *stask;
+  ucp_sched_task_t *stask;
   unsigned          offloaded = UCP_SCHED_TASK_OFFLOADED;
 
   ucs_assert(sched != NULL);
@@ -203,47 +349,9 @@ UCS_PROFILE_FUNC(ucs_status_t, ucp_sched_send_deps, (req, deps, num_deps),
   }
 
   /* Init task from the scheduler. */
-  stask           = &sched->tasks_mp[sched->count++];
-  stask->buffer   = req->send.state.dt_iter.type.contig.buffer;
-  stask->size     = req->send.state.dt_iter.length;
-  stask->flags    = UCP_SCHED_TASK_SEND;
-  stask->tag      = req->send.msg_proto.tag;
-  stask->ep       = req->send.ep;
-  stask->num_deps = 0;
+  stask            = sched->ops.init_send_task(sched, req);  
 
-  if (sched->flags & UCP_SCHED_MODE_IMPLICIT) {
-    /* Loop over tasks in the recv schedule to find dependencies. */
-    ucs_list_for_each (task, &sched->schedule, elem) {
-      if (task->flags & UCP_SCHED_TASK_SEND) {
-        if ((task->ep == stask->ep) && (task->tag == stask->tag) &&
-            !(task->flags & UCP_SCHED_TASK_OFFLOADED)) {
-          stask->deps[stask->num_deps++] = task;
-
-          //NOTE: task cannot be offloaded, otherwise we would have to manually
-          //      increment the counter to count for the non-offloaded dependency.
-          offloaded = 0;
-        }
-      } else { /* UCP_SCHED_TASK_RECV */
-        ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
-                      UCS_PTR_BYTE_OFFSET(task->buffer, task->size));
-      if (ucp_sched_check_overlap(stask->buffer, stask->size, task->buffer,
-                                  task->size) &&
-          !(task->flags & UCP_SCHED_TASK_COMPLETED)) {
-        /* Task has overlapping memory range with non-completed task, thus
-       * add it to the list of dependencies. */
-
-        /* Add task to the list of dependencies. */
-        stask->deps[stask->num_deps++] = task;
-
-        /* Task may be offloaded only if all dependent tasks have been 
-       * offloaded. */
-        offloaded &= task->flags & UCP_SCHED_TASK_OFFLOADED;
-      }
-    }
-  } else {
-    /* Add explicit dependencies to task */
-    offloaded &= ucp_sched_set_task_deps(stask, deps, num_deps);
-  }
+  offloaded &= sched->ops.set_deps(sched, req, stask, deps_param);
 
   if (stask->num_deps > 0) {
     if (offloaded & UCP_SCHED_TASK_OFFLOADED) {
@@ -304,10 +412,25 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sc
   sched->count  = 0;
   sched->worker = worker;
 
+  //FIXME set the right functions once they are created
   if (mode & UCP_SCHED_MODE_IMPLICIT) {
     sched->flags |= UCP_SCHED_IMPLICIT;
+    sched->ops.init_recv_task = ucp_sched_recv_task_init_implicit;
+    sched->ops.init_send_task = ucp_sched_send_task_init_implicit;
+    sched->ops.set_deps = ucp_sched_set_task_implicit_deps;
+    sched->ops.complete_cb = ucp_sched_task_implicit_complete_cb;
+  } else {
+    sched->ops.init_recv_task = ucp_sched_recv_task_init;
+    sched->ops.init_send_task = ucp_sched_send_task_init;
+    sched->ops.set_deps = ucp_sched_set_task_explicit_deps;
+    sched->ops.complete_cb = ucp_sched_task_ready_succs;
   }
+
   ucs_list_head_init(&sched->schedule);
+
+  ucs_queue_head_init(&sched->ready);
+
+  sched->cbq_id = ucs_callbackq_add_safe(&sched->worker->uct->progress_q, ucp_sched_progress_cb, sched);
 
   /* If offload interface has been activated, enable scheduling on it. */
   if (worker->tm.offload.iface != NULL) {
@@ -336,6 +459,8 @@ err_fd:
 
 void ucp_sched_fini(ucp_sched_h sched)
 {
+  ucs_callbackq_remove_safe(&sched->worker->uct->progress_q, sched->cbq_id);
+
   for (int i = 0; i < sched->count; i++) {
     if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_RELEASE_SCHED) {
       uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,

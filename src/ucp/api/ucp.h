@@ -723,7 +723,7 @@ typedef enum {
     UCP_OP_ATTR_FIELD_MEMH          = UCS_BIT(8),  /**< memory handle field */
     UCP_OP_ATTR_FIELD_SCHEDH        = UCS_BIT(9),  /**< schedule handle field */
     UCP_OP_ATTR_FIELD_EPH           = UCS_BIT(10), /**< endpoint handle field */
-    UCP_OP_ATTR_FIELD_DEPS          = UCS_BIT(11), /**< dependencies and their number fields */
+    UCP_OP_ATTR_FIELD_SCHED_DEPS    = UCS_BIT(11), /**< scheduled explicit dependecies field */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -1713,6 +1713,24 @@ struct ucp_tag_recv_info {
 
 
 /**
+ * @ingroup UCP_COMM
+ * @brief Dependencies parameters passed to @ref ucp_request_param_t,
+ *        @ref ucp_sched_send
+ */
+typedef struct {
+    /**
+     * Array of dependencies
+     */
+     ucp_sched_task_h  *deps;
+
+     /**
+      * Number of dependencies in @a deps
+      */
+    int                 num_deps;
+
+} ucp_deps_param_t;
+
+/**
  * @ingroup UCP_CONTEXT
  * @brief Operation parameters passed to @ref ucp_tag_send_nbx,
  *        @ref ucp_tag_send_sync_nbx, @ref ucp_tag_recv_nbx, @ref ucp_put_nbx,
@@ -1842,24 +1860,12 @@ typedef struct {
     ucp_sched_h schedh;
 
     /**
-     * Dependencies.
-     * If dependencies are provided, the scheduler will check these operations
-     * and get their necessary context to trigger the oeration upon subsequent
-     * events.
+     * Dependencies
+     * If the scheduler is provided, this field must be set to pass depdendencies.
+     * If the scheduler is in implicit mode, this field must be set even if there
+     * is no dependency to pass.
      */
-    ucp_sched_task_h *deps;
-
-    /**
-     * Number of dependencies.
-     */
-    size_t num_deps;
-
-    /**
-     * Task hanldler.
-     * In this task handler will stored be the task context so it can be given
-     * to another operation as dependency.
-     */
-    ucp_sched_task_h task;
+    ucp_deps_param_t *deps;
 
     /**
      * Endpoint handle.

@@ -61,6 +61,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
         const ucp_request_param_t *param, const char *debug_name)
 {
     ucp_request_queue_t *req_queue;
+    ucp_sched_h schedh;
     size_t hdr_len, recv_len;
     ucs_status_t status;
 
@@ -166,9 +167,10 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
     }
 
     if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
-        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        req->schedh = schedh;
 
-        status = ucp_sched_recv(req);
+        status = ucp_sched_recv(schedh, req);
         if (status != UCS_OK) {
             goto out_request_put;
         }

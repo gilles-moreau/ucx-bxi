@@ -7,6 +7,7 @@
 #ifndef UCP_PROTO_COMMON_INL_
 #define UCP_PROTO_COMMON_INL_
 
+#include "api/ucp.h"
 #include "proto_common.h"
 #include "proto_select.inl"
 
@@ -281,6 +282,12 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
 {
     ucp_worker_h worker = ep->worker;
     ucp_proto_select_param_t sel_param;
+    ucp_sched_h schedh;
+    ucp_deps_param_t *deps_param;
+    ucp_deps_param_t no_deps = {
+        .deps = NULL,
+        .num_deps = 0
+    };
     ucs_status_t status;
     size_t msg_length;
     uint8_t sg_count;
@@ -300,13 +307,14 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
                                 &req->send.state.dt_iter.mem_info, sg_count);
 
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        req->schedh = schedh;
 
-        if (param->op_attr_mask & UCP_OP_ATTR_FIELD_DEPS) {
-            status = ucp_sched_send_deps(req, param->deps, param->num_deps);
-        } else {
-            status = ucp_sched_send(req);
-        }
+        deps_param = UCP_REQUEST_PARAM_FIELD(param, SCHED_DEPS, deps, NULL);
+        if (ucs_unlikely(deps_param == NULL)) {
+            deps_param = &no_deps;
+        }  
+        status = ucp_sched_send(schedh, req, deps_param);
         if (status != UCS_OK) {
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);
