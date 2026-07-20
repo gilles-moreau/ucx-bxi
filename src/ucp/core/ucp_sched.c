@@ -27,8 +27,10 @@ void ucp_sched_task_ready_succs(ucp_sched_h sched, ucp_sched_task_h task) {
     for (int i=0; i<task->num_succs; i++) {
       succ = task->succs[i];
       succ->rem_deps--;
+      ucs_debug("UCP Scheduler %p: Remains %ld dependencies for task %p", sched, succ->rem_deps, succ);
       if (succ->rem_deps == 0 && !(succ->flags & UCP_SCHED_TASK_OFFLOADED)) {
         ucs_queue_push(&sched->ready, &succ->qelem);
+        ucs_debug("UCP Scheduler %p: Task %p ready", sched, succ);
       }
     }
   }
@@ -43,6 +45,7 @@ unsigned ucp_sched_progress_cb(void *arg) {
   ucs_queue_for_each_safe(task, iter, &sched->ready, qelem) {
     /* progress task */
     status = task->pend_req->func(task->pend_req);
+    ucs_debug("UCP Scheduler %p: Progressing task %p", sched, task);
     if (status == UCS_OK) {
       /* pending request completed so it should be removed from the queue */
       ucs_queue_del_iter(&sched->ready, iter);
@@ -58,6 +61,8 @@ ucp_sched_task_h ucp_sched_task_init(ucp_sched_h sched) {
   task->num_deps          = 0;
   task->num_succs         = 0;
   task->rem_deps          = 0;
+  task->pend_req          = NULL;
+  ucs_debug("UCP Scheduler %p: Created task %p", sched, task);
   return task;
 }
 
@@ -182,6 +187,8 @@ unsigned ucp_sched_set_task_explicit_deps(ucp_sched_h schedh, ucp_request_t *req
         /* Task may be offloaded only if all dependent tasks have been
           * offloaded. */
         offloaded &= dep->flags & UCP_SCHED_TASK_OFFLOADED;
+
+        ucs_debug("UCP Scheduler %p: Added dependency %p to task %p", schedh, dep, task);
       }
     }
   }
@@ -226,6 +233,7 @@ unsigned ucp_sched_set_task_implicit_deps(ucp_sched_h schedh, ucp_request_t *req
         /* Task may be offloaded only if all dependent tasks have been 
         * offloaded. */
         offloaded &= task->flags & UCP_SCHED_TASK_OFFLOADED;
+        ucs_debug("UCP Scheduler %p: Added dependency %p to task %p", schedh, task, stask);
       }
     }
   }
@@ -268,13 +276,6 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
     goto start_send;
   }
 
-  // for (int i = 0; i < stask->num_deps; i++) {
-  //   if (!(stask->deps[i]->flags & UCP_SCHED_TASK_COMPLETED)) {
-  //     req->send.lane = lane; /* Save for pending_add */
-  //     /* Return no resource so request can be added to pending list. */
-  //     return UCS_ERR_NO_RESOURCE;
-  //   }
-  // }
   if (stask->rem_deps != 0) {
     req->send.lane = lane; /* Save for pending_add */ /* FIXME is it still
     * needed since pending_add will not be caled anymore */
@@ -327,9 +328,7 @@ ucp_sched_task_h ucp_sched_send_task_init_implicit(ucp_sched_h sched, ucp_reques
   ucp_sched_task_t *stask = ucp_sched_send_task_init(sched, req);
   stask->buffer    = req->send.state.dt_iter.type.contig.buffer;
   stask->size      = req->send.state.dt_iter.length;
-  /* FIXME how to handle send->send dependencies in the implicit mode? 
-   * Should the list elem be added to the scheduler's schedule list? */
-  // ucs_list_add_head(&sched->schedule, &stask->elem);
+  ucs_list_add_head(&sched->schedule, &stask->elem);
   return stask;
 }
 
@@ -412,7 +411,6 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sc
   sched->count  = 0;
   sched->worker = worker;
 
-  //FIXME set the right functions once they are created
   if (mode & UCP_SCHED_MODE_IMPLICIT) {
     sched->flags |= UCP_SCHED_IMPLICIT;
     sched->ops.init_recv_task = ucp_sched_recv_task_init_implicit;

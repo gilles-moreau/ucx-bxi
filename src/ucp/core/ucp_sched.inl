@@ -12,6 +12,7 @@
     (_task)->flags |= UCP_SCHED_TASK_COMPLETED;                                \
     ucp_sched_signal_fd(_sched);                                               \
     (_sched)->ops.complete_cb(_sched, _task);                                  \
+    ucs_debug("UCP Scheduler %p: Task %p completed", (_sched), (_task));                    \
   }
 
 static UCS_F_ALWAYS_INLINE void ucp_sched_signal_fd(ucp_sched_t *sched) {
