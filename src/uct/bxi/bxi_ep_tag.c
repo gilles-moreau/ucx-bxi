@@ -405,7 +405,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
             ep->conn->id.conn_key);
 
-  ucs_assert(ptl_iov->iov_len <= UCT_BXI_TAG_LENGH_MAX);
+  ucs_assert(ptl_iov->iov_len <= UCT_BXI_TAG_LENGTH_MAX);
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, ptl_iov->iov_len, ep->conn);
   ep->conn->sn++;
 

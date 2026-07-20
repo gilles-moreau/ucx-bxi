@@ -622,6 +622,18 @@ uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
                                     num_tl_devices_p);
 }
 
+static int
+uct_bxi_iface_is_reachable_v2(const uct_iface_h                      tl_iface,
+                              const uct_iface_is_reachable_params_t *params)
+{
+  if (!uct_iface_is_reachable_params_valid(
+              params, UCT_IFACE_IS_REACHABLE_FIELD_DEVICE_ADDR)) {
+    return 0;
+  }
+
+  return 1;
+}
+
 static inline void
 uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
                           const uct_bxi_iface_config_t *config)
@@ -926,7 +938,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   le.start     = NULL;
   le.length    = PTL_SIZE_MAX;
   le.options   = PTL_LE_OP_PUT | PTL_LE_OP_GET | PTL_LE_EVENT_LINK_DISABLE |
-                 PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
+               PTL_LE_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
 
   /* RDMA operations are always matched on the same silent ME. */
   status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
@@ -1120,10 +1132,8 @@ static uct_bxi_iface_ops_t uct_bxi_iface_ops = {
                                 ucs_empty_function_return_unsupported,
                         .ep_connect_to_ep_v2 =
                                 ucs_empty_function_return_unsupported,
-                        .iface_is_reachable_v2 =
-                                *(uct_iface_is_reachable_v2_func_t)
-                                        ucs_empty_function_return_unsupported,
-                        .ep_is_connected = uct_bxi_ep_is_connected,
+                        .iface_is_reachable_v2 = uct_bxi_iface_is_reachable_v2,
+                        .ep_is_connected       = uct_bxi_ep_is_connected,
                 },
 };
 

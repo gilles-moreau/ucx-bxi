@@ -68,7 +68,8 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
     op->ep->fence_beat--;
     /* Loop over fenced operations on endpoint and complete them if possible. */
     ucs_list_for_each_safe (fop, tmp, &op->ep->send_ops, elem) {
-      if (fop->flags & UCT_BXI_IFACE_SEND_OP_FLAG_FENCE) {
+      if (fop->flags & (UCT_BXI_IFACE_SEND_OP_FLAG_FENCE |
+                        UCT_BXI_IFACE_SEND_OP_FLAG_FLUSH)) {
         continue;
       }
 

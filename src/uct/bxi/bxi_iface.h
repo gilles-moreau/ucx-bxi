@@ -44,10 +44,10 @@
 #define UCT_BXI_AM_ID_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_AM_ID_MASK)
 
 /* Portals Header data TAG setter and getter. */
-#define UCT_BXI_TAG_LENGTH_MASK UCS_MASK(26)
+#define UCT_BXI_TAG_LENGTH_MASK 0x7fffffful
 #define UCT_BXI_TAG_ID_MASK     0xful
 #define UCT_BXI_TAG_CNT_MASK    0xfffful
-#define UCT_BXI_TAG_LENGH_MAX   (2 << 26)
+#define UCT_BXI_TAG_LENGTH_MAX  (1 << 26)
 
 #define UCT_BXI_TAG_HDR_SET(_hdr, _tag_id, _length, _conn)                     \
   _hdr  = 0;                                                                   \

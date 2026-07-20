@@ -391,9 +391,9 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p)
 {
-  ucs_status_t       status     = UCS_OK;
-  static const char *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR,
-                                   UCT_BXI3_MD_NETDEV_DIR, "/sys/class/net"};
+  ucs_status_t            status     = UCS_OK;
+  static const char      *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR,
+                                        UCT_BXI3_MD_NETDEV_DIR, "/sys/class/net"};
   uct_md_resource_desc_t *resources;
   int                     i = 0;
   int                     is_up;
