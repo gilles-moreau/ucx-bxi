@@ -528,7 +528,6 @@ uct_bxi_iface_block_init_trigget(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
    * - Offloaded rendez-vous => with counters, counted by bytes to handle 
    *   eager send and rendez-vous recv (mpi standard). 
    *   Rendez-vous is offloaded only if size > eager_limit.
-   *   UCT_TAG_RECV_REPLY_EP must be set.
    * - Schedule => with counters, counted by event. UCT_TAG_SCHEDULE must 
    *   be set. Rendez-vous is offloaded iff UCT_TAG_RECV_RNDV. 
    *   UCT_TAG_RECV_REPLY_EP and UCT_TAG_SCHEDULE must be set as well.
@@ -542,7 +541,6 @@ uct_bxi_iface_block_init_trigget(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
     me->options   |= PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
 
     if (flags & UCT_TAG_RECV_RNDV) {
-      ucs_assert(flags & UCT_TAG_RECV_REPLY_EP);
       ucs_assert(ep != NULL);
       block->flags |= UCT_BXI_RECV_BLOCK_FLAG_RNDV |
                       UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED |

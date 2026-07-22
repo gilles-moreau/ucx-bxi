@@ -593,9 +593,7 @@ enum uct_tag_flags {
                                                  is not called. */
     UCT_TAG_CANCEL_MATCHED    = UCS_BIT(2), /**< Inform the transport that tag has been
                                                  matched in software. Needed for BXI. */
-    UCT_TAG_RECV_REPLY_EP     = UCS_BIT(3), /**< Whether tag receive is provided a reply 
-                                                 ep for rendezvous. Needed for BXI. */
-    UCT_TAG_RECV_RNDV         = UCS_BIT(4), /**< Whether receive is expecting a 
+    UCT_TAG_RECV_RNDV         = UCS_BIT(3), /**< Whether receive is expecting a 
                                                  rendezvous. Needed for BXI. */
 };
 

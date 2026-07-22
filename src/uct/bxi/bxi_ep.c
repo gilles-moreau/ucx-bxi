@@ -225,7 +225,7 @@ err:
 static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
                                                        uct_bxi_mem_t *mem)
 {
-  if (*(uct_mem_h *)mem == (void *)0xdeadbeef) {
+  if (mem == (void *)0xdeadbeef) {
     /* Local memory is host memory, no need to resolve it. */
     return local_addr;
   } else {

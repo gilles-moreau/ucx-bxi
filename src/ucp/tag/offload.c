@@ -285,9 +285,7 @@ ucp_tag_offload_set_recv_flags(ucp_worker_h worker, ucp_ep_h reply_ep,
     /* First, check if reply ep was provided. */
     if (reply_ep == NULL) {
         goto check_schedule;
-    } else {
-        flags |= UCT_TAG_RECV_REPLY_EP;
-    }
+    } 
 
     /* Second, lookup protocol to check for rendezvous. */
     ucp_proto_select_param_init(&select_param, UCP_OP_ID_TAG_SEND, 
