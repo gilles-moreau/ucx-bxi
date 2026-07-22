@@ -208,7 +208,7 @@ void test_ucp_ep_reconfig::entity::connect(const ucp_test_base::entity *other,
                                                &worker_addr->second,
                                                UCP_EP_INIT_CREATE_AM_LANE,
                                                "reconfigure test", addr_indices,
-                                               UCP_EP_CONN_KEY_NULL, &ucp_ep));
+                                               &ucp_ep));
 
     ucp_ep->conn_sn = 0;
     ASSERT_TRUE(ucp_ep_match_insert(worker(), ucp_ep, worker_addr->second.uuid,

@@ -308,8 +308,6 @@ public:
 
         receiver().connect(0, sender(), 0);
 
-        ASSERT_UCS_OK(uct_iface_tag_sched_enable(receiver().iface()));
-
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
 
@@ -340,8 +338,6 @@ public:
         uct_iface_tag_sched_release(receiver().iface(), gop);
 
         flush();
-
-        uct_iface_tag_sched_disable(receiver().iface());
     }
 
     void test_tag_wrong_tag(send_func sfunc)

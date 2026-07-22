@@ -235,7 +235,6 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
   /* If offload interface has been activated, enable scheduling on it. */
   if (worker->tm.offload.iface != NULL) {
     //FIXME: multiple interface are not supported
-    uct_iface_tag_sched_enable(worker->tm.offload.iface->iface);
     sched->flags |= UCP_SCHED_OFFLOAD_ENABLED;
   }
 
@@ -258,10 +257,6 @@ void ucp_sched_fini(ucp_sched_h sched)
       uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
                                   sched->tasks_mp[i].comph);
     }
-  }
-
-  if (sched->worker->tm.offload.iface != NULL) {
-    uct_iface_tag_sched_disable(sched->worker->tm.offload.iface->iface);
   }
 
   ucs_trace_req("schedule released %p", sched);

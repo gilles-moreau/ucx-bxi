@@ -548,18 +548,14 @@ UCS_TEST_P(test_ucp_tag_conn_key, multi_ep_rndv_2sided)
     const unsigned count = 10;
     const ucp_tag_t tag = 0x11;
     size_t length;
-    ucp_ep_attr_t attr;
     ucp_request_param_t param = {};
 
     ucs_assert(need_reply_ep());
 
     /* Initialize endpoint parameters to use the connection key. */
     ucp_ep_params_t send_ep_params = get_ep_params();
-    send_ep_params.field_mask |= UCP_EP_PARAM_FIELD_FLAGS;
-    send_ep_params.flags = UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY;
 
     ucp_ep_params_t recv_ep_params = get_ep_params();
-    recv_ep_params.field_mask |= UCP_EP_PARAM_FIELD_CONN_KEY;
 
     for (unsigned j = 0; j < 4; ++j) {
 
@@ -570,12 +566,7 @@ UCS_TEST_P(test_ucp_tag_conn_key, multi_ep_rndv_2sided)
             sender().connect(&receiver(), send_ep_params, ep_idx);
             check_offload_support(true);
 
-            /* Query connection key. */
-            attr.field_mask = UCP_EP_ATTR_FIELD_CONN_KEY;
-            ucp_ep_query(sender().ep(0, ep_idx), &attr);
-
             /* Connect receive side with connection key. */
-            recv_ep_params.conn_key = attr.conn_key;
             receiver().connect(&sender(), recv_ep_params, ep_idx);
 
             /* Force a first message to be sent to activate the tag interface. 

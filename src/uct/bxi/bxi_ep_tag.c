@@ -796,22 +796,6 @@ out:
   return status;
 }
 
-ucs_status_t uct_bxi_iface_tag_sched_enable(uct_iface_h tl_iface)
-{
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  iface->tm.sched_window = 1;
-
-  return UCS_OK;
-}
-
-void uct_bxi_iface_tag_sched_disable(uct_iface_h tl_iface)
-{
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-
-  iface->tm.sched_window = 0;
-}
-
 ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
                                           uct_tag_context_t *ctx,
                                           uct_gop_h         *gop_p)

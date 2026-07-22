@@ -111,10 +111,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                          unsigned    header_length,
                                          unsigned    flags);
 
-ucs_status_t uct_bxi_iface_tag_sched_enable(uct_iface_h tl_iface);
-
-void uct_bxi_iface_tag_sched_disable(uct_iface_h tl_iface);
-
 ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
                                           uct_tag_context_t *ctx,
                                           uct_gop_h         *gop_p);

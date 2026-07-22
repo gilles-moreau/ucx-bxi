@@ -103,7 +103,7 @@ typedef struct uct_iface_addr        uct_iface_addr_t;
 typedef struct uct_ep_addr           uct_ep_addr_t;
 typedef struct uct_ep_params         uct_ep_params_t;
 typedef struct uct_ep_connect_params uct_ep_connect_params_t;
-typedef uint32_t                     uct_ep_conn_key_t;
+typedef uint16_t                     uct_ep_conn_key_t;
 typedef struct uct_cm_attr           uct_cm_attr_t;
 typedef struct uct_cm                uct_cm_t;
 typedef uct_cm_t                     *uct_cm_h;

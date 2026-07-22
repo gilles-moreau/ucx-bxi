@@ -25,9 +25,6 @@
 
 #define UCP_MAX_IOV                16UL
 
-#define UCP_EP_CONN_KEY_NULL       ((ucp_ep_conn_key_t)-1)
-
-
 /* Endpoint flags type */
 #if ENABLE_DEBUG_DATA || UCS_ENABLE_ASSERT
 typedef uint32_t                   ucp_ep_flags_t;
@@ -565,7 +562,6 @@ typedef struct ucp_ep {
     uint8_t                       refcount;      /* Reference counter: 0 - it is
                                                     allowed to destroy EP */
     ucp_worker_cfg_index_t        cfg_index;     /* Configuration index */
-    ucp_ep_conn_key_t             conn_key;      /* Connection key */
     ucp_ep_match_conn_sn_t        conn_sn;       /* Sequence number for remote connection */
     ucp_lane_index_t              am_lane;       /* Cached value */
     ucp_ep_flags_t                flags;         /* Endpoint flags */
@@ -706,8 +702,7 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
                              const ucp_tl_bitmap_t *local_tl_bitmap,
                              const ucp_unpacked_address_t *remote_address,
                              unsigned ep_init_flags, const char *message,
-                             unsigned *addr_indices, ucp_ep_conn_key_t conn_key,
-			     ucp_ep_h *ep_p);
+                             unsigned *addr_indices, ucp_ep_h *ep_p);
 
 ucs_status_t ucp_ep_create_server_accept(ucp_worker_h worker,
                                          const ucp_conn_request_h conn_request,

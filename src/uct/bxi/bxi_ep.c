@@ -222,6 +222,18 @@ err:
   return op->length;
 }
 
+static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
+                                                       uct_bxi_mem_t *mem)
+{
+  if (*(uct_mem_h *)mem == (void *)0xdeadbeef) {
+    /* Local memory is host memory, no need to resolve it. */
+    return local_addr;
+  } else {
+    return UCS_PTR_BYTE_OFFSET(mem->bar_ptr,
+                               (uint64_t)local_addr - mem->info.va);
+  }
+}
+
 static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
                                                           uct_bxi_rkey_t *rkey)
 {
@@ -265,7 +277,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb               = ep->fence_beat;
   op->length              = length;
-  op->put.buffer          = (void *)buffer;
+  op->put.buffer          = (void *)buffer; //FIXME: resolve laddr?
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
@@ -352,7 +364,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb               = ep->fence_beat;
   op->length              = iov->length;
-  op->put.buffer          = iov->buffer;
+  op->put.buffer          = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
@@ -439,7 +451,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb               = ep->fence_beat;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY;
-  op->get.buffer          = iov->buffer;
+  op->put.buffer          = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
   op->length              = iov->length;
   op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
@@ -463,11 +475,12 @@ err:
 static ucs_status_t
 uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                               size_t size, ptl_datatype_t dt,
-                              uint64_t remote_addr, uct_rkey_t rkey)
+                              uint64_t remote_addr, uct_rkey_t uct_rkey)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -484,7 +497,7 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   op->atomic.dt          = dt;
   op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
   op->atomic.value       = value;
-  op->atomic.remote_addr = remote_addr;
+  op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
@@ -503,12 +516,13 @@ uct_bxi_ep_atomic_post_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
 static ucs_status_t
 uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
                                uint64_t *result, size_t size, ptl_datatype_t dt,
-                               uint64_t remote_addr, uct_rkey_t rkey,
+                               uint64_t remote_addr, uct_rkey_t uct_rkey,
                                uct_completion_t *comp)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -525,7 +539,7 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
   op->atomic.dt          = dt;
   op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
   op->atomic.value       = value;
-  op->atomic.remote_addr = remote_addr;
+  op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
   op->atomic.result      = result;
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
@@ -546,12 +560,13 @@ uct_bxi_ep_atomic_fetch_common(uct_ep_h tl_ep, unsigned opcode, uint64_t value,
 static ucs_status_t
 uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
                                size_t size, ptl_datatype_t dt,
-                               uint64_t remote_addr, uct_rkey_t rkey,
+                               uint64_t remote_addr, uct_rkey_t uct_rkey,
                                uint64_t *result, uct_completion_t *comp)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -566,7 +581,7 @@ uct_bxi_ep_atomic_cswap_common(uct_ep_h tl_ep, uint64_t compare, uint64_t swap,
   op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_CAS;
   op->length             = size;
   op->atomic.dt          = dt;
-  op->atomic.remote_addr = remote_addr;
+  op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
   op->atomic.result      = result;
   op->atomic.value       = swap;
   op->atomic.compare     = compare;

@@ -44,7 +44,7 @@
 #define UCT_BXI_AM_ID_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_AM_ID_MASK)
 
 /* Portals Header data TAG setter and getter. */
-#define UCT_BXI_TAG_LENGTH_MASK 0x7fffffful
+#define UCT_BXI_TAG_LENGTH_MASK 0x3fffffful
 #define UCT_BXI_TAG_ID_MASK     0xful
 #define UCT_BXI_TAG_CNT_MASK    0xfffful
 #define UCT_BXI_TAG_LENGTH_MAX  (1 << 26)
@@ -317,7 +317,6 @@ typedef struct uct_bxi_iface {
     ucs_mpool_t         recv_block_mp;   /* MP of exp block */
     uct_bxi_conn_ooo_t *unexp_ooo;       /* Cached unexp ooo, used for cancel */
     unsigned int        rndv_hdr_offset; /* Offset of rndv hdr in payload */
-    int                 sched_window;    /* Is scheduling window opened? */
   } tm;                                  /* Tag matching */
 
   struct {

@@ -3668,34 +3668,6 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
     return iface->ops.iface_tag_recv_cancel(iface, ctx, flags);
 }
 
-/**
- * @ingroup UCT_TAG
- * @brief Start a scheduling window on the interface.
- *
- * After this call, the interface will behave with scheduling properties.
- *
- * @param [in]    iface     Interface to post the tag on.
- *
- * @return UCS_OK -         The context is created to the transport.
- */
-UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
-{
-    return iface->ops.iface_tag_sched_enable(iface);
-}
-
-/**
- * @ingroup UCT_TAG
- * @brief End a scheduling window on the interface.
- *
- * @param [in]    iface     Interface to post the tag on.
- *
- * @return UCS_OK                  - The context is created to the transport.
- * @return UCS_ERR_NOT_IMPLEMENTED - Could not start scheduling window.
- */
-UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
-{
-    iface->ops.iface_tag_sched_disable(iface);
-}
 
 /**
  * @ingroup UCT_TAG
