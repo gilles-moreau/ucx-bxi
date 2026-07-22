@@ -304,9 +304,8 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
-  ssize_t                  size = 0;
-  uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -335,7 +334,7 @@ ssize_t uct_bxi_ep_put_bcopy(uct_ep_h tl_ep, uct_pack_callback_t pack_cb,
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
 
-  UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, size);
+  UCT_TL_EP_STAT_OP(&ep->super, PUT, BCOPY, op->length);
   uct_bxi_log_put(iface);
 
 err:
