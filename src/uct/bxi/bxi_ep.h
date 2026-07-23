@@ -27,6 +27,30 @@ typedef struct uct_bxi_ep {
   ucs_queue_head_t      pending_q;  /* Head of pending queue */
 } uct_bxi_ep_t;
 
+static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
+                                                       uct_bxi_mem_t *mem)
+{
+  if (mem == (void *)0xdeadbeef || mem == NULL) {
+    /* Local memory is host memory, no need to resolve it. */
+    return local_addr;
+  } else {
+    return UCS_PTR_BYTE_OFFSET(mem->bar_ptr,
+                               (uint64_t)local_addr - mem->info.va);
+  }
+}
+
+static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
+                                                          uct_bxi_rkey_t *rkey)
+{
+  if (rkey->bar_ptr == (void *)0xdeadbeef) {
+    /* Remote memory is host memory, no need to resolve it. */
+    return remote_addr;
+  } else {
+    return (uint64_t)UCS_PTR_BYTE_OFFSET(rkey->bar_ptr,
+                                         remote_addr - rkey->vaddr);
+  }
+}
+
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
 {
   ep->flags |= UCT_BXI_EP_FLUSH_REMOTE;

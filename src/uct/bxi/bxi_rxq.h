@@ -40,7 +40,6 @@ typedef struct uct_bxi_recv_block {
   ucs_list_link_t       c_elem;      /* Element in the cancel list */
   uct_tag_t             tag;         /* Needed in case block is cancelled */
   uct_tag_t             stag;        /* Send tag */
-  ucs_memory_type_t     mem_type;    /* Memory type of the buffer */
   ptl_list_t            list;        /* overflow or priority list */
   uct_bxi_block_handler handler;     /* Receive block handler on event */
   uct_tag_context_t    *ctx;         /* Tag context provided by upper layer */

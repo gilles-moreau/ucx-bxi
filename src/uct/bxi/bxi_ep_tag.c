@@ -138,7 +138,6 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   ssize_t          size  = 0;
-  uct_bxi_gop_t   *gop;
   uct_bxi_iface_send_op_t *op;
   ptl_hdr_data_t           hdr;
 
@@ -149,34 +148,21 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
    * the address of the local endpoint. But we need ptl hdr to add ordering 
    * metadata so we do not support it. */
   ucs_assert(imm == 0);
+  ucs_assert(!(flags & UCT_TAG_SCHEDULE));
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, size, ep->conn);
   ep->conn->sn++;
 
-  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
-    gop  = arg;
-    size = gop->super.size;
-
-    UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                                 uct_bxi_send_op_handler, 0);
-
-    status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(gop + 1),
-                                          size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                          ep->iface_addr.tag, tag, 0, op, hdr,
-                                          gop->cth, gop->ct_value));
-  } else {
-    /* Take a bcopy send descriptor from the memory pool. Descriptor has 
+  /* Take a bcopy send descriptor from the memory pool. Descriptor has 
      * an operation first, then a buffer of size seg_size. */
-    UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
-                                    pack_cb, arg, uct_bxi_send_op_handler,
-                                    &size);
-    if (size < 0) {
-      goto err;
-    }
-
-    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
-                                 PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, hdr));
+  UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
+                                  pack_cb, arg, uct_bxi_send_op_handler, &size);
+  if (size < 0) {
+    goto err;
   }
+
+  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
+                               PTL_ACK_REQ, ep->dev_addr.pid,
+                               ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status == UCS_ERR_NO_RESOURCE) {
     size = UCS_ERR_NO_RESOURCE;
@@ -200,37 +186,49 @@ err:
   return size;
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
-        uct_bxi_iface_t *iface, uct_bxi_ep_t *ep, uct_tag_t tag, uint64_t imm,
-        unsigned flags, const uct_iov_t *iov, size_t iovcnt,
-        uct_completion_t *comp, uct_bxi_iface_send_op_t **op_p)
+ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
+                                        uint64_t imm, const uct_iov_t *iov,
+                                        size_t iovcnt, unsigned flags,
+                                        uct_completion_t *comp)
 {
-  ucs_status_t             status;
-  ptl_iovec_t             *ptl_iov;
-  uct_bxi_gop_t           *gop = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
   ptl_hdr_data_t           hdr;
+
+  UCT_BXI_CHECK_EP(ep);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_get_zcopy");
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* Right now, imm is used by UCP only for sync protocol by setting imm to 
+   * the address of the local endpoint. But we need ptl hdr to add ordering 
+   * metadata so we do not support it. */
+  ucs_assert(imm == 0);
+  ucs_assert(iovcnt == 1);
 
   UCT_BXI_IFACE_GET_TX_OP_COMP_ERR(iface, &iface->tx.send_op_mp, op, ep, comp,
                                    uct_bxi_send_op_handler,
                                    status = UCS_ERR_NO_RESOURCE;
                                    goto err);
 
-  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
+  op->length     = uct_iov_get_length(iov);
+  op->tag.buffer = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
 
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, iov->length, ep->conn);
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
   ep->conn->sn++;
+
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mdh, (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
-            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
-            gop->cth, gop->ct_value));
+            iface->tx.mdh, (ptl_size_t)op->tag.buffer, op->length, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
+            gop->ct_value));
   } else {
-    status =
-            uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)ptl_iov->iov_base,
-                                ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                                ep->iface_addr.tag, tag, 0, op, hdr));
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->tag.buffer,
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, tag, 0, op, hdr));
   }
 
   if (status != UCS_OK) {
@@ -242,39 +240,6 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
-
-err:
-  return status;
-}
-
-//NOTE: zcopy can be useful for scatter/gather data but as it is considered as
-//      eager, its size is limited by the seg_size that can be used in receiver's
-//      bounce buffer.
-ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
-                                        uint64_t imm, const uct_iov_t *iov,
-                                        size_t iovcnt, unsigned flags,
-                                        uct_completion_t *comp)
-{
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_iface_send_op_t *op;
-
-  UCT_BXI_CHECK_EP(ep);
-  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
-                     "uct_bxi_ep_get_zcopy");
-  UCT_BXI_CHECK_IFACE_RES(iface, ep);
-
-  /* Right now, imm is used by UCP only for sync protocol by setting imm to 
-   * the address of the local endpoint. But we need ptl hdr to add ordering 
-   * metadata so we do not support it. */
-  ucs_assert(imm == 0);
-
-  status = uct_bxi_ep_tag_zcopy_op(iface, ep, tag, imm, flags, iov, iovcnt,
-                                   comp, &op);
-  if (status != UCS_INPROGRESS) {
-    goto err;
-  }
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -291,19 +256,11 @@ static UCS_F_ALWAYS_INLINE size_t uct_bxi_pack_rndv(
   uct_bxi_hdr_rndv_t       *hdr =
           UCS_PTR_BYTE_OFFSET(dest, iface->tm.rndv_hdr_offset);
 
-  /* Only copy data for host memory. For cuda memory, gdrcopy will be used 
-   * which will increase latency and also decrease potential for overlap. */
-  //TODO: For GPU compatibility and performance, we do not copy part of the
+  //NOTE: For GPU compatibility and performance, we do not copy part of the
   //      buffer anymore, see uct_bxi_iface_tag_recv_rndv_zcopy. This is a waste
   //      of bandwidth since we still have to send eager_size + 1 of data to
   //      trigger the remote get...
   //      Maybe think for copying the data from GPU to CPU with gdrcopy.
-
-  //if (memh == (void *)UCS_MEMORY_TYPE_HOST) {
-  //  /* First copy the payload up to buffer capacity minus size required for the
-  //   * rndv hdr and the user header. */
-  //  memcpy(dest, src, ucs_min(length, iface->tm.rndv_hdr_offset));
-  //}
 
   hdr->remote_addr   = (uint64_t)src;
   hdr->header_length = header_length;
@@ -325,7 +282,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           size_t iovcnt, unsigned flags, uct_completion_t *comp)
 {
   ucs_status_t     status;
-  ptl_iovec_t     *ptl_iov;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
@@ -340,18 +296,15 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           iov->length, iface->config.max_msg_size);
   UCT_BXI_CHECK_IFACE_RES_PTR(iface, ep);
 
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  //TODO: remove ptl_iovec but explicitly show buffer resolution in case
-  //      of GPU memory
-  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
-
   /* First, allocate a TAG block from the memory pool. Receive block is 
    * used to match the remote GET operation and is posted to the CTRL RXQ. 
-   * Reduce it off of the eager size that will be sent. */
+   * Reduce it off of the eager size that will be sent. 
+   * NOTE: Block address should be the resolved address because remote 
+   *       get will match on this address. */
   UCT_BXI_IFACE_GET_RX_RNDV_DESC(
-          iface, &iface->tm.recv_block_mp, block, mem_type, ptl_iov->iov_base,
-          ptl_iov->iov_len, iface->rx.ctrl.q->pti, ep->conn->id.conn_key,
+          iface, &iface->tm.recv_block_mp, block, mem_type,
+          uct_bxi_resolve_laddr(iov->buffer, iov->memh),
+          uct_iov_get_length(iov), iface->rx.ctrl.q->pti, ep->conn->id.conn_key,
           ep->conn->send, uct_bxi_iface_block_handle_rndv,
           status = UCS_ERR_NO_RESOURCE;
           goto err);
@@ -364,7 +317,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   me.uid               = PTL_UID_ANY;
   me.ct_handle         = PTL_CT_NONE;
   me.ignore_bits       = 0;
-  me.options = PTL_ME_OP_GET | PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
+  me.options           = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
                PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
 
   /* Then, post the memory entry to the CTRL RXQ. Target will execute 
@@ -377,11 +331,13 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
     goto err_release_block;
   }
 
-  /* Now, allocate a send descriptor and pack rendez-vous metadata. */
+  /* Now, allocate a send descriptor and pack rendez-vous metadata. 
+   * NOTE: source address should be the original address because target 
+   *       will use the remote key to resolve the address. */
   UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(
           iface, &iface->tx.send_desc_mp, op, ep, comp,
           uct_bxi_send_op_rndv_handler, uct_bxi_pack_rndv, iov->buffer,
-          ptl_iov->iov_len, iov->memh, header, header_length, &size,
+          block->size, iov->memh, header, header_length, &size,
           status = UCS_ERR_NO_RESOURCE;
           goto err_deactivate_block);
 
@@ -405,8 +361,8 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             uct_bxi_iface_md(iface)->pid.phys.pid, op, iface->rx.ctrl.q->pti,
             ep->conn->id.conn_key);
 
-  ucs_assert(ptl_iov->iov_len <= UCT_BXI_TAG_LENGTH_MAX);
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, ptl_iov->iov_len, ep->conn);
+  ucs_assert(block->size <= UCT_BXI_TAG_LENGTH_MAX);
+  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, block->size, ep->conn);
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
@@ -451,21 +407,25 @@ ucs_status_t uct_bxi_ep_tag_rndv_cancel(uct_ep_h tl_ep, void *tl_op)
 
   op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED;
 
-  // NOTE: Uncertain if PTL_EVENT_ACK from the rendezvous message has
-  //       been processed, so we can't return the operation to the pool.
-  //       User completion callback will not be called, see
-  //       uct_bxi_send_op_rndv_handler.
+  /*  Uncertain if PTL_EVENT_ACK from the rendezvous message has 
+   *  been processed, so we can't return the operation to the pool. 
+   *  User completion callback will not be called, see 
+   *  uct_bxi_send_op_rndv_handler. */
   uct_bxi_iface_completion_op(op);
 
   return UCS_OK;
 }
 
-static UCS_F_ALWAYS_INLINE size_t uct_bxi_pack_rndv_request(
-        uct_bxi_iface_t *iface, void *dest, void *src, size_t length,
-        ucs_memory_type_t mem_type, const void *header, unsigned header_length)
+typedef struct {
+  const void *hdr;
+  unsigned    hdr_len;
+} rndv_req_hdr_t;
+
+static size_t uct_bxi_pack_rndv_request(void *dest, void *arg)
 {
-  memcpy(dest, header, header_length);
-  return header_length;
+  rndv_req_hdr_t *hdr = (rndv_req_hdr_t *)arg;
+  memcpy(dest, hdr->hdr, hdr->hdr_len);
+  return hdr->hdr_len;
 }
 
 ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
@@ -478,6 +438,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_iface_send_op_t *op;
   ssize_t                  size;
   ptl_hdr_data_t           hdr;
+  rndv_req_hdr_t           rndv_hdr = {.hdr_len = header_length, .hdr = header};
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_LENGTH(header_length, 0, iface->config.seg_size,
@@ -491,11 +452,9 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   ucs_assert(!(flags & UCT_TAG_SCHEDULE));
 
   /* Allocate a send descriptor to pack rendez-vous metadata. */
-  UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(
-          iface, &iface->tx.send_desc_mp, op, ep, NULL, uct_bxi_send_op_handler,
-          uct_bxi_pack_rndv_request, NULL, 0, UCS_MEMORY_TYPE_UNKNOWN, header,
-          header_length, &size, status = UCS_ERR_NO_RESOURCE;
-          goto err);
+  UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
+                                  uct_bxi_pack_rndv_request, &rndv_hdr,
+                                  uct_bxi_send_op_handler, &size);
 
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_SW, 0, ep->conn);
   ep->conn->sn++;
@@ -578,42 +537,30 @@ uct_bxi_iface_block_init_trigget(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
   }
 }
 
-//TODO: better handler receive completion mecanisms. It's a mess right now.
-//TODO: improve logic. Support for both offloaded and non-offloaded rndv
-//      make the implementation complicated.
-UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
-                 (tl_iface, tag, tag_mask, iov, iovcnt, ctx),
-                 uct_iface_h tl_iface, uct_tag_t tag, uct_tag_t tag_mask,
-                 const uct_iov_t *iov, size_t iovcnt, uct_tag_context_t *ctx)
+ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
+                                          uct_tag_t        tag_mask,
+                                          const uct_iov_t *iov, size_t iovcnt,
+                                          uct_tag_context_t *ctx)
 {
-  ucs_status_t          status;
-  ptl_iovec_t          *ptl_iov;
-  uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_ep_t         *ep    = ucs_derived_of(ctx->reply_ep, uct_bxi_ep_t);
+  ucs_status_t     status;
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+  uct_bxi_ep_t    *ep    = ucs_derived_of(ctx->reply_ep, uct_bxi_ep_t);
+  void *resolved_laddr   = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
   uct_bxi_recv_block_t *block;
   ptl_me_t              me;
 
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
                      "uct_bxi_iface_tag_recv_zcopy");
 
-  //TODO: sometimes, implement support for PTL_IOVEC for MD.
-  ptl_iov = ucs_alloca(iovcnt * sizeof(ptl_iovec_t));
-  uct_bxi_fill_ptl_iovec(ptl_iov, iov, iovcnt);
-
   /* The same tag cannot be associated to the same buffer. */
-  //TODO: this is true for InfiniBand, but to be verified for Portals4.
-  status = uct_bxi_iface_tag_add_to_hash(iface, ptl_iov->iov_base);
+  status = uct_bxi_iface_tag_add_to_hash(iface, resolved_laddr);
   if (status != UCS_OK) {
     goto err;
   }
 
   /* First, allocate a TAG block from the memory pool. */
-  //NOTE: iov length may be 0 and thus we loose the buffer address when filling
-  //      the ptl_iov. Block buffer is thus set using iov->buffer instead of
-  //      ptl_iov.
-  UCT_BXI_IFACE_GET_RX_DESC(iface, &iface->tm.recv_block_mp, block,
-                            uct_bxi_get_memory_type(iov->memh), iov->buffer,
-                            ptl_iov->iov_base, ptl_iov->iov_len, tag, ctx,
+  UCT_BXI_IFACE_GET_RX_DESC(iface, &iface->tm.recv_block_mp, block, iov->buffer,
+                            resolved_laddr, uct_iov_get_length(iov), tag, ctx,
                             uct_bxi_iface_block_handle_tag_exp,
                             status = UCS_ERR_EXCEEDS_LIMIT;
                             goto err_remove_hash);

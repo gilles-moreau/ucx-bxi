@@ -155,6 +155,9 @@ typedef struct uct_bxi_iface_send_op {
       ptl_hdr_data_t hdr;
     } am;
     struct {
+      void *buffer;
+    } tag;
+    struct {
       void    *buffer;
       uint64_t resolved_raddr; /* Resolved remote address */
     } put;
@@ -454,48 +457,6 @@ uct_bxi_rndv_dec_recv_cnt(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn)
   conn->recv--;
 }
 
-static UCS_F_ALWAYS_INLINE size_t uct_bxi_fill_ptl_iovec(ptl_iovec_t *ptl_iov,
-                                                         const uct_iov_t *iov,
-                                                         size_t iovcnt)
-{
-  size_t iov_it, ptl_it = 0;
-#ifdef HAVE_GDR_COPY
-  size_t         bar_offset;
-  uct_bxi_mem_t *memh;
-
-  for (iov_it = 0; iov_it < iovcnt; ++iov_it) {
-    memh                     = (uct_bxi_mem_t *)iov[iov_it].memh;
-    ptl_iov[ptl_it].iov_len  = uct_iov_get_length(&iov[iov_it]);
-    ptl_iov[ptl_it].iov_base = NULL;
-    if (ptl_iov[ptl_it].iov_len > 0) {
-      if ((void *)memh == (void *)0xdeadbeef) {
-        ptl_iov[ptl_it].iov_base = (void *)(iov[iov_it].buffer);
-      } else {
-        bar_offset = (size_t)(iov[iov_it].buffer - memh->info.va);
-        ptl_iov[ptl_it].iov_base =
-                UCS_PTR_BYTE_OFFSET(memh->bar_ptr, bar_offset);
-      }
-    } else {
-      continue; /* to avoid zero length elements in iov */
-    }
-    ++ptl_it;
-  }
-#else
-  for (iov_it = 0; iov_it < iovcnt; ++iov_it) {
-    ptl_iov[ptl_it].iov_len  = uct_iov_get_length(&iov[iov_it]);
-    ptl_iov[ptl_it].iov_base = NULL;
-    if (ptl_iov[ptl_it].iov_len > 0) {
-      ptl_iov[ptl_it].iov_base = (void *)(iov[iov_it].buffer);
-    } else {
-      continue; /* to avoid zero length elements in iov */
-    }
-    ++ptl_it;
-  }
-#endif
-
-  return ptl_it;
-}
-
 static UCS_F_ALWAYS_INLINE int uct_bxi_iface_should_poll_tx(unsigned count)
 {
   return (count == 0);
@@ -703,19 +664,6 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   UCT_BXI_IFACE_INIT_TX_DESC(_desc, _ep, _handler)                             \
   (_desc)->user_comp = _user_comp;
 
-/* For host memory: size of block is reduced by the payload size that 
- * is sent during the first control message of the sender, see 
- * uct_bxi_iface_tag_init to check how rndv_hdr_offset is computed. 
- * For cuda memory: we dont pack data into the control message to avoid 
- * gdr_copy latency. */
-//TODO: We removed see TODO in uct_bxi_pack_rndv
-// if (_mem_type == UCS_MEMORY_TYPE_HOST) {
-//    (_desc)->start =
-//            UCS_PTR_BYTE_OFFSET(_start, (_iface)->tm.rndv_hdr_offset);
-//    (_desc)->size =
-//            ucs_max((ssize_t)(_size - (_iface)->tm.rndv_hdr_offset), 0);
-//  } else {
-
 #define UCT_BXI_IFACE_GET_RX_RNDV_DESC(_iface, _mp, _desc, _mem_type, _start,  \
                                        _size, _pti, _ckey, _cnt, _handler,     \
                                        _err_code)                              \
@@ -728,17 +676,15 @@ extern ucs_config_field_t uct_bxi_iface_config_table[];
   (_desc)->handler  = _handler;                                                \
   (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 
-#define UCT_BXI_IFACE_GET_RX_DESC(_iface, _mp, _desc, _mem_type, _orig,        \
-                                  _start, _size, _tag, _ctx, _handler,         \
-                                  _err_code)                                   \
+#define UCT_BXI_IFACE_GET_RX_DESC(_iface, _mp, _desc, _orig, _start, _size,    \
+                                  _tag, _ctx, _handler, _err_code)             \
   UCT_TL_IFACE_GET_TX_DESC(&(_iface)->super, _mp, _desc, _err_code);           \
-  (_desc)->start     = _start;                                                 \
-  (_desc)->orig      = _orig;                                                  \
-  (_desc)->size      = _size;                                                  \
-  (_desc)->tag       = _tag;                                                   \
-  (_desc)->ctx       = _ctx;                                                   \
-  (_desc)->handler   = _handler;                                               \
-  (_desc)->mem_type  = _mem_type;                                              \
-  (_desc)->flags    |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
+  (_desc)->start    = _start;                                                  \
+  (_desc)->orig     = _orig;                                                   \
+  (_desc)->size     = _size;                                                   \
+  (_desc)->tag      = _tag;                                                    \
+  (_desc)->ctx      = _ctx;                                                    \
+  (_desc)->handler  = _handler;                                                \
+  (_desc)->flags   |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE;
 
 #endif

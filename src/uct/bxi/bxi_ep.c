@@ -221,30 +221,6 @@ err:
   return op->length;
 }
 
-static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
-                                                       uct_bxi_mem_t *mem)
-{
-  if (mem == (void *)0xdeadbeef) {
-    /* Local memory is host memory, no need to resolve it. */
-    return local_addr;
-  } else {
-    return UCS_PTR_BYTE_OFFSET(mem->bar_ptr,
-                               (uint64_t)local_addr - mem->info.va);
-  }
-}
-
-static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
-                                                          uct_bxi_rkey_t *rkey)
-{
-  if (rkey->bar_ptr == (void *)0xdeadbeef) {
-    /* Remote memory is host memory, no need to resolve it. */
-    return remote_addr;
-  } else {
-    return (uint64_t)UCS_PTR_BYTE_OFFSET(rkey->bar_ptr,
-                                         remote_addr - rkey->vaddr);
-  }
-}
-
 //NOTE: zcopy can be useful for scatter/gather data but as it is considered as
 //      eager, its size is limited by the seg_size that can be used in receiver's
 //      bounce buffer.
