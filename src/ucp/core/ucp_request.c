@@ -211,9 +211,13 @@ ucp_sched_task_h ucp_request_get_task(void *request) {
      * since it is already completed */
     return NULL;
   } else {
-    /* Operation has been scheduled so we return the task to be added as dependency */
     req = (ucp_request_t *)((ucp_request_t *)request -1);
-    return req->task;
+    if (req->flags & UCP_REQUEST_FLAG_SCHEDULED) {
+        /* Operation has been scheduled so we return the task to be added as dependency */
+        return req->task;
+    }
+    /* Operation has not yet completed but is not scheduled */
+    return NULL;
   }
 }
 
