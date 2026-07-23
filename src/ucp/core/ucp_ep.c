@@ -716,6 +716,7 @@ ucs_status_t ucp_worker_mem_type_eps_create(ucp_worker_h worker)
                                               UCP_EP_INIT_FLAG_MEM_TYPE |
                                               UCP_EP_INIT_FLAG_INTERNAL,
                                               ep_name, addr_indices,
+                                              UCP_EP_MATCH_CONN_SN_MAX,
                                               &worker->mem_type_ep[mem_type]);
         if (status != UCS_OK) {
             UCS_ASYNC_UNBLOCK(&worker->async);
@@ -821,7 +822,9 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
                              const ucp_tl_bitmap_t *local_tl_bitmap,
                              const ucp_unpacked_address_t *remote_address,
                              unsigned ep_init_flags, const char *message,
-                             unsigned *addr_indices, ucp_ep_h *ep_p)
+                             unsigned *addr_indices, 
+                             ucp_ep_match_conn_sn_t conn_sn, 
+                             ucp_ep_h *ep_p)
 {
     ucp_tl_bitmap_t ep_tl_bitmap;
     ucs_status_t status;
@@ -833,6 +836,7 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
     if (status != UCS_OK) {
         goto err;
     }
+    ep->conn_sn = conn_sn;
 
     /* initialize transport endpoints */
     status = ucp_wireup_init_lanes(ep, ep_init_flags, local_tl_bitmap,
@@ -1092,7 +1096,7 @@ ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
     status = ucp_ep_create_to_worker_addr(worker, &ucp_tl_bitmap_max,
                                           &remote_address, ep_init_flags,
                                           "from api call", addr_indices, 
-					                                &ep);
+					                                conn_sn, &ep);
     if (status != UCS_OK) {
         goto out_free_address;
     }

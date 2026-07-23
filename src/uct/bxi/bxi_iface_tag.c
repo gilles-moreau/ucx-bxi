@@ -399,7 +399,6 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   zero_ctrl.ct_handle         = PTL_CT_NONE;
   zero_ctrl.match_bits        = 0;
   zero_ctrl.ignore_bits       = ~0;
-  zero_ctrl.min_free          = 0;
   zero_ctrl.match_id.phys.nid = PTL_NID_ANY;
   zero_ctrl.match_id.phys.pid = PTL_PID_ANY;
   zero_ctrl.uid               = PTL_UID_ANY;

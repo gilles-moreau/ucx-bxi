@@ -678,6 +678,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_iface_tag_recv_zcopy,
   return status;
 
 err_release_op:
+  uct_bxi_recv_block_cancel_triggered(block);
   uct_bxi_iface_release_op(block->op);
 err_release_block:
   uct_bxi_recv_block_release(block);

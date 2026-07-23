@@ -289,7 +289,7 @@ ucp_tag_offload_set_recv_flags(ucp_worker_h worker, ucp_ep_h reply_ep,
 
     /* Second, lookup protocol to check for rendezvous. */
     ucp_proto_select_param_init(&select_param, UCP_OP_ID_TAG_SEND, 
-                                req->recv.op_attr,0, req->recv.dt_iter.dt_class,
+                                req->recv.op_attr, 0, req->recv.dt_iter.dt_class,
                                 &req->recv.dt_iter.mem_info, 1);
 
     thresh_elem = ucp_proto_select_lookup(worker, &ucp_ep_config(reply_ep)->proto_select, 
