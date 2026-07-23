@@ -207,8 +207,6 @@ void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
-ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key);
-
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
 {

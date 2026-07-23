@@ -737,11 +737,6 @@ ucs_status_t uct_ep_create(const uct_ep_params_t *params, uct_ep_h *ep_p)
     return UCS_ERR_INVALID_PARAM;
 }
 
-ucs_status_t uct_ep_config_key(uct_ep_h ep, uct_ep_conn_key_t conn_key)
-{
-    return ep->iface->ops.ep_config_key(ep, conn_key);
-}
-
 ucs_status_t uct_ep_connect(uct_ep_h ep, const uct_ep_connect_params_t *params)
 {
     return ep->iface->ops.ep_connect(ep, params);

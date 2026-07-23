@@ -835,30 +835,3 @@ void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop)
 
   ucs_mpool_put(gop);
 }
-
-ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key)
-{
-  ucs_status_t      status = UCS_OK;
-  uct_bxi_ep_t     *ep     = ucs_derived_of(uct_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t  *iface  = ucs_derived_of(uct_ep->iface, uct_bxi_iface_t);
-  uct_bxi_conn_id_t id     = {0};
-
-  /* Should only be called in tag-matching datapath. */
-  ucs_assert(iface->tm.enabled);
-
-  /* Since counters must be local to each UCT endpoint, connection match 
-   * need to be based on the triplet: Portals PID, local Portals Table Index and 
-   * Connection Key. */
-  id.pid      = ep->dev_addr.pid;
-  id.pti      = iface->rx.ctrl.q->pti;
-  id.conn_key = conn_key & UCT_BXI_CONN_KEY_MASK;
-
-  /* Get base endpoint counter based on triplet. */
-  ep->conn = uct_bxi_conn_get(iface, &id);
-  if (ep->conn == NULL) {
-    status = uct_bxi_conn_create(iface, id, &ep->conn);
-  }
-
-err:
-  return status;
-}
