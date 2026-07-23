@@ -44,8 +44,8 @@ unsigned ucp_sched_progress_cb(void *arg) {
   ucs_queue_iter_t iter;
   ucs_queue_for_each_safe(task, iter, &sched->ready, qelem) {
     /* progress task */
-    status = task->pend_req->func(task->pend_req);
     ucs_debug("UCP Scheduler %p: Progressing task %p", sched, task);
+    status = task->pend_req->func(task->pend_req);
     if (status == UCS_OK) {
       /* pending request completed so it should be removed from the queue */
       ucs_queue_del_iter(&sched->ready, iter);
@@ -455,8 +455,61 @@ err_fd:
 #endif
 }
 
+
+void ucp_sched_internal_dump(ucp_sched_h sched, FILE *out) {
+  ucp_sched_task_h task;
+  char *com_op;
+  
+  // Print the header line and open the main graph
+  fprintf(out, "Digraph G{\n");
+
+  for (int i=0; i<sched->count; i++) {
+    task = &sched->tasks_mp[i];
+    if (task->pend_req == NULL) {
+      com_op = "recv";
+    } else {
+      com_op = "send";
+    }
+    // Print the task 
+    fprintf(out,
+            "%ld [label=\" %s\" shape=ellipse]\n",
+            UCS_PTR_BYTE_DIFF(sched->tasks_mp, task) / sizeof(ucp_sched_task_t),
+            com_op
+            );
+    
+    // Print the edges
+    for (int j=0; j<task->num_succs; j++) {
+      fprintf( out, "%ld -> %ld\n",
+					UCS_PTR_BYTE_DIFF(sched->tasks_mp, task) / sizeof(ucp_sched_task_t), 
+          UCS_PTR_BYTE_DIFF(sched->tasks_mp, task->succs[j]) / sizeof(ucp_sched_task_t));
+    }
+  }
+
+  // Close the main graph
+	fprintf(out, "}\n");
+}
+
+void ucp_sched_dump(ucp_sched_h sched) {
+  char * target_filename ;
+	FILE * out ;
+
+  target_filename = (char *)malloc(2048*sizeof(char));
+
+	snprintf(target_filename, 2048, "ucp_sched_%p.dot", sched);
+
+	out = fopen( target_filename, "w" ) ;
+
+	ucp_sched_internal_dump(sched, out);
+
+	fclose( out ) ;
+	free( target_filename ) ;
+}
+
+
 void ucp_sched_fini(ucp_sched_h sched)
 {
+  // ucp_sched_dump(sched);
+
   ucs_callbackq_remove_safe(&sched->worker->uct->progress_q, sched->cbq_id);
 
   for (int i = 0; i < sched->count; i++) {
