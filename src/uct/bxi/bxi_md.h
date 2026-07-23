@@ -38,36 +38,6 @@ typedef struct uct_bxi_rkey {
   void    *bar_ptr; /**< BAR address of GPU mapping */
 } uct_bxi_rkey_t;
 
-typedef struct uct_bxi_mem_desc_param {
-  unsigned        options;
-  unsigned        flags;
-  ptl_handle_eq_t eqh;
-  void           *start;
-  ptl_size_t      length;
-  ptl_handle_ct_t cth;
-} uct_bxi_mem_desc_param_t;
-
-typedef struct uct_bxi_mem_desc {
-  unsigned        flags;
-  ptl_handle_md_t mdh; /* Portals4 MD handle */
-} uct_bxi_mem_desc_t;
-
-typedef struct uct_bxi_mem_entry_param {
-  unsigned         options;
-  void            *start;
-  ptl_size_t       length;
-  ptl_match_bits_t match;
-  ptl_match_bits_t ign;
-} uct_bxi_mem_entry_param_t;
-
-typedef struct uct_bxi_mem_entry {
-#if HAVE_BXI3_R6LITE
-  ptl_handle_le_t leh;
-#else
-  ptl_handle_me_t meh;
-#endif
-} uct_bxi_mem_entry_t;
-
 typedef struct uct_bxi_md_config {
   uct_md_config_t super;
   size_t          max_events;
@@ -99,35 +69,10 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p);
 
-ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
-                                        uct_bxi_mem_desc_param_t *params,
-                                        uct_bxi_mem_desc_t      **mem_desc_p);
-void         uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc);
-
 ucs_status_t uct_bxi_mkey_pack(uct_md_h uct_md, uct_mem_h uct_memh,
                                void *address, size_t length,
                                const uct_md_mkey_pack_params_t *params,
                                void                            *buffer);
-
-static UCS_F_ALWAYS_INLINE uct_bxi_mem_desc_t *
-uct_bxi_md_mem_desc_create_inline(uct_bxi_md_t *md, ptl_handle_eq_t eqh,
-                                  ptl_handle_ct_t cth)
-{
-
-  uct_bxi_mem_desc_param_t mem_desc_param;
-  uct_bxi_mem_desc_t      *mem_desc = NULL;
-
-  mem_desc_param.eqh     = eqh;
-  mem_desc_param.start   = 0;
-  mem_desc_param.length  = PTL_SIZE_MAX;
-  mem_desc_param.options = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
-  mem_desc_param.flags   = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
-  mem_desc_param.cth     = cth;
-
-  uct_bxi_md_mem_desc_create(md, &mem_desc_param, &mem_desc);
-
-  return mem_desc;
-}
 
 /**
  * Memory domain constructor.

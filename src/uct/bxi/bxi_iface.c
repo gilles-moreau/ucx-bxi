@@ -1,4 +1,5 @@
 #include <portals4.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -786,9 +787,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   uct_bxi_md_t           *md;
   uct_bxi_iface_config_t *config =
           ucs_derived_of(uct_config, uct_bxi_iface_config_t);
-  uct_bxi_mem_desc_param_t mem_desc_param;
-  ucs_mpool_params_t       mp_params;
-  uct_bxi_rxq_param_t      rxq_param;
+  ucs_mpool_params_t  mp_params;
+  uct_bxi_rxq_param_t rxq_param;
+  ptl_md_t            ptl_md;
 #if HAVE_BXI3_R6LITE
   ptl_le_t le;
 #else
@@ -855,19 +856,17 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   /* Before setting TX operations, create the Memory Descriptor that
    * spans the whole virtual memory range. */
-  mem_desc_param = (uct_bxi_mem_desc_param_t){
-          .eqh    = self->tx.eqh,
-          .start  = NULL,
-          .cth    = PTL_CT_NONE,
-          .length = PTL_SIZE_MAX,
+  ptl_md.start  = NULL;
+  ptl_md.length = PTL_SIZE_MAX;
 #if HAVE_BXI3_R6LITE
-          .options = PTL_MD_EVENT_SEND_DISABLE,
+  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #else
-          .options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
+  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
 #endif
-          .flags = UCT_BXI_MEM_DESC_FLAG_ALLOCATE,
-  };
-  status = uct_bxi_md_mem_desc_create(md, &mem_desc_param, &self->tx.mem_desc);
+  ptl_md.eq_handle = self->tx.eqh;
+  ptl_md.ct_handle = PTL_CT_NONE;
+
+  status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &self->tx.mdh));
   if (status != UCS_OK) {
     goto err_clean_txevq;
   }
@@ -943,7 +942,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* RDMA operations are always matched on the same silent ME. */
   status = uct_bxi_wrap(PtlLEAppend(md->nih, self->rx.rma.pti, &le,
                                     PTL_PRIORITY_LIST, NULL,
-                                    &self->rx.rma.entry.leh));
+                                    &self->rx.rma.mh.le));
 #else
   me.ct_handle         = PTL_CT_NONE;
   me.match_bits        = 0;
@@ -960,7 +959,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* RDMA operations are always matched on the same silent ME. */
   status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,
                                     PTL_PRIORITY_LIST, NULL,
-                                    &self->rx.rma.entry.meh));
+                                    &self->rx.rma.mh.me));
 #endif
   if (status != UCS_OK) {
     goto err_clean_rmapti;
@@ -995,9 +994,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
 err_clean_rmame:
 #if HAVE_BXI3_R6LITE
-  PtlLEUnlink(self->rx.rma.entry.leh);
+  PtlLEUnlink(self->rx.rma.mh.le);
 #else
-  PtlMEUnlink(self->rx.rma.entry.meh);
+  PtlMEUnlink(self->rx.rma.mh.me);
 #endif
 err_clean_rmapti:
   PtlPTFree(md->nih, self->rx.rma.pti);
@@ -1010,7 +1009,7 @@ err_clean_txbuffer:
 err_clean_short_desc:
   ucs_free(self->tx.short_desc);
 err_clean_mem_desc:
-  uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
+  uct_bxi_wrap(PtlMDRelease(self->tx.mdh));
 err_clean_txevq:
   uct_bxi_wrap(PtlEQFree(self->tx.eqh));
 err_clean_tag:
@@ -1037,9 +1036,9 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
 
   /* Clean RDMA resources. */
 #if HAVE_BXI3_R6LITE
-  PtlLEUnlink(self->rx.rma.entry.leh);
+  PtlLEUnlink(self->rx.rma.mh.le);
 #else
-  PtlMEUnlink(self->rx.rma.entry.meh);
+  PtlMEUnlink(self->rx.rma.mh.me);
 #endif
   PtlPTFree(md->nih, self->rx.rma.pti);
 
@@ -1048,7 +1047,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   ucs_mpool_cleanup(&self->tx.pending_mp, 1);
   uct_bxi_iface_tx_ops_fini(self);
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
-  uct_bxi_md_mem_desc_fini(self->tx.mem_desc);
+  uct_bxi_wrap(PtlMDRelease(self->tx.mdh));
   PtlEQFree(self->tx.eqh);
 
   /* Clean RX resources */

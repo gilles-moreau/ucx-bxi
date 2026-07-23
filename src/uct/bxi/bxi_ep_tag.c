@@ -111,8 +111,8 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
 
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, length, ep->conn);
   ep->conn->sn++;
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)data,
-                               length, PTL_ACK_REQ, ep->dev_addr.pid,
+  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)data, length,
+                               PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {
@@ -159,10 +159,10 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
     UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                  uct_bxi_send_op_handler, 0);
 
-    status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mem_desc->mdh, (ptl_size_t)(gop + 1), size, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
-            gop->ct_value));
+    status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(gop + 1),
+                                          size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                          ep->iface_addr.tag, tag, 0, op, hdr,
+                                          gop->cth, gop->ct_value));
   } else {
     /* Take a bcopy send descriptor from the memory pool. Descriptor has 
      * an operation first, then a buffer of size seg_size. */
@@ -173,8 +173,8 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
       goto err;
     }
 
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
+                                 PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, hdr));
   }
 
@@ -223,14 +223,14 @@ static UCS_F_ALWAYS_INLINE ucs_status_t uct_bxi_ep_tag_zcopy_op(
   ep->conn->sn++;
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-            ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-            tag, 0, op, hdr, gop->cth, gop->ct_value));
+            iface->tx.mdh, (ptl_size_t)ptl_iov->iov_base, ptl_iov->iov_len,
+            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr,
+            gop->cth, gop->ct_value));
   } else {
-    status = uct_bxi_wrap(
-            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)ptl_iov->iov_base,
-                   ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
-                   ep->iface_addr.tag, tag, 0, op, hdr));
+    status =
+            uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)ptl_iov->iov_base,
+                                ptl_iov->iov_len, PTL_ACK_REQ, ep->dev_addr.pid,
+                                ep->iface_addr.tag, tag, 0, op, hdr));
   }
 
   if (status != UCS_OK) {
@@ -413,14 +413,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
     ucs_assert(gop != NULL);
     ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(
-            PtlTriggeredPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1), size,
-                            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
-                            tag, 0, op, hdr, gop->cth, gop->ct_value));
+    status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(op + 1),
+                                          size, PTL_ACK_REQ, ep->dev_addr.pid,
+                                          ep->iface_addr.tag, tag, 0, op, hdr,
+                                          gop->cth, gop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                                 size, PTL_ACK_REQ, ep->dev_addr.pid,
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
+                                 PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.tag, tag, 0, op, hdr));
   }
   if (status != UCS_OK) {
@@ -499,8 +499,8 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
 
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_SW, 0, ep->conn);
   ep->conn->sn++;
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
-                               size, PTL_ACK_REQ, ep->dev_addr.pid,
+  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
+                               PTL_ACK_REQ, ep->dev_addr.pid,
                                ep->iface_addr.tag, tag, 0, op, hdr));
 
   if (status != UCS_OK) {

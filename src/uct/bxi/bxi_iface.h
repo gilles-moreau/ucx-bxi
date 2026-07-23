@@ -320,14 +320,14 @@ typedef struct uct_bxi_iface {
   } tm;                                  /* Tag matching */
 
   struct {
-    ptl_handle_eq_t     eqh;          /* Event Queue for OP completion. */
-    ucs_mpool_t         send_desc_mp; /* Memory pool of send descriptor */
-    ucs_mpool_t         send_op_mp;   /* Memory pool of send operations */
-    void               *short_desc;   /* Preallocated buffer for short am */
-    ucs_mpool_t         flush_ops_mp; /* Memory pool for flush OP */
-    uct_bxi_mem_desc_t *mem_desc;     /* Memory Descriptor for sending data */
-    ucs_mpool_t         pending_mp;   /* Memory pool of pending request */
-    uint64_t            available;    /* Current available send credits */
+    ptl_handle_eq_t eqh;          /* Event Queue for OP completion. */
+    ucs_mpool_t     send_desc_mp; /* Memory pool of send descriptor */
+    ucs_mpool_t     send_op_mp;   /* Memory pool of send operations */
+    void           *short_desc;   /* Preallocated buffer for short am */
+    ucs_mpool_t     flush_ops_mp; /* Memory pool for flush OP */
+    ptl_handle_md_t mdh;          /* Memory Descriptor for sending data */
+    ucs_mpool_t     pending_mp;   /* Memory pool of pending request */
+    uint64_t        available;    /* Current available send credits */
   } tx;
 
   struct {
@@ -343,8 +343,11 @@ typedef struct uct_bxi_iface {
       ptl_handle_me_t meh; /* Zero length get ME */
     } ctrl;                /* Control RXQ for internal protocols. */
     struct {
-      ptl_pt_index_t      pti;
-      uct_bxi_mem_entry_t entry;
+      ptl_pt_index_t pti;
+      union {
+        ptl_handle_le_t le;
+        ptl_handle_me_t me;
+      } mh; /* Memory handle */
     } rma;
   } rx;
   size_t                    num_eps;

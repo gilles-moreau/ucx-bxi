@@ -100,53 +100,52 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
 
   switch (op->flags & UCT_BXI_IFACE_SEND_OP_MASK) {
   case UCT_BXI_IFACE_SEND_OP_TYPE_AM:
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.am, 0, 0, op, op->am.hdr));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY:
-    status = uct_bxi_wrap(
-            PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)op->put.buffer,
-                   op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                   ep->iface_addr.rma, 0, op->put.resolved_raddr, op, 0));
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->put.buffer,
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.rma, 0, op->put.resolved_raddr,
+                                 op, 0));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY:
-    status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.rma, 0, op->put.resolved_raddr,
                                  op, 0));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY:
-    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh, (ptl_size_t)(op + 1),
+    status = uct_bxi_wrap(PtlGet(
+            iface->tx.mdh, (ptl_size_t)(op + 1), op->length, ep->dev_addr.pid,
+            ep->iface_addr.rma, 0, op->get.resolved_raddr, op));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY:
+    status = uct_bxi_wrap(PtlGet(iface->tx.mdh, (ptl_size_t)op->get.buffer,
                                  op->length, ep->dev_addr.pid,
                                  ep->iface_addr.rma, 0, op->get.resolved_raddr,
                                  op));
     break;
-  case UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY:
-    status = uct_bxi_wrap(PtlGet(iface->tx.mem_desc->mdh,
-                                 (ptl_size_t)op->get.buffer, op->length,
-                                 ep->dev_addr.pid, ep->iface_addr.rma, 0,
-                                 op->get.resolved_raddr, op));
-    break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC:
     status = uct_bxi_wrap(PtlAtomic(
-            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
-            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
-            op->atomic.remote_addr, op, 0, op->atomic.op_code, op->atomic.dt));
-    break;
-  case UCT_BXI_IFACE_SEND_OP_TYPE_FETCH:
-    status = uct_bxi_wrap(PtlFetchAtomic(
-            iface->tx.mem_desc->mdh, (uint64_t)op->atomic.result,
-            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
+            iface->tx.mdh, (uint64_t)&op->atomic.value, op->length, PTL_ACK_REQ,
             ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
             0, op->atomic.op_code, op->atomic.dt));
     break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_FETCH:
+    status = uct_bxi_wrap(PtlFetchAtomic(
+            iface->tx.mdh, (uint64_t)op->atomic.result, iface->tx.mdh,
+            (uint64_t)&op->atomic.value, op->length, ep->dev_addr.pid,
+            ep->iface_addr.rma, 0, op->atomic.remote_addr, op, 0,
+            op->atomic.op_code, op->atomic.dt));
+    break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_CAS:
-    status = uct_bxi_wrap(PtlSwap(
-            iface->tx.mem_desc->mdh, (uint64_t)op->atomic.result,
-            iface->tx.mem_desc->mdh, (uint64_t)&op->atomic.value, op->length,
-            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
-            0, &op->atomic.compare, PTL_CSWAP, op->atomic.dt));
+    status = uct_bxi_wrap(
+            PtlSwap(iface->tx.mdh, (uint64_t)op->atomic.result, iface->tx.mdh,
+                    (uint64_t)&op->atomic.value, op->length, ep->dev_addr.pid,
+                    ep->iface_addr.rma, 0, op->atomic.remote_addr, op, 0,
+                    &op->atomic.compare, PTL_CSWAP, op->atomic.dt));
     break;
   default:
     ucs_error("BXI: unsupported operation. flags=%lx",
@@ -786,7 +785,7 @@ static ucs_status_t uct_bxi_ep_check_send(uct_ep_h          tl_ep,
 
   /* Endpoint status is checked on the RMA PTE since we do not need 
    * to generate an event on the target. */
-  status = uct_bxi_wrap(PtlPut(iface->tx.mem_desc->mdh, 0, 0, PTL_ACK_REQ,
+  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, 0, 0, PTL_ACK_REQ,
                                ep->dev_addr.pid, ep->iface_addr.rma, 0, 0, op,
                                0));
   if (status != UCS_OK) {
