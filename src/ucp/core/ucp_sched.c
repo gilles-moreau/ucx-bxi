@@ -328,7 +328,6 @@ ucp_sched_task_h ucp_sched_send_task_init_implicit(ucp_sched_h sched, ucp_reques
   ucp_sched_task_t *stask = ucp_sched_send_task_init(sched, req);
   stask->buffer    = req->send.state.dt_iter.type.contig.buffer;
   stask->size      = req->send.state.dt_iter.length;
-  ucs_list_add_head(&sched->schedule, &stask->elem);
   return stask;
 }
 
