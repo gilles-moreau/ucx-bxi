@@ -27,12 +27,11 @@ typedef struct uct_bxi_recv_block_params {
 
 typedef struct uct_bxi_recv_block {
   unsigned              flags;
-  const void           *orig;      /* Original address, GPU address */
-  void                 *start;     /* Address of the receive block, may be 
+  const void           *orig;        /* Original address, GPU address */
+  void                 *start;       /* Address of the receive block, may be 
                                         GDR mapped address for GPU mem */
-  ssize_t               size;      /* Size of the receive block */
-  size_t                send_size; /* Actual size sent on the receive block */
-  size_t                capacity;
+  ssize_t               size;        /* Size of the receive block */
+  size_t                send_size;   /* Actual size sent on the receive block */
   size_t                eager_limit; /* Cached eager limit for easy access 
                                         in release */
   uct_bxi_rxq_t        *rxq;         /* Back reference to the RX Queue */

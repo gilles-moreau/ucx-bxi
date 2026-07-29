@@ -374,16 +374,6 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   attr->cap.tag.eager.max_short = iface->config.max_inline;
   attr->cap.tag.eager.max_bcopy = iface->config.seg_size;
-  //FIXME: UCP layer uses ucs_alloca to allocate the receive descriptor
-  //       which is limited in size (1200). This is only used in the sync
-  //       path. In order to increase this threshold, we need to support the
-  //       UCT_CB_PARAM_FLAG_DESC flags so that the descriptor may be
-  //       kept by UCP to save protocol information in it. Indeed, the ack needs
-  //       to be sent only when the match happened. One requirement
-  //       is to leave a headroom in the receive descriptors and support
-  //       UCS_INPROGRESS return call from invoke_am_callback. However, RXQ
-  //       option with MANAGE_LOCAL are not suitable has there are no way to
-  //       leave space for this headroom...
   attr->cap.tag.eager.max_zcopy = iface->config.seg_size;
   attr->cap.tag.eager.max_iov   = iface->config.max_iovecs;
   attr->cap.tag.rndv.max_hdr    = iface->config.tm.max_hdr;
@@ -393,7 +383,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.flags |=
           UCT_IFACE_FLAG_TAG_EAGER_SHORT | UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
           UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
-          UCT_IFACE_FLAG_TAG_OFFLOAD_OP | UCT_IFACE_FLAG_CONNECT_WITH_KEY;
+          UCT_IFACE_FLAG_TAG_OFFLOAD_OP;
 
   return UCS_OK;
 }
