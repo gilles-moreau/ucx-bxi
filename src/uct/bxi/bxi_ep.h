@@ -34,8 +34,13 @@ static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
     /* Local memory is host memory, no need to resolve it. */
     return local_addr;
   } else {
+#ifdef HAVE_GDR_COPY
     return UCS_PTR_BYTE_OFFSET(mem->bar_ptr,
                                (uint64_t)local_addr - mem->info.va);
+#else
+    ucs_warn("BXI: cannot have gpu address");
+    return NULL;
+#endif
   }
 }
 
