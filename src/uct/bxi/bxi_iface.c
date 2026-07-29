@@ -75,15 +75,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "RX_RMA_", 1, 128, 128m, 1.0, "recv_rma",
                 ucs_offsetof(uct_bxi_iface_config_t, rx.rma_mp), "\n"),
 
-        //TODO: difference between seg_size, aka rendezvous threshold, and the
-        //      threshold calculated by the protocol selection may result in
-        //      breaking send/receiver symmetry. The latter is required to correctly
-        //      execute triggered operations.
-        //      Example: seg size=8192 and protocol threshold=8184. If msg size=8192,
-        //      send will initiate rendezvous while receive think it will be eager.
-        //      As a consequence, it will not correctly set the counter threshold for
-        //      the triggered operation.
-        {"SEG_SIZE", "2048",
+        {"SEG_SIZE", "8192",
          "Size of bounce buffers used for post_send "
          "and post_recv. (default: 8192).",
          ucs_offsetof(uct_bxi_iface_config_t, seg_size),
@@ -125,14 +117,34 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
                                                   uct_bxi_recv_block_t *block,
                                                   uct_bxi_conn_ooo_t   *ooo)
 {
-  ucs_status_t status = UCS_OK;
-  uint8_t      am_id  = UCT_BXI_AM_ID_GET(ooo->hdr_data);
+  ucs_status_t status     = UCS_OK;
+  uint8_t      am_id      = UCT_BXI_AM_ID_GET(ooo->hdr_data);
+  uint8_t      am_handler = UCT_BXI_AM_HANDLER_GET(ooo->hdr_data);
+  uint8_t      hdr_size   = UCT_BXI_AM_HDR_SIZE_GET(ooo->hdr_data);
+  void        *data;
+  size_t       length;
 
-  status = uct_iface_invoke_am(&iface->super, am_id, ooo->start, ooo->mlength,
-                               0);
+  if (am_handler == UCT_BXI_AM_HANDLER_SHORT) {
+    status = UCS_ERR_NOT_IMPLEMENTED;
+    goto err;
+  } else if (am_handler == UCT_BXI_AM_HANDLER_BCOPY) {
+    data   = ooo->start;
+    length = ooo->mlength;
+  } else if (am_handler == UCT_BXI_AM_HANDLER_ZCOPY) {
+    ucs_assert(hdr_size <= sizeof(ptl_match_bits_t));
 
-  uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, ooo->start,
-                         ooo->mlength);
+    data = UCS_PTR_BYTE_OFFSET(ooo->start, -hdr_size);
+    memcpy(data, &ooo->match_bits, hdr_size);
+    length = ooo->mlength + hdr_size;
+  } else {
+    status = UCS_ERR_UNSUPPORTED;
+    goto err;
+  }
+
+  status = uct_iface_invoke_am(&iface->super, am_id, data, length, 0);
+
+  ucs_assert(status == UCS_OK);
+  uct_bxi_iface_trace_am(iface, UCT_AM_TRACE_TYPE_RECV, am_id, data, length);
 
 err:
   return status;
@@ -176,10 +188,17 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
           if (status != UCS_OK) {
             goto out;
           }
+        } else if (ucs_unlikely(ev.hdr_data & UCT_BXI_CONN_RESET_REMOTE_SN)) {
+          /* Origin requested connection reset meaning that origin endpoint 
+           * was restarted. */
+          status = uct_bxi_conn_reset(iface, conn);
+          if (status != UCS_OK) {
+            goto out;
+          }
         }
 
         /* Insert to connection frag list to handle out-of-order messages. 
-         * Handler is called if messages arrived in order. */
+         * Handler is called if message arrived in order. */
         sn     = UCT_BXI_CONN_SN_GET(ev.hdr_data);
         status = uct_bxi_conn_insert(iface, conn, block, &ev, block->handler,
                                      sn);
@@ -217,9 +236,6 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
         goto out;
         break;
       case PTL_EVENT_LINK:
-        block->flags |= UCT_BXI_RECV_BLOCK_FLAG_LINKED;
-        goto out;
-        break;
       case PTL_EVENT_GET_OVERFLOW:
       case PTL_EVENT_ACK:
       case PTL_EVENT_REPLY:
@@ -270,8 +286,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
 
   attr->cap.am.max_short = iface->config.max_inline;
   attr->cap.am.max_bcopy = iface->config.seg_size;
-  attr->cap.am.max_zcopy = 0;
+  attr->cap.am.max_zcopy = iface->config.seg_size;
   attr->cap.am.max_iov   = iface->config.max_iovecs;
+  attr->cap.am.max_hdr   = sizeof(ptl_match_bits_t);
 
   attr->cap.put.max_short       = iface->config.max_inline;
   attr->cap.put.max_bcopy       = iface->config.seg_size;
@@ -296,8 +313,11 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //FIXME: implementing AM_SHORT requires to have one pending queue per
   //       endpoint which implies some changes in the way resource are
   //       managed.
-  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY | UCT_IFACE_FLAG_PUT_BCOPY |
-                    UCT_IFACE_FLAG_GET_BCOPY |
+  attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY |
+#if !HAVE_BXI3_R6LITE
+                    UCT_IFACE_FLAG_AM_ZCOPY |
+#endif
+                    UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_GET_BCOPY |
 #if !HAVE_BXI3_R6LITE
                     UCT_IFACE_FLAG_PUT_SHORT |
 #endif
@@ -1030,7 +1050,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   /* Destroy connection map. Connections and sequence number can outlive 
    * endpoints, so to preserve ordering they must be kept until infterface 
    * destruction. */
-  kh_foreach_value (&self->conn_map, conn, { ucs_free(conn); })
+  kh_foreach_value (&self->conn_map, conn, { uct_bxi_conn_delete(conn); })
     ;
   kh_destroy_inplace(uct_bxi_conn_map, &self->conn_map);
 

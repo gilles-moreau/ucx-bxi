@@ -702,6 +702,9 @@ public:
     }
 
     void init() {
+        if (disable_proto() && has_transport("bxi")) {
+            UCS_TEST_SKIP_R("proto v1 not supported with bxi");
+        }
         stats_activate();
         test_ucp_tag::init();
     }

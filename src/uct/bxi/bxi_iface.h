@@ -20,28 +20,42 @@
 #define UCT_BXI_CONN_SN_MASK  0xfffful
 #define UCT_BXI_CONN_MASK     0xfffffffful
 
-#define UCT_BXI_CONN_HDR_SET(_hdr, _pti, _conn_key, _sn)                       \
+#define UCT_BXI_CONN_HDR_SET(_hdr, _pti, _conn_key, _sn, _flags)               \
+  _hdr  = (_hdr << 8);                                                         \
   _hdr |= ((_pti) & UCT_BXI_CONN_PTI_MASK);                                    \
   _hdr  = (_hdr << 8);                                                         \
   _hdr |= ((_conn_key) & UCT_BXI_CONN_KEY_MASK);                               \
   _hdr  = (_hdr << 16);                                                        \
-  _hdr |= ((_sn) & UCT_BXI_CONN_SN_MASK);
+  _hdr |= ((_sn) & UCT_BXI_CONN_SN_MASK);                                      \
+  _hdr |= (_flags);
 
 #define UCT_BXI_CONN_PTI_GET(_hdr) (((_hdr) >> 24) & UCT_BXI_CONN_PTI_MASK)
 #define UCT_BXI_CONN_KEY_GET(_hdr) (((_hdr) >> 16) & UCT_BXI_CONN_KEY_MASK)
 #define UCT_BXI_CONN_SN_GET(_hdr)  ((_hdr) & UCT_BXI_CONN_SN_MASK)
 
 /* Portals Header data AM setter and getter. */
-#define UCT_BXI_AM_ID_MASK 0xfful
+#define UCT_BXI_AM_HANDLER_MASK  0xful
+#define UCT_BXI_AM_HDR_SIZE_MASK 0xfful
+#define UCT_BXI_AM_ID_MASK       0xfful
 
-#define UCT_BXI_AM_HDR_SET(_hdr, _am_id, _conn)                                \
+#define UCT_BXI_AM_HDR_SET(_hdr, _am_handler, _hdr_size, _am_id, _conn)        \
   _hdr  = 0;                                                                   \
-  _hdr |= ((_am_id) & UCT_BXI_AM_ID_MASK);                                     \
+  _hdr |= ((_am_handler) & UCT_BXI_AM_HANDLER_MASK);                           \
   _hdr  = (_hdr << 8);                                                         \
+  _hdr |= ((_hdr_size) & UCT_BXI_AM_HDR_SIZE_MASK);                            \
+  _hdr  = (_hdr << 8);                                                         \
+  _hdr |= ((_am_id) & UCT_BXI_AM_ID_MASK);                                     \
   UCT_BXI_CONN_HDR_SET(_hdr, (_conn)->my_pti, (_conn)->id.conn_key,            \
-                       (_conn)->sn);
+                       (_conn)->sn, (_conn)->flags);
 
+#define UCT_BXI_AM_HANDLER_GET(_hdr) (((_hdr) >> 48) & UCT_BXI_AM_HANDLER_MASK)
+#define UCT_BXI_AM_HDR_SIZE_GET(_hdr)                                          \
+  (((_hdr) >> 40) & UCT_BXI_AM_HDR_SIZE_MASK)
 #define UCT_BXI_AM_ID_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_AM_ID_MASK)
+
+#define UCT_BXI_AM_HANDLER_SHORT 0
+#define UCT_BXI_AM_HANDLER_BCOPY 1
+#define UCT_BXI_AM_HANDLER_ZCOPY 2
 
 /* Portals Header data TAG setter and getter. */
 #define UCT_BXI_TAG_LENGTH_MASK 0x3fffffful
@@ -54,9 +68,8 @@
   _hdr |= ((_tag_id) & UCT_BXI_TAG_ID_MASK);                                   \
   _hdr  = (_hdr << 26);                                                        \
   _hdr |= ((_length) & UCT_BXI_TAG_LENGTH_MASK);                               \
-  _hdr  = (_hdr << 8);                                                         \
   UCT_BXI_CONN_HDR_SET(_hdr, (_conn)->my_pti, (_conn)->id.conn_key,            \
-                       (_conn)->sn);
+                       (_conn)->sn, (_conn)->flags);
 
 #define UCT_BXI_TAG_ID_GET(_hdr)     (((_hdr) >> 58) & UCT_BXI_TAG_ID_MASK)
 #define UCT_BXI_TAG_LENGTH_GET(_hdr) (((_hdr) >> 32) & UCT_BXI_TAG_LENGTH_MASK)
@@ -87,14 +100,15 @@ enum {
 
   // Operation type
   UCT_BXI_IFACE_SEND_OP_TYPE_START     = UCS_BIT(10),
-  UCT_BXI_IFACE_SEND_OP_TYPE_AM        = UCT_BXI_IFACE_SEND_OP_TYPE_START,
-  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY = UCS_BIT(11),
-  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY = UCS_BIT(12),
-  UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY = UCS_BIT(13),
-  UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY = UCS_BIT(14),
-  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(15),
-  UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(16),
-  UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(17),
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY  = UCT_BXI_IFACE_SEND_OP_TYPE_START,
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM_ZCOPY  = UCS_BIT(11),
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY = UCS_BIT(12),
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY = UCS_BIT(13),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY = UCS_BIT(14),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY = UCS_BIT(15),
+  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(16),
+  UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(17),
+  UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(18),
 };
 
 #define UCT_BXI_IFACE_SEND_OP_MASK (~(UCS_MASK(10)))
@@ -151,8 +165,9 @@ typedef struct uct_bxi_iface_send_op {
 
   union {
     struct {
-      uint8_t        am_id;
-      ptl_hdr_data_t hdr;
+      ptl_match_bits_t tag;
+      ptl_hdr_data_t   hdr;
+      void            *buffer;
     } am;
     struct {
       void *buffer;

@@ -2,7 +2,6 @@
 #include "bxi_iface.h"
 #include "bxi_log.h"
 #include "bxi_rxq.h"
-#include "ucs/memory/memory_type.h"
 
 #include <sys/types.h>
 #include <time.h>
@@ -19,19 +18,6 @@
           PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_OVER_DISABLE
 
 #define UCT_BXI_CT_INC (ptl_ct_event_t){.success = 1, .failure = 0}
-
-static UCS_F_ALWAYS_INLINE ucs_memory_type_t
-uct_bxi_get_memory_type(uct_mem_h mem)
-{
-#ifdef HAVE_GDR_COPY
-  return ((void *)mem == (void *)0xdeadbeef) || (mem == NULL) ?
-                 UCS_MEMORY_TYPE_HOST :
-                 UCS_MEMORY_TYPE_CUDA;
-#else
-  ucs_assert((void *)mem == (void *)0xdeadbeef);
-  return UCS_MEMORY_TYPE_HOST;
-#endif
-}
 
 /* Callback of receiver for rendezvous protocol. */
 static void uct_bxi_recv_rndv_tag_handler(uct_bxi_iface_send_op_t *op,
@@ -122,6 +108,7 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, SHORT, length);
   uct_bxi_log_put(iface);
@@ -174,6 +161,7 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, BCOPY, size);
   uct_bxi_log_put(iface);
@@ -240,6 +228,7 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
   UCT_TL_EP_STAT_OP(&ep->super, TAG, ZCOPY, uct_iov_total_length(iov, iovcnt));
   uct_bxi_log_put(iface);
@@ -386,6 +375,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
   /* Increment rndv send counter. */
   uct_bxi_rndv_inc_send_cnt(iface, ep->conn);
 
@@ -469,6 +459,7 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
 err:
   return status;
@@ -672,15 +663,6 @@ ucs_status_t uct_bxi_iface_tag_recv_cancel(uct_iface_h        tl_iface,
        * uct_bxi_recv_rndv_tag_handler. */
       block->send_size = UCT_BXI_TAG_LENGTH_GET(iface->tm.unexp_ooo->hdr_data);
       block->stag      = iface->tm.unexp_ooo->match_bits;
-
-      //TODO: GPU/CPU compatibility, see uct_bxi_pack_rndv
-      //if (block->mem_type == UCS_MEMORY_TYPE_HOST) {
-      //  /* Copy the first eager part that was sent on the first message of the
-      //   * protocol and which was received in the overflow block.
-      //   * Only copy for host memory. */
-      //  memcpy(block->start, iface->tm.unexp_ev->start,
-      //         iface->tm.rndv_hdr_offset);
-      //}
 
       if (!(block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED)) {
 

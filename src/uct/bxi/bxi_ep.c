@@ -99,10 +99,16 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
   };
 
   switch (op->flags & UCT_BXI_IFACE_SEND_OP_MASK) {
-  case UCT_BXI_IFACE_SEND_OP_TYPE_AM:
+  case UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY:
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
                                  ep->iface_addr.am, 0, 0, op, op->am.hdr));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_AM_ZCOPY:
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->am.buffer,
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.am, op->am.tag, 0, op,
+                                 op->am.hdr));
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY:
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->put.buffer,
@@ -192,10 +198,9 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   /* Initialize other operation field. */
-  op->am.am_id  = id;
-  op->flags    |= UCT_BXI_IFACE_SEND_OP_TYPE_AM;
-  op->ep_fb     = ep->fence_beat;
-  UCT_BXI_AM_HDR_SET(op->am.hdr, id, ep->conn);
+  op->flags |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY;
+  op->ep_fb  = ep->fence_beat;
+  UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_BCOPY, 0, id, ep->conn);
   ep->conn->sn++;
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
@@ -209,6 +214,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
   UCT_TL_EP_STAT_OP(&ep->super, AM, BCOPY, op->length);
   uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
@@ -229,7 +235,52 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                                  size_t iovcnt, unsigned flags,
                                  uct_completion_t *comp)
 {
-  return UCS_ERR_UNSUPPORTED;
+
+  ucs_status_t     status = UCS_OK;
+  uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_CHECK_AM_ID(id);
+  UCT_BXI_CHECK_EP(ep);
+  UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
+                     "uct_bxi_ep_am_zcopy");
+  UCT_CHECK_LENGTH(header_length, 0, sizeof(ptl_match_bits_t), "am hdr");
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* First, get OP while setting appropriate completion callback. Use length > 0 
+   * to avoid skipping. */
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, comp,
+                               uct_bxi_send_op_handler, 1);
+
+  op->flags     |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_ZCOPY;
+  op->ep_fb      = ep->fence_beat;
+  op->length     = uct_iov_get_length(iov);
+  op->am.buffer  = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
+  memcpy(&op->am.tag, header, header_length);
+  UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_ZCOPY, header_length, id,
+                     ep->conn);
+  ep->conn->sn++;
+
+  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut zcopy return %d", status);
+  } else {
+    /* For zcopy call, operation is always in progress. */
+    status = UCS_INPROGRESS;
+  }
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
+
+  UCT_TL_EP_STAT_OP(&ep->super, AM, ZCOPY, uct_iov_get_length(iov));
+  uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
+                         UCT_AM_TRACE_TYPE_SEND, id,
+                         (char *)op->am.buffer - header_length, op->length);
+
+  return status;
 }
 
 ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
@@ -264,6 +315,7 @@ ucs_status_t uct_bxi_ep_put_short(uct_ep_h tl_ep, const void *buffer,
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);
   uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
 
   UCT_TL_EP_STAT_OP(&ep->super, PUT, SHORT, length);
   uct_bxi_log_put(iface);
@@ -337,7 +389,7 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
 
   /* Compute remote address based on remote gdrcopy registration. */
   op->ep_fb               = ep->fence_beat;
-  op->length              = iov->length;
+  op->length              = uct_iov_get_length(iov);
   op->put.buffer          = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
@@ -426,7 +478,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   op->ep_fb               = ep->fence_beat;
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY;
   op->put.buffer          = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
-  op->length              = iov->length;
+  op->length              = uct_iov_get_length(iov);
   op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
@@ -899,6 +951,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
   if (status != UCS_OK) {
     goto err;
   }
+  uct_bxi_conn_reset_remote_sn(self->conn);
 
   /* Append endpoint to interface list. */
   ucs_list_add_head(&iface->eps, &self->elem);

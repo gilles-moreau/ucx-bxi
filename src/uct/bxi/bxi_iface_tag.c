@@ -84,9 +84,9 @@ static ucs_status_t uct_bxi_iface_block_handle_tag_unexp(
 
   if (iface->tm.unexp_ooo != NULL) {
     /* It means receive has not been posted. Otherwise, recv_cancel   
-     * would have been called and event set to NULL, and the 
+     * would have been called and ooo set to NULL, and the 
      * Portals4 unexpected header consumed. Its removal is needed 
-     * otherwise, the next posted receive will match in the overflow 
+     * otherwise, the next posted receive may match in the overflow 
      * list. */
     uct_bxi_iface_consume_unexp_hdr(iface, ooo->match_bits, ooo->initiator);
   }

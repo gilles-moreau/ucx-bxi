@@ -11,9 +11,8 @@ enum {
   UCT_BXI_RECV_BLOCK_FLAG_RNDV            = UCS_BIT(1),
   UCT_BXI_RECV_BLOCK_FLAG_RNDV_OFFLOADED  = UCS_BIT(2),
   UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED = UCS_BIT(3),
-  UCT_BXI_RECV_BLOCK_FLAG_LINKED          = UCS_BIT(4),
-  UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED     = UCS_BIT(5),
-  UCT_BXI_RECV_BLOCK_FLAG_PENDING_LINK    = UCS_BIT(6),
+  UCT_BXI_RECV_BLOCK_FLAG_INCREMENTED     = UCS_BIT(4),
+  UCT_BXI_RECV_BLOCK_FLAG_PENDING_LINK    = UCS_BIT(5),
 };
 
 typedef struct uct_bxi_recv_block_params {
@@ -50,6 +49,7 @@ typedef struct uct_bxi_recv_block {
   ptl_size_t            ct_value;    /* SW counter tracking HW counter */
   int                   pending_ooo; /* Number of pending ooo */
   uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
+  uint64_t                 pad;      /* Padding for zcopy */
 } uct_bxi_recv_block_t;
 
 enum {

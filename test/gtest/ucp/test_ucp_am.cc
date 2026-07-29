@@ -53,6 +53,10 @@ public:
         modify_config("MAX_EAGER_LANES", "2");
 
         ucp_test::init();
+
+        if (has_transport({"bxi"})) {
+            UCS_TEST_SKIP_R("bxi does not support am");
+        }
         sender().connect(&receiver(), get_ep_params());
         receiver().connect(&sender(), get_ep_params());
     }

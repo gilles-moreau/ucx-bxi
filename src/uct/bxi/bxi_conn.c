@@ -93,6 +93,13 @@ static ucs_mpool_ops_t uct_bxi_ooo_mpool_ops = {
         .obj_cleanup   = NULL,
         .obj_str       = NULL};
 
+ucs_status_t uct_bxi_conn_reset(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn)
+{
+  ucs_frag_list_cleanup(&conn->ooo_q);
+  return ucs_frag_list_init(0, &conn->ooo_q,
+                            -1 UCS_STATS_ARG(iface->super.stats));
+}
+
 ucs_status_t uct_bxi_conn_create(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id,
                                  uct_bxi_conn_t **conn_p)
 {
@@ -108,6 +115,7 @@ ucs_status_t uct_bxi_conn_create(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id,
     status = UCS_ERR_NO_MEMORY;
     goto err;
   }
+  conn->flags = 0;
 
   conn->id.pid      = id.pid;
   conn->id.pti      = id.pti;
@@ -129,7 +137,6 @@ ucs_status_t uct_bxi_conn_create(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id,
   }
 
   /* Initialize counters. */
-  conn->sn = conn->send = conn->recv = 1;
   conn->my_pti = iface->tm.enabled ? iface->rx.ctrl.q->pti : iface->rx.rma.pti;
 
   /* Initialize Out-of-Order list. */
@@ -164,7 +171,10 @@ ucs_status_t uct_bxi_conn_create(uct_bxi_iface_t *iface, uct_bxi_conn_id_t id,
             iface, id.pid.phys.nid, id.pid.phys.pid, id.pti, id.conn_key);
 
 out:
+  conn->sn = conn->send = conn->recv = 1;
+
   *conn_p = conn;
+
   return status;
 
 err_free_fraglist:
@@ -173,4 +183,11 @@ err_free_conn:
   ucs_free(conn);
 err:
   return status;
+}
+
+void uct_bxi_conn_delete(uct_bxi_conn_t *conn)
+{
+  ucs_frag_list_cleanup(&conn->ooo_q);
+  ucs_mpool_cleanup(&conn->ooo_mp, 0);
+  ucs_free(conn);
 }
