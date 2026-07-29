@@ -201,10 +201,6 @@ typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
 
 /* interface - scheduling operations */
 
-typedef ucs_status_t (*uct_iface_tag_sched_enable_func_t)(uct_iface_h iface);
-
-typedef void (*uct_iface_tag_sched_disable_func_t)(uct_iface_h iface);
-
 typedef ucs_status_t (*uct_iface_tag_sched_recv_func_t)(uct_iface_h        iface,
                                                         uct_tag_context_t *ctx,
                                                         uct_gop_h         *gop_p);
@@ -243,9 +239,6 @@ typedef ucs_status_t (*uct_ep_check_func_t)(uct_ep_h ep,
 
 typedef ucs_status_t (*uct_ep_create_func_t)(const uct_ep_params_t *params,
                                              uct_ep_h *ep_p);
-
-typedef ucs_status_t (*uct_ep_config_key_func_t)(uct_ep_h ep,
-                                                 uct_ep_conn_key_t conn_key);
 
 typedef ucs_status_t (*uct_ep_connect_func_t)(
         uct_ep_h ep, const uct_ep_connect_params_t *params);
@@ -360,8 +353,6 @@ typedef struct uct_iface_ops {
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
 
     /* interface - scheduling operations */
-    uct_iface_tag_sched_enable_func_t   iface_tag_sched_enable;
-    uct_iface_tag_sched_disable_func_t  iface_tag_sched_disable;
     uct_iface_tag_sched_recv_func_t     iface_tag_sched_recv;
     uct_iface_tag_sched_send_func_t     iface_tag_sched_send;
     uct_iface_tag_sched_release_func_t  iface_tag_sched_release;
@@ -377,7 +368,6 @@ typedef struct uct_iface_ops {
 
     /* endpoint - connection establishment */
     uct_ep_create_func_t                ep_create;
-    uct_ep_config_key_func_t            ep_config_key;
     uct_ep_connect_func_t               ep_connect;
     uct_ep_disconnect_func_t            ep_disconnect;
     uct_cm_ep_conn_notify_func_t        cm_ep_conn_notify;

@@ -308,8 +308,6 @@ public:
 
         receiver().connect(0, sender(), 0);
 
-        ASSERT_UCS_OK(uct_iface_tag_sched_enable(receiver().iface()));
-
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
 
@@ -340,8 +338,6 @@ public:
         uct_iface_tag_sched_release(receiver().iface(), gop);
 
         flush();
-
-        uct_iface_tag_sched_disable(receiver().iface());
     }
 
     void test_tag_wrong_tag(send_func sfunc)
@@ -537,14 +533,16 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_eager_short_expected,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_bcopy_expected,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_expected(static_cast<send_func>(&test_tag::tag_eager_bcopy),
                       sender().iface_attr().cap.tag.eager.max_bcopy);
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_zcopy_expected,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_expected(static_cast<send_func>(&test_tag::tag_eager_zcopy),
                       sender().iface_attr().cap.tag.eager.max_zcopy);
@@ -558,14 +556,16 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_rndv_zcopy_expected,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_bcopy_unexpected,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_unexpected(static_cast<send_func>(&test_tag::tag_eager_bcopy),
                         sender().iface_attr().cap.tag.eager.max_bcopy);
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_zcopy_unexpected,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_unexpected(static_cast<send_func>(&test_tag::tag_eager_zcopy),
                         sender().iface_attr().cap.tag.eager.max_bcopy);
@@ -578,31 +578,36 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_rndv_zcopy_unexpected,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_bcopy_wrong_tag,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_wrong_tag(static_cast<send_func>(&test_tag::tag_eager_bcopy));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_zcopy_wrong_tag,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_wrong_tag(static_cast<send_func>(&test_tag::tag_eager_zcopy));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_short_tag_mask,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_SHORT))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_SHORT | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_mask(static_cast<send_func>(&test_tag::tag_eager_short));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_bcopy_tag_mask,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_mask(static_cast<send_func>(&test_tag::tag_eager_bcopy));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_eager_zcopy_tag_mask,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_mask(static_cast<send_func>(&test_tag::tag_eager_zcopy));
 }
@@ -615,7 +620,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_rndv_zcopy_tag_mask,
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_hold_uct_desc,
                      !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
-                                 UCT_IFACE_FLAG_TAG_RNDV_ZCOPY))
+                                 UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     int n = 10;
     int msg_size = ucs_min(sender().iface_attr().cap.tag.eager.max_bcopy,
@@ -635,7 +641,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_hold_uct_desc,
 
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_send_no_tag,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     uct_iface_set_am_handler(receiver().iface(), 0, am_handler, NULL, 0);
     mapped_buffer lbuf(200, SEND_SEED, sender());
@@ -647,7 +654,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_send_no_tag,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_cancel_force,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     const size_t length = 128;
     mapped_buffer recvbuf(length, RECV_SEED, receiver());
@@ -693,7 +701,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_cancel_noforce,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_limit,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     const size_t length = 32;
     ucs::ptr_vector<recv_ctx> rctxs;
@@ -733,7 +742,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_limit,
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_post_same,
-                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY))
+                     !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     const size_t length = 128;
     mapped_buffer recvbuf(length, RECV_SEED, receiver());
@@ -773,7 +783,8 @@ UCS_TEST_SKIP_COND_P(test_tag, tag_post_same,
 
 UCS_TEST_SKIP_COND_P(test_tag, sw_rndv_expected,
                      !check_caps(UCT_IFACE_FLAG_TAG_EAGER_BCOPY |
-                                 UCT_IFACE_FLAG_TAG_RNDV_ZCOPY))
+                                 UCT_IFACE_FLAG_TAG_RNDV_ZCOPY | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_expected(static_cast<send_func>(&test_tag::tag_rndv_request),
                       sender().iface_attr().cap.tag.rndv.max_hdr, true);
@@ -820,14 +831,16 @@ UCS_TEST_SKIP_COND_P(test_tag, sw_rndv_unexpected,
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_sched_recv_expected,
                      !check_caps(UCT_IFACE_FLAG_TAG_EAGER_ZCOPY |
-                                 UCT_IFACE_FLAG_TAG_OFFLOAD_OP))
+                                 UCT_IFACE_FLAG_TAG_OFFLOAD_OP | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_sched_recv_expected(static_cast<send_func>(&test_tag::tag_eager_zcopy));
 }
 
 UCS_TEST_SKIP_COND_P(test_tag, tag_rndv_sched_recv_expected,
                      !check_caps(UCT_IFACE_FLAG_TAG_RNDV_ZCOPY |
-                                 UCT_IFACE_FLAG_TAG_OFFLOAD_OP))
+                                 UCT_IFACE_FLAG_TAG_OFFLOAD_OP | 
+                                 UCT_IFACE_FLAG_TAG_IMM_DATA))
 {
     test_tag_sched_recv_expected(static_cast<send_func>(&test_tag::tag_rndv_zcopy), 
                                  sender().iface_attr().cap.tag.rndv.max_zcopy);

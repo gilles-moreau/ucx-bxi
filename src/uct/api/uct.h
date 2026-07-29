@@ -435,7 +435,7 @@ typedef enum uct_atomic_op {
 #define UCT_IFACE_FLAG_TAG_EAGER_ZCOPY  UCS_BIT(52) /**< Hardware tag matching zcopy eager support */
 #define UCT_IFACE_FLAG_TAG_RNDV_ZCOPY   UCS_BIT(53) /**< Hardware tag matching rendezvous zcopy support */
 #define UCT_IFACE_FLAG_TAG_OFFLOAD_OP   UCS_BIT(54) /**< Hardware tag matching operation offload support */
-#define UCT_IFACE_FLAG_CONNECT_WITH_KEY UCS_BIT(55) /**< Supports connecting endpoint with key */
+#define UCT_IFACE_FLAG_TAG_IMM_DATA     UCS_BIT(55) /**< Hardware tag matching with immediate data */
 
         /* Interface capability */
 #define UCT_IFACE_FLAG_INTER_NODE      UCS_BIT(57) /**< Interface is inter-node capable */
@@ -591,10 +591,9 @@ enum uct_tag_flags {
                                                  to be successful, and the callback 
                                                  is not called. */
     UCT_TAG_CANCEL_MATCHED    = UCS_BIT(2), /**< Inform the transport that tag has been
-                                                 matched in software. For transports
-                                                 that support unexpected hw matching, 
-                                                 posted receive does not need to be 
-                                                 explicitly cancelled on the hw. */
+                                                 matched in software. Needed for BXI. */
+    UCT_TAG_RECV_RNDV         = UCS_BIT(3), /**< Whether receive is expecting a 
+                                                 rendezvous. Needed for BXI. */
 };
 
 
@@ -1455,6 +1454,12 @@ struct uct_ep_params {
      * @ref UCT_IFACE_FLAG_CONNECT_TO_SOCKADDR capability.
      */
     const ucs_sock_addr_t             *local_sockaddr;
+
+    /**
+     * Connection key identifying the endpoint.
+     * @note Only needed for BXI tag rendezvous protocol.
+     */ 
+    uct_ep_conn_key_t                  conn_key;
 };
 
 
@@ -1833,10 +1838,11 @@ struct uct_tag_context {
      void (*rndv_cb)(uct_tag_context_t *self, uct_tag_t stag, const void *header,
                      unsigned header_length, ucs_status_t status, unsigned flags);
 
-     /** 
-      * Reply endpoint to enable offloaded rendezvous (only needed for BXI).
-      */ 
+     /** Reply endpoint to enable offloaded rendezvous (only needed for BXI). */ 
      uct_ep_h reply_ep;
+
+     /** Flags from @ref uct_tag_flags. */
+     unsigned flags;
 
      /** A placeholder for the private data used by the transport. */
      char priv[UCT_TAG_PRIV_LEN];
@@ -3659,34 +3665,6 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
     return iface->ops.iface_tag_recv_cancel(iface, ctx, flags);
 }
 
-/**
- * @ingroup UCT_TAG
- * @brief Start a scheduling window on the interface.
- *
- * After this call, the interface will behave with scheduling properties.
- *
- * @param [in]    iface     Interface to post the tag on.
- *
- * @return UCS_OK -         The context is created to the transport.
- */
-UCT_INLINE_API ucs_status_t uct_iface_tag_sched_enable(uct_iface_h iface)
-{
-    return iface->ops.iface_tag_sched_enable(iface);
-}
-
-/**
- * @ingroup UCT_TAG
- * @brief End a scheduling window on the interface.
- *
- * @param [in]    iface     Interface to post the tag on.
- *
- * @return UCS_OK                  - The context is created to the transport.
- * @return UCS_ERR_NOT_IMPLEMENTED - Could not start scheduling window.
- */
-UCT_INLINE_API void uct_iface_tag_sched_disable(uct_iface_h iface)
-{
-    iface->ops.iface_tag_sched_disable(iface);
-}
 
 /**
  * @ingroup UCT_TAG

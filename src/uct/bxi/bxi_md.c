@@ -20,7 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UCT_BXI_MD_NETDEV_DIR "/sys/class/bxi"
+#define UCT_BXI_MD_NETDEV_DIR  "/sys/class/bxi"
+#define UCT_BXI3_MD_NETDEV_DIR "/sys/class/bxi3"
 
 ucs_config_field_t uct_bxi_md_config_table[] = {
         {"", "", NULL, ucs_offsetof(uct_bxi_md_config_t, super),
@@ -33,6 +34,26 @@ ucs_config_field_t uct_bxi_md_config_table[] = {
 
         {NULL}};
 
+#if HAVE_BXI3_R6LITE
+static const ptl_ni_limits_t default_limits = {
+        .max_entries            = INT_MAX,
+        .max_unexpected_headers = 0,
+        .max_mds                = INT_MAX,
+        .max_cts                = INT_MAX,
+        .max_eqs                = INT_MAX,
+        .max_pt_index           = INT_MAX,
+        .max_iovecs             = INT_MAX,
+        .max_list_size          = INT_MAX,
+        .max_triggered_ops      = 0,
+        .max_msg_size           = PTL_SIZE_MAX,
+        .max_atomic_size        = PTL_SIZE_MAX,
+        .max_fetch_atomic_size  = PTL_SIZE_MAX,
+        .max_waw_ordered_size   = PTL_SIZE_MAX,
+        .max_war_ordered_size   = PTL_SIZE_MAX,
+        .max_volatile_size      = PTL_SIZE_MAX,
+        .features               = PTL_BXI3_LE_EXTENSION,
+};
+#else
 static const ptl_ni_limits_t default_limits = {
         .max_entries            = INT_MAX,
         .max_unexpected_headers = INT_MAX,
@@ -51,72 +72,7 @@ static const ptl_ni_limits_t default_limits = {
         .max_volatile_size      = PTL_SIZE_MAX,
         .features               = 0,
 };
-
-//NOTE: Previous implementation tried to use a counter for OP completion.
-//      Unfortunately, there are no guarantees on the order of how the ACK
-//      events are received. In other words, even if op1 is executed before
-//      op2, it does not mean that first incrementation of the counter
-//      correspond to the ACK of op1. As a consequence, and because UCT API
-//      is request-based, we MUST use an Event Queue.
-//FIXME: Use a memory pool for the MD. Also, the allocate flag makes no sense,
-//       remove it sometimes.
-ucs_status_t uct_bxi_md_mem_desc_create(uct_bxi_md_t             *md,
-                                        uct_bxi_mem_desc_param_t *params,
-                                        uct_bxi_mem_desc_t      **mem_desc_p)
-{
-  ucs_status_t        status;
-  uct_bxi_mem_desc_t *mem_desc;
-  ptl_md_t            ptl_md;
-
-  //FIXME: recheck if these flags are actually used.
-  if (params->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATE) {
-    mem_desc = ucs_malloc(sizeof(uct_bxi_mem_desc_t), "mem_desc");
-    if (mem_desc == NULL) {
-      status = UCS_ERR_NO_MEMORY;
-      goto err;
-    }
-    mem_desc->flags = UCT_BXI_MEM_DESC_FLAG_ALLOCATE;
-  } else {
-    /* Memory has already been allocated during memory 
-     * pool initialization. */
-    mem_desc = *mem_desc_p;
-  }
-
-  ptl_md = (ptl_md_t){
-          .start     = params->start,
-          .length    = params->length,
-          .ct_handle = params->cth,
-          .eq_handle = params->eqh,
-          .options   = params->options,
-  };
-
-  status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &mem_desc->mdh));
-  if (status != UCS_OK) {
-    goto err_free_memdesc;
-  }
-
-  *mem_desc_p = mem_desc;
-
-  return status;
-
-err_free_memdesc:
-  /* Only free if it was manually allocated. */
-  if (mem_desc->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATED) {
-    ucs_free(mem_desc);
-  }
-err:
-  return status;
-}
-
-void uct_bxi_md_mem_desc_fini(uct_bxi_mem_desc_t *mem_desc)
-{
-
-  uct_bxi_wrap(PtlMDRelease(mem_desc->mdh));
-
-  if (mem_desc->flags & UCT_BXI_MEM_DESC_FLAG_ALLOCATED) {
-    ucs_free(mem_desc);
-  }
-}
+#endif
 
 ucs_status_t uct_bxi_mem_reg(uct_md_h uct_md, void *address, size_t length,
                              const uct_md_mem_reg_params_t *params,
@@ -355,22 +311,23 @@ ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
 // value.
 static inline ptl_interface_t uct_bxi_parse_device(const char *ptl_device)
 {
-  ptl_interface_t iface = 0;
+  int iface = 0;
   if (strstr(ptl_device, "bxi") == NULL) {
     // Device name from simulator, thus return 0
     iface = 0;
   } else {
     sscanf(ptl_device + 3, "%d", &iface);
   }
-  return iface;
+  return (ptl_interface_t)iface;
 }
 
 ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
                                         uct_md_resource_desc_t **resources_p,
                                         unsigned *num_resources_p)
 {
-  ucs_status_t       status     = UCS_OK;
-  static const char *bxi_dir[2] = {UCT_BXI_MD_NETDEV_DIR, "/sys/class/net"};
+  ucs_status_t            status     = UCS_OK;
+  static const char      *bxi_dir[3] = {UCT_BXI_MD_NETDEV_DIR,
+                                        UCT_BXI3_MD_NETDEV_DIR, "/sys/class/net"};
   uct_md_resource_desc_t *resources;
   int                     i = 0;
   int                     is_up;
@@ -429,7 +386,7 @@ ucs_status_t uct_bxi_query_md_resources(uct_component_t         *component,
 
   close_dir:
     closedir(dir);
-  } while (num_devices == 0 && ++i < 2);
+  } while (num_devices == 0 && ++i < 3);
 
   *resources_p     = resources;
   *num_resources_p = num_devices;
@@ -530,9 +487,15 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   uct_bxi_md_config_init(md, md_config);
 
   /* init one physical interface */
+#if HAVE_BXI3_R6LITE
+  status = uct_bxi_wrap(PtlNIInit(
+          uct_bxi_parse_device(md_name), PTL_NI_NO_MATCHING | PTL_NI_PHYSICAL,
+          PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));
+#else
   status = uct_bxi_wrap(PtlNIInit(
           uct_bxi_parse_device(md_name), PTL_NI_MATCHING | PTL_NI_PHYSICAL,
           PTL_PID_ANY, &default_limits, &md->config.limits, &md->nih));
+#endif
   if (status != UCS_OK) {
     goto err_free_md;
   }

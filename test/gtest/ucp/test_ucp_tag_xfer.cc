@@ -129,6 +129,12 @@ public:
         }
     }
 
+    void skip_sync() {
+        if (has_transport({"bxi"}) && is_offload_enabled()) {
+            UCS_TEST_SKIP_R("bxi offload does not support sync");
+        }
+    }
+
     void test_xfer_contig(size_t size, bool expected, bool sync, bool truncated);
     void test_xfer_generic(size_t size, bool expected, bool sync, bool truncated);
     void test_xfer_iov(size_t size, bool expected, bool sync, bool truncated);
@@ -200,6 +206,7 @@ void test_ucp_tag_xfer::test_xfer(xfer_func_t func, bool expected, bool sync,
 {
     if (sync) {
         skip_err_handling();
+        skip_sync();
     }
 
     ucs::detail::message_stream ms("INFO");

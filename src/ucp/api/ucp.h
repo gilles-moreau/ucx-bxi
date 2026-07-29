@@ -303,10 +303,6 @@ enum ucp_ep_params_flags_field {
                                                             can be obtained from
                                                             @ref ucp_conn_request_h using
                                                             @ref ucp_conn_request_query */
-    UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY = UCS_BIT(3)   /**< Create connection key which can 
-                                                            then be queried through 
-                                                            @ref ucp_ep_query and 
-                                                            @ref UCP_EP_ATTR_FIELD_CONN_KEY */
 };
 
 
@@ -4148,12 +4144,6 @@ typedef struct ucp_ep_attr {
      * this name.
      */
     char     name[UCP_ENTITY_NAME_MAX];
-
-    /**
-     * Endpoint connection key. May be sent out-of-band and used to create endpoint 
-     * to endpoint connection.
-     */
-    ucp_ep_conn_key_t       conn_key;
 
     /**
      * Local socket address for this endpoint. Valid only for endpoints created

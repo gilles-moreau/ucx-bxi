@@ -340,6 +340,7 @@ void ucp_proto_select_param_str(const ucp_proto_select_param_t *select_param,
     static const char *op_attr_names[]   = {
         [ucs_ilog2(UCP_OP_ATTR_FLAG_FAST_CMPL)]  = "fast-completion",
         [ucs_ilog2(UCP_OP_ATTR_FLAG_MULTI_SEND)] = "multi",
+        [ucs_ilog2(UCP_OP_ATTR_FLAG_OP_OFFLOAD)] = "offload",
     };
     static const char *rndv_flag_names[] = {
         [ucs_ilog2(UCP_PROTO_SELECT_OP_FLAG_PPLN_FRAG)] = "frag"

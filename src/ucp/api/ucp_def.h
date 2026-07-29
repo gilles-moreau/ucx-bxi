@@ -94,29 +94,6 @@ typedef struct ucp_ep                    *ucp_ep_h;
 
 /**
  * @ingroup UCP_ENDPOINT
- * @brief UCP Endpoint Connection Key
- *
- * The connection key may be specified within the attributes of 
- * @ref ucp_ep_params_t to that can be used along side @ref ucp_address_t to 
- * connect to a specific remote endpoint. Worklow is as follow: 
- * - One peer will genereate the key during UCP endpoint creation through 
- *   param @ref UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY.
- * - It may then be queried with @ref ucp_ep_query using and adequate field 
- *   from @ ucp_ep_attr_field.
- * - Using OOB, remote peer creates endpoint passing the key with 
- *   @ref ucp_ep_params_t.
- * - Underlying transport may then use the key to target this specific remote 
- *   endpoint.
- * @note: This mecanism is used to support rndv offload within BXI when multiple
- * endpoints are created with the same address. In this case, the key is used 
- * by the target to match initiator's ME during the rendez-vous, see
- * @ref uct_bxi_iface_tag_recv_zcopy. 
- */
-typedef uint32_t                         ucp_ep_conn_key_t;
-
-
-/**
- * @ingroup UCP_ENDPOINT
  * @brief UCP connection request
  *
  * A server-side handle to incoming connection request. Can be used to create an
@@ -728,13 +705,6 @@ typedef struct ucp_ep_params {
      * ucp_worker_get_address.
      */
     const ucp_address_t     *address;
-
-    /**
-     * Connection key: this field should be set along with its
-     * corresponding bit in the field_mask - @ref
-     * UCP_EP_PARAM_FIELD_CONN_KEY.
-     */
-    ucp_ep_conn_key_t       conn_key;
 
     /**
      * Desired error handling mode, optional parameter. Default value is

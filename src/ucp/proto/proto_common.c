@@ -64,6 +64,15 @@ ucp_proto_common_get_seg_size(const ucp_proto_common_init_params_t *params,
     return params->super.ep_config_key->lanes[lane].seg_size;
 }
 
+static size_t
+ucp_proto_common_get_hdr_size(const ucp_proto_init_params_t *params)
+{
+    ucp_worker_cfg_index_t ep_cfg_index = params->ep_cfg_index;
+    const ucp_ep_config_t *ep_config    = &ucs_array_elem(&params->worker->ep_config,
+                                                          ep_cfg_index);
+    return ep_config->am.max_hdr;
+}
+
 ucp_memory_info_t ucp_proto_common_select_param_mem_info(
                                    const ucp_proto_select_param_t *select_param)
 {
@@ -663,6 +672,14 @@ ucp_lane_index_t ucp_proto_common_find_lanes_with_min_frag(
     ucp_lane_index_t lane_index, lane, num_lanes, num_valid_lanes;
     const uct_iface_attr_t *iface_attr;
     size_t tl_min_frag, tl_max_frag;
+
+    if ((params->hdr_size > ucp_proto_common_get_hdr_size(&params->super)) && 
+        (params->send_op == UCT_EP_OP_AM_ZCOPY)) {
+        ucs_trace("protocol hdr size %lu exceeds endpoint max hdr %lu for zcopy", 
+                  params->hdr_size, 
+                  ucp_proto_common_get_hdr_size(&params->super));
+        return 0;
+    }
 
     num_lanes = ucp_proto_common_find_lanes(
                    &params->super, params->memtype_op, params->flags,

@@ -211,7 +211,6 @@ static ucp_ep_h ucp_ep_allocate(ucp_worker_h worker, const char *peer_name)
     ep->am_lane                           = UCP_NULL_LANE;
     ep->flags                             = 0;
     ep->conn_sn                           = UCP_EP_MATCH_CONN_SN_MAX;
-    ep->conn_key                          = UCP_EP_CONN_KEY_NULL;
 #if UCS_ENABLE_ASSERT
     ep->refcounts.create                  =
     ep->refcounts.flush                   =
@@ -717,6 +716,7 @@ ucs_status_t ucp_worker_mem_type_eps_create(ucp_worker_h worker)
                                               UCP_EP_INIT_FLAG_MEM_TYPE |
                                               UCP_EP_INIT_FLAG_INTERNAL,
                                               ep_name, addr_indices,
+                                              UCP_EP_MATCH_CONN_SN_MAX,
                                               &worker->mem_type_ep[mem_type]);
         if (status != UCS_OK) {
             UCS_ASYNC_UNBLOCK(&worker->async);
@@ -817,46 +817,14 @@ static ucs_status_t ucp_ep_init_create_wireup(ucp_ep_h ep,
     return UCS_OK;
 }
 
-ucs_status_t ucp_ep_config_conn_key(ucp_worker_h worker,
-                                    ucp_ep_h ep,
-                                    ucp_ep_conn_key_t conn_key)
-{
-    ucs_status_t       status;
-    ucp_rsc_index_t    rsc_index;
-    ucp_lane_index_t   lane;
-    ucp_worker_iface_t *wiface;
-    uct_ep_h           uct_ep;
-
-    UCS_STATIC_ASSERT(sizeof(ucp_ep_conn_key_t) == sizeof(uct_ep_conn_key_t));
-
-    ep->conn_key = conn_key;
-
-    for (lane = 0; lane < ucp_ep_num_lanes(ep); ++lane) {
-
-        rsc_index = ucp_ep_get_rsc_index(ep, lane);
-        wiface    = ucp_worker_iface(worker, rsc_index);
-        uct_ep    =  ucp_ep_get_lane(ep, lane);
-
-        ucs_assert(uct_ep != NULL);
-
-        if (wiface->attr.cap.flags & UCT_IFACE_FLAG_CONNECT_WITH_KEY) {
-            status = uct_ep_config_key(uct_ep, (uct_ep_conn_key_t)ep->conn_key);
-            if (status != UCS_OK) {
-                goto err;
-            }
-        }
-    }
-
-err:
-    return status;
-}
-
 ucs_status_t
 ucp_ep_create_to_worker_addr(ucp_worker_h worker,
                              const ucp_tl_bitmap_t *local_tl_bitmap,
                              const ucp_unpacked_address_t *remote_address,
                              unsigned ep_init_flags, const char *message,
-                             unsigned *addr_indices, ucp_ep_h *ep_p)
+                             unsigned *addr_indices, 
+                             ucp_ep_match_conn_sn_t conn_sn, 
+                             ucp_ep_h *ep_p)
 {
     ucp_tl_bitmap_t ep_tl_bitmap;
     ucs_status_t status;
@@ -868,6 +836,7 @@ ucp_ep_create_to_worker_addr(ucp_worker_h worker,
     if (status != UCS_OK) {
         goto err;
     }
+    ep->conn_sn = conn_sn;
 
     /* initialize transport endpoints */
     status = ucp_wireup_init_lanes(ep, ep_init_flags, local_tl_bitmap,
@@ -1070,20 +1039,6 @@ ucp_ep_create_api_conn_request(ucp_worker_h worker,
     return status;
 }
 
-static uct_ep_conn_key_t ucp_ep_get_conn_key(ucp_ep_match_conn_sn_t conn_sn,
-                                             const ucp_ep_params_t *params)
-{
-    unsigned flags = UCP_PARAM_VALUE(EP, params, flags, FLAGS, 0);
-
-    if (flags & UCP_EP_PARAMS_FLAGS_CREATE_CONN_KEY) {
-        return conn_sn;
-    } else if (params->field_mask & UCP_EP_PARAM_FIELD_CONN_KEY) {
-        return params->conn_key;
-    } else {
-        return UCP_EP_CONN_KEY_NULL;
-    }
-}
-
 static ucs_status_t
 ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
                                  const ucp_ep_params_t *params, ucp_ep_h *ep_p)
@@ -1093,7 +1048,6 @@ ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
     unsigned addr_indices[UCP_MAX_LANES];
     ucp_unpacked_address_t remote_address;
     ucp_ep_match_conn_sn_t conn_sn;
-    ucp_ep_conn_key_t      conn_key;
     ucs_status_t status;
     unsigned flags;
     ucp_ep_h ep;
@@ -1141,7 +1095,8 @@ ucp_ep_create_api_to_worker_addr(ucp_worker_h worker,
 
     status = ucp_ep_create_to_worker_addr(worker, &ucp_tl_bitmap_max,
                                           &remote_address, ep_init_flags,
-                                          "from api call", addr_indices, &ep);
+                                          "from api call", addr_indices, 
+					                                conn_sn, &ep);
     if (status != UCS_OK) {
         goto out_free_address;
     }
@@ -1199,9 +1154,6 @@ out_resolve_remote_id:
         }
     }
 
-    /* Configure connection key if provided. */
-    conn_key = ucp_ep_get_conn_key(conn_sn, params);
-    ucp_ep_config_conn_key(worker, ep, conn_key);
 out_free_address:
     ucs_free(remote_address.address_list);
 out:
@@ -3868,10 +3820,6 @@ ucs_status_t ucp_ep_query(ucp_ep_h ep, ucp_ep_attr_t *attr)
         if (status != UCS_OK) {
             return status;
         }
-    }
-
-    if (attr->field_mask & UCP_EP_ATTR_FIELD_CONN_KEY) {
-        attr->conn_key = ep->conn_key;
     }
 
     if (attr->field_mask & UCP_EP_ATTR_FIELD_USER_DATA) {

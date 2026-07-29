@@ -847,6 +847,9 @@ UCS_PROFILE_FUNC_VOID(ucp_proto_rndv_receive_start,
                                     &sg_count);
     }
 
+
+    /* Remove offload flag if set since request cannot be offload. */
+    recv_req->recv.op_attr &= ~UCP_OP_ATTR_FLAG_OP_OFFLOAD;
     status = ucp_proto_rndv_send_reply(worker, req, op_id,
                                        recv_req->recv.op_attr, rts->size,
                                        rkey_buffer, rkey_length, sg_count);

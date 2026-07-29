@@ -544,6 +544,10 @@ UCS_TEST_P(test_ucp_tag_match, sync_send_unexp) {
     ucp_tag_recv_info_t info;
     ucs_status_t        status;
 
+    if (has_transport({"bxi"})) {
+        UCS_TEST_SKIP_R("Sync not supported with bxi offload.");
+    }
+
     uint64_t send_data = 0x0102030405060708;
     uint64_t recv_data = 0;
 
