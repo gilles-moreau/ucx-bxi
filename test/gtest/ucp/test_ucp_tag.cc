@@ -190,6 +190,11 @@ void test_ucp_tag::check_offload_support(bool offload_required)
     }
 }
 
+bool test_ucp_tag::is_offload_enabled()
+{
+    return ucp_ep_config_key_has_tag_lane(&ucp_ep_config(sender().ep())->key);
+}
+
 int test_ucp_tag::get_worker_index(int buf_index)
 {
     int worker_index = 0;
@@ -697,6 +702,9 @@ public:
     }
 
     void init() {
+        if (disable_proto() && has_transport("bxi")) {
+            UCS_TEST_SKIP_R("proto v1 not supported with bxi");
+        }
         stats_activate();
         test_ucp_tag::init();
     }

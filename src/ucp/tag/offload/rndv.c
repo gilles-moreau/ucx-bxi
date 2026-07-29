@@ -30,8 +30,8 @@ ucp_tag_rndv_offload_proto_probe(const ucp_proto_init_params_t *init_params)
            .super.cfg_priority = 60,
            .super.min_length   = ucp_ep_tag_offload_min_rndv_thresh(
                   context, init_params->ep_config_key),
-           .super.max_length    = SIZE_MAX,
-           .super.min_iov       = 0,
+           .super.max_length = SIZE_MAX,
+           .super.min_iov    = 0,
            .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
            .super.max_frag_offs =
                   ucs_offsetof(uct_iface_attr_t, cap.tag.rndv.max_zcopy),
@@ -43,7 +43,8 @@ ucp_tag_rndv_offload_proto_probe(const ucp_proto_init_params_t *init_params)
            .super.flags      = UCP_PROTO_COMMON_INIT_FLAG_SEND_ZCOPY |
                          UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
                          UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD |
-                         UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
+                         UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG |
+                         UCP_PROTO_COMMON_INIT_FLAG_MIN_FRAG,
            .super.exclude_map  = 0,
            .super.reg_mem_info = ucp_proto_common_select_param_mem_info(
                   init_params->select_param),
@@ -106,8 +107,8 @@ ucp_tag_rndv_offload_send_func(ucp_request_t                 *req,
   unsigned flags = 0;
 
   if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
-      req->send.state.uct_comp.gop = req->task->comph;
-      flags = UCT_TAG_SCHEDULE;
+    req->send.state.uct_comp.gop = req->task->comph;
+    flags                        = UCT_TAG_SCHEDULE;
   }
 
   rndv_op = uct_ep_tag_rndv_zcopy(

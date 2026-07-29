@@ -12,7 +12,6 @@ enum {
   UCT_BXI_EP_CONN_CLOSED        = UCS_BIT(1),
   UCT_BXI_EP_KEEP_ALIVE_PENDING = UCS_BIT(2),
   UCT_BXI_EP_FLUSH_REMOTE       = UCS_BIT(3),
-  UCT_BXI_EP_CONFIG_CONN_KEY    = UCS_BIT(4),
 };
 
 typedef struct uct_bxi_ep {
@@ -22,10 +21,40 @@ typedef struct uct_bxi_ep {
   uct_bxi_iface_addr_t  iface_addr;
   ucs_list_link_t       elem;       /* Elem is the uct ep list */
   uint8_t               conn_state; /* Connection state. */
-  uct_bxi_rndv_cnt_t   *cnt;        /* Rndv counters. */
+  uct_bxi_conn_t       *conn;       /* Connection. */
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
+  uint16_t              fence_beat; /* Endpoint local fence beat */
   ucs_queue_head_t      pending_q;  /* Head of pending queue */
 } uct_bxi_ep_t;
+
+static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
+                                                       uct_bxi_mem_t *mem)
+{
+  if (mem == (void *)0xdeadbeef || mem == NULL) {
+    /* Local memory is host memory, no need to resolve it. */
+    return local_addr;
+  } else {
+#ifdef HAVE_GDR_COPY
+    return UCS_PTR_BYTE_OFFSET(mem->bar_ptr,
+                               (uint64_t)local_addr - mem->info.va);
+#else
+    ucs_warn("BXI: cannot have gpu address");
+    return NULL;
+#endif
+  }
+}
+
+static UCS_F_ALWAYS_INLINE uint64_t uct_bxi_resolve_raddr(uint64_t remote_addr,
+                                                          uct_bxi_rkey_t *rkey)
+{
+  if (rkey->bar_ptr == (void *)0xdeadbeef) {
+    /* Remote memory is host memory, no need to resolve it. */
+    return remote_addr;
+  } else {
+    return (uint64_t)UCS_PTR_BYTE_OFFSET(rkey->bar_ptr,
+                                         remote_addr - rkey->vaddr);
+  }
+}
 
 static UCS_F_ALWAYS_INLINE void uct_bxi_ep_enable_flush(uct_bxi_ep_t *ep)
 {
@@ -111,10 +140,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                          unsigned    header_length,
                                          unsigned    flags);
 
-ucs_status_t uct_bxi_iface_tag_sched_enable(uct_iface_h tl_iface);
-
-void uct_bxi_iface_tag_sched_disable(uct_iface_h tl_iface);
-
 ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
                                           uct_tag_context_t *ctx,
                                           uct_gop_h         *gop_p);
@@ -186,8 +211,6 @@ ucs_status_t uct_bxi_ep_pending_get_add(uct_bxi_ep_t *ep, uct_tag_t tag,
 void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
-
-ucs_status_t uct_bxi_ep_config_key(uct_ep_h uct_ep, uct_ep_conn_key_t conn_key);
 
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)
