@@ -44,6 +44,7 @@ typedef enum {
     UCS_PROFILE_TYPE_REQUEST_NEW,   /**< New asynchronous request */
     UCS_PROFILE_TYPE_REQUEST_EVENT, /**< Some progress is made on a request */
     UCS_PROFILE_TYPE_REQUEST_FREE,  /**< Asynchronous request released */
+    UCS_PROFILE_TYPE_MEMCPY,        /**< Memory copy */
     UCS_PROFILE_TYPE_LAST
 } ucs_profile_type_t;
 

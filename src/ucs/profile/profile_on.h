@@ -62,6 +62,12 @@ BEGIN_C_DECLS
                                   UCS_PROFILE_TYPE_REQUEST_FREE, "", 0, \
                                   (uintptr_t)(_req));
 
+
+#define UCS_PROFILE_MEMCPY(_buf, _size) \
+    UCS_PROFILE_CTX_RECORD_ALWAYS(ucs_profile_default_ctx, \
+                                  UCS_PROFILE_TYPE_MEMCPY, "", \
+                                  (uint32_t)(_size), (uintptr_t)(_buf));
+
 END_C_DECLS
 
 #endif
