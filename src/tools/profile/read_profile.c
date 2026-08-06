@@ -619,6 +619,12 @@ static void show_profile_data_log(profile_data_t *data, options_t *opts,
                      REQ_COLOR, reqid, CLEAR_COLOR);
             PRINT_RECORD();
             break;
+        case UCS_PROFILE_TYPE_MEMCPY:
+            snprintf(buf, sizeof(buf), RECORD_FMT"  %s%s%s%s %s{%zu} {%u}%s",
+                     RECORD_ARG(rec->timestamp - prev_time),
+                     REQ_COLOR, "UNPACK", loc->name, CLEAR_COLOR,
+                     REQ_COLOR, rec->param64, rec->param32, CLEAR_COLOR);
+            PRINT_RECORD();
         default:
             break;
         }
