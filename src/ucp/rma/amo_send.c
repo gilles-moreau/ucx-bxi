@@ -54,13 +54,6 @@
 #define UCP_AMO_CHECK_PARAM_NBX(_context, _remote_addr, _size, _count, \
                                 _opcode, _last_opcode, _action) \
     { \
-        if (ENABLE_PARAMS_CHECK) { \
-            if ((_count) != 1) { \
-                ucs_error("unsupported number of elements: %zu", (_count)); \
-                _action; \
-            } \
-        } \
-        \
         UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
                             _last_opcode, _action); \
     }
@@ -226,7 +219,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         } else {
             status_p = ucp_proto_request_send_op(
                     ep, &ucp_rkey_config(worker, rkey)->proto_select,
-                    rkey->cfg_index, req, UCP_OP_ID_AMO_POST, buffer, 1,
+                    rkey->cfg_index, req, UCP_OP_ID_AMO_POST, buffer, count,
                     param->datatype, op_size, param, 0, 0);
         }
         if (UCS_PTR_IS_PTR(status_p) &&

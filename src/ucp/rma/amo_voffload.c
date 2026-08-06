@@ -141,31 +141,25 @@ ucp_proto_amo_progress(uct_pending_req_t *self, ucp_operation_id_t op_id,
   return UCS_OK;
 }
 
-static void ucp_proto_amo_probe(const ucp_proto_init_params_t *init_params,
-                                ucp_operation_id_t op_id, size_t length,
-                                int is_memtype)
+static void ucp_proto_amo_vec_probe(const ucp_proto_init_params_t *init_params)
 {
-  ucp_worker_h      worker = init_params->worker;
-  ucs_memory_type_t reply_mem_type =
-          init_params->select_param->op.reply.mem_type;
+  ucp_worker_h                   worker = init_params->worker;
   ucp_proto_single_init_params_t params = {
           .super.super         = *init_params,
           .super.latency       = 0,
           .super.overhead      = 0,
           .super.cfg_thresh    = 0,
           .super.cfg_priority  = 20,
-          .super.min_length    = length,
+          .super.min_length    = sizeof(uint32_t),
           .super.max_length    = length,
           .super.min_iov       = 0,
           .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
           .super.max_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
           .super.max_iov_offs  = UCP_PROTO_COMMON_OFFSET_INVALID,
           .super.hdr_size      = 0,
-          .super.send_op       = (op_id == UCP_OP_ID_AMO_POST) ?
-                                         UCT_EP_OP_ATOMIC_POST :
-                                         UCT_EP_OP_ATOMIC_FETCH,
-          .super.memtype_op = is_memtype ? UCT_EP_OP_GET_SHORT : UCT_EP_OP_LAST,
-          .super.flags      = UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
+          .super.send_op       = UCT_EP_OP_ATOMIC_POST,
+          .super.memtype_op    = UCT_EP_OP_GET_SHORT,
+          .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
                          UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
                          UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
           .super.exclude_map  = 0,
@@ -174,48 +168,22 @@ static void ucp_proto_amo_probe(const ucp_proto_init_params_t *init_params,
           .tl_cap_flags       = 0};
 
   if ((init_params->select_param->dt_class != UCP_DATATYPE_CONTIG) ||
-      !ucp_proto_init_check_op(init_params, UCS_BIT(op_id))) {
+      !ucp_proto_init_check_op(init_params, UCS_BIT(UCP_OP_ID_AMO_POST))) {
     return;
-  }
-
-  if (op_id != UCP_OP_ID_AMO_POST) {
-    params.super.flags |= UCP_PROTO_COMMON_INIT_FLAG_RESPONSE;
-    if (!UCP_MEM_IS_ACCESSIBLE_FROM_CPU(reply_mem_type) &&
-        (!is_memtype || (worker->mem_type_ep[reply_mem_type] == NULL))) {
-      /* Check if reply buffer memory type is supported */
-      return;
-    }
   }
 
   ucp_proto_single_probe(&params);
 }
 
-static void ucp_proto_amo_query(const ucp_proto_query_params_t *params,
-                                ucp_proto_query_attr_t *attr, const char *name,
-                                int is_memtype)
+static void ucp_proto_amo_vec_query(const ucp_proto_query_params_t *params,
+                                    ucp_proto_query_attr_t         *attr)
 {
   UCS_STRING_BUFFER_FIXED(config_strb, attr->config, sizeof(attr->config));
   UCS_STRING_BUFFER_FIXED(desc_strb, attr->desc, sizeof(attr->desc));
-  const ucp_proto_single_priv_t *spriv         = params->priv;
-  ucs_memory_type_t              send_mem_type = params->select_param->mem_type;
-  ucs_memory_type_t              reply_mem_type;
+  const ucp_proto_single_priv_t *spriv = params->priv;
 
-  if (is_memtype && !UCP_MEM_IS_ACCESSIBLE_FROM_CPU(send_mem_type)) {
-    ucs_string_buffer_appendf(&desc_strb, "copy from %s, ",
-                              ucs_memory_type_names[send_mem_type]);
-  }
-
-  ucs_string_buffer_appendf(&desc_strb, "atomic %s", name);
+  ucs_string_buffer_appendf(&desc_strb, "atomic vec post");
   ucs_string_buffer_rbrk(&desc_strb, "/");
-
-  if (is_memtype &&
-      (ucp_proto_select_op_id(params->select_param) != UCP_OP_ID_AMO_POST)) {
-    reply_mem_type = params->select_param->op.reply.mem_type;
-    if (!UCP_MEM_IS_ACCESSIBLE_FROM_CPU(reply_mem_type)) {
-      ucs_string_buffer_appendf(&desc_strb, ", copy to %s, ",
-                                ucs_memory_type_names[reply_mem_type]);
-    }
-  }
 
   attr->max_msg_length = SIZE_MAX;
   attr->is_estimation  = 0;
@@ -223,56 +191,10 @@ static void ucp_proto_amo_query(const ucp_proto_query_params_t *params,
   ucp_proto_common_lane_priv_str(params, &spriv->super, 1, 1, &config_strb);
 }
 
-/*
- * "amoNN/[post|fetch|cswap]"       - send and reply buffers must be host memory
- * "amoNN/[post|fetch|cswap]/mtype" - any supported memory type, use pack/unpack
- *
- * @param _bits       32/64
- * @param _id         post/fetch/cswap[_mtype]
- * @param _name       post/fetch/swap[/mtype]
- * @param _op_id      UCP_OP_ID_AMO_POST/UCP_OP_ID_AMO_FETCH/UCP_OP_ID_AMO_CSWAP
- * @param _memtype_op
- */
-#define UCP_PROTO_AMO_REGISTER(_bits, _id, _name, _op_id, _is_memtype)         \
-                                                                               \
-  static ucs_status_t ucp_proto_amo##_bits##_id##_progress(                    \
-          uct_pending_req_t *self)                                             \
-  {                                                                            \
-    return ucp_proto_amo_progress(self, _op_id, sizeof(uint##_bits##_t),       \
-                                  _is_memtype);                                \
-  }                                                                            \
-                                                                               \
-  static void ucp_proto_amo##_bits##_##_id##_probe(                            \
-          const ucp_proto_init_params_t *init_params)                          \
-  {                                                                            \
-    ucp_proto_amo_probe(init_params, _op_id, sizeof(uint##_bits##_t),          \
-                        _is_memtype);                                          \
-  }                                                                            \
-                                                                               \
-  static void ucp_proto_amo##_bits##_##_id##_query(                            \
-          const ucp_proto_query_params_t *params,                              \
-          ucp_proto_query_attr_t         *attr)                                \
-  {                                                                            \
-    return ucp_proto_amo_query(params, attr, _name, _is_memtype);              \
-  }                                                                            \
-                                                                               \
-  ucp_proto_t ucp_amo##_bits##_##_id##_proto = {                               \
-          .name     = "amo" #_bits "/" _name,                                  \
-          .desc     = NULL,                                                    \
-          .probe    = ucp_proto_amo##_bits##_##_id##_probe,                    \
-          .query    = ucp_proto_amo##_bits##_##_id##_query,                    \
-          .progress = {ucp_proto_amo##_bits##_id##_progress},                  \
-          .abort    = ucp_proto_abort_fatal_not_implemented,                   \
-          .reset    = ucp_proto_request_bcopy_reset};
-
-#define UCP_PROTO_AMO_REGISTER_MTYPE(_bits, _id, _op_id)                       \
-  UCP_PROTO_AMO_REGISTER(_bits, _id, #_id, _op_id, 0)                          \
-  UCP_PROTO_AMO_REGISTER(_bits, _id##_mtype, #_id "/mtype", _op_id, 1)
-
-#define UCP_PROTO_AMO_REGISTER_BITS(_id, _op_id)                               \
-  UCP_PROTO_AMO_REGISTER_MTYPE(32, _id, _op_id)                                \
-  UCP_PROTO_AMO_REGISTER_MTYPE(64, _id, _op_id)
-
-UCP_PROTO_AMO_REGISTER_BITS(post, UCP_OP_ID_AMO_POST)
-UCP_PROTO_AMO_REGISTER_BITS(fetch, UCP_OP_ID_AMO_FETCH)
-UCP_PROTO_AMO_REGISTER_BITS(cswap, UCP_OP_ID_AMO_CSWAP)
+ucp_proto_t ucp_amo_vec_proto = {.name     = "amovec",
+                                 .desc     = NULL,
+                                 .probe    = ucp_proto_amo_vec_probe,
+                                 .query    = ucp_proto_amo_vec_query,
+                                 .progress = ucp_proto_amo_vec_progress,
+                                 .abort = ucp_proto_abort_fatal_not_implemented,
+                                 .reset = ucp_proto_request_bcopy_reset};

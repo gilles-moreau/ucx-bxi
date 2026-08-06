@@ -355,6 +355,20 @@ typedef enum uct_atomic_op {
     UCT_ATOMIC_OP_LAST
 } uct_atomic_op_t;
 
+/**
+ * @brief Atomic type requested for uct_ep_atomicv_post, uct_ep_atomicv_post,
+ *
+ * This enumeration defines what is the atomic primitive type of the data 
+ * associated to uct_ep_atomicv family of functions.
+ */
+typedef enum uct_atomic_type {
+    UCT_ATOMIC_TYPE_UINT32,   /**< 32 bits unsigned integer */
+    UCT_ATOMIC_TYPE_UINT64,   /**< 64 bits unsigned integer */
+    UCT_ATOMIC_TYPE_FLOAT,    /**< 32 bits floating point */
+    UCT_ATOMIC_TYPE_DOUBLE,   /**< 64 bits floating point  */
+    UCT_ATOMIC_TYPE_LAST
+} uct_atomic_type_t;
+
 
 /**
  * @defgroup UCT_RESOURCE_IFACE_CAP   UCT interface operations and capabilities
@@ -1167,7 +1181,9 @@ struct uct_iface_attr {
         struct {
             uint64_t         op_flags;   /**< Attributes for atomic-post operations */
             uint64_t         fop_flags;  /**< Attributes for atomic-fetch operations */
-        } atomic32, atomic64;            /**< Attributes for atomic operations */
+            size_t           max_atomic_size; /**< Maximal atomic size operation */
+            uint64_t         type_flags; /**< Attributes for primitive datatype */
+        } atomic32, atomic64, atomicv;   /**< Attributes for atomic operations */
 
         uint64_t             flags;      /**< Flags from @ref UCT_RESOURCE_IFACE_CAP */
         uint64_t             event_flags;/**< Flags from @ref UCT_RESOURCE_IFACE_EVENT_CAP */

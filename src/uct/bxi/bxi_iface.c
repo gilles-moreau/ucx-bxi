@@ -347,6 +347,9 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
+  attr->cap.atomic32.max_atomic_size  = sizeof(uint32_t);
+  attr->cap.atomic32.type_flags      |= UCS_BIT(UCT_ATOMIC_TYPE_UINT32);
+
   attr->cap.atomic64.op_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
@@ -355,6 +358,15 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
           UCS_BIT(UCT_ATOMIC_OP_CSWAP);
+  attr->cap.atomic64.max_atomic_size  = sizeof(uint64_t);
+  attr->cap.atomic64.type_flags      |= UCS_BIT(UCT_ATOMIC_TYPE_UINT64);
+
+  attr->cap.atomicv.op_flags |=
+          UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND);
+  attr->cap.atomicv.type_flags |=
+          UCS_BIT(UCT_ATOMIC_TYPE_UINT32) | UCS_BIT(UCT_ATOMIC_TYPE_UINT64) |
+          UCS_BIT(UCT_ATOMIC_TYPE_FLOAT) | UCS_BIT(UCT_ATOMIC_TYPE_DOUBLE);
+  attr->cap.atomicv.max_atomic_size = iface->config.max_atomic_size;
 #endif
 
   attr->latency             = UCT_BXI_IFACE_LATENCY;
@@ -673,6 +685,7 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.max_iovecs       = 1;
   iface->config.max_msg_size     = md->config.limits.max_msg_size;
   iface->config.max_inline       = md->config.limits.max_volatile_size;
+  iface->config.max_atomic_size  = md->config.limits.max_atomic_size;
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
