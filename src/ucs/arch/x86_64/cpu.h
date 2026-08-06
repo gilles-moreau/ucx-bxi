@@ -14,6 +14,7 @@
 #include <ucs/sys/compiler_def.h>
 #include <ucs/config/types.h>
 #include <ucs/config/global_opts.h>
+#include <ucs/profile/profile.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -101,6 +102,7 @@ static inline void *ucs_memcpy_relaxed(void *dst, const void *src, size_t len,
                                        ucs_arch_memcpy_hint_t hint,
                                        size_t total_len)
 {
+    void *ret;
 #if ENABLE_BUILTIN_MEMCPY
     if (ucs_unlikely((len > ucs_global_opts.arch.builtin_memcpy_min) &&
                      (len < ucs_global_opts.arch.builtin_memcpy_max))) {
@@ -123,7 +125,9 @@ static inline void *ucs_memcpy_relaxed(void *dst, const void *src, size_t len,
     }
 #endif
 
-    return memcpy(dst, src, len);
+    ret = memcpy(dst, src, len);
+    UCS_PROFILE_MEMCPY(src, len);
+    return ret;
 }
 
 static UCS_F_ALWAYS_INLINE void
