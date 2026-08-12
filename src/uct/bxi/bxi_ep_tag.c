@@ -84,7 +84,6 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  ptl_hdr_data_t   hdr;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -95,14 +94,17 @@ ucs_status_t uct_bxi_ep_tag_eager_short(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
                                uct_bxi_send_op_handler, 1);
 
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, length, ep->conn);
+  op->flags      |= UCT_BXI_IFACE_SEND_OP_TYPE_TAG_SHORT;
+  op->ep_fb       = ep->fence_beat;
+  op->length      = length;
+  op->tag.buffer  = data;
+  op->tag.tag     = tag;
+  UCT_BXI_TAG_HDR_SET(op->tag.hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
   ep->conn->sn++;
-  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)data, length,
-                               PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, hdr));
 
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut short return %d", status);
+    ucs_fatal("BXI: PtlPut tag short return %d", status);
   }
 
   /* Append operation descriptor to completion queue. */
@@ -126,7 +128,6 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   ssize_t          size  = 0;
   uct_bxi_iface_send_op_t *op;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_BXI_CHECK_IFACE_RES(iface, ep);
@@ -136,26 +137,28 @@ ssize_t uct_bxi_ep_tag_eager_bcopy(uct_ep_h tl_ep, uct_tag_t tag, uint64_t imm,
    * metadata so we do not support it. */
   ucs_assert(imm == 0);
   ucs_assert(!(flags & UCT_TAG_SCHEDULE));
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, size, ep->conn);
-  ep->conn->sn++;
 
   /* Take a bcopy send descriptor from the memory pool. Descriptor has 
      * an operation first, then a buffer of size seg_size. */
   UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
-                                  pack_cb, arg, uct_bxi_send_op_handler, &size);
+                                  pack_cb, arg, uct_bxi_send_op_handler,
+                                  &op->length);
   if (size < 0) {
     goto err;
   }
 
-  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
-                               PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, hdr));
+  op->flags   |= UCT_BXI_IFACE_SEND_OP_TYPE_TAG_BCOPY;
+  op->ep_fb    = ep->fence_beat;
+  op->tag.tag  = tag;
+  UCT_BXI_TAG_HDR_SET(op->tag.hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
+  ep->conn->sn++;
 
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status == UCS_ERR_NO_RESOURCE) {
     size = UCS_ERR_NO_RESOURCE;
     goto err_release_op;
   } else if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut bcopy return %d", status);
+    ucs_fatal("BXI: PtlPut tag bcopy return %d", status);
   }
 
   /* Append operation descriptor to completion queue. */
@@ -184,7 +187,6 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
-  ptl_hdr_data_t           hdr;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -202,25 +204,25 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                    status = UCS_ERR_NO_RESOURCE;
                                    goto err);
 
-  op->length     = uct_iov_get_length(iov);
-  op->tag.buffer = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
-
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
+  op->flags      |= UCT_BXI_IFACE_SEND_OP_TYPE_TAG_ZCOPY;
+  op->ep_fb       = ep->fence_beat;
+  op->length      = uct_iov_get_length(iov);
+  op->tag.buffer  = uct_bxi_resolve_laddr(iov->buffer, iov->memh);
+  op->tag.tag     = tag;
+  UCT_BXI_TAG_HDR_SET(op->tag.hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredPut(
             iface->tx.mdh, (ptl_size_t)op->tag.buffer, op->length, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
-            gop->ct_value));
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, op->tag.hdr,
+            gop->cth, gop->ct_value));
   } else {
-    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->tag.buffer,
-                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, hdr));
+    status = uct_bxi_ep_execute_op(iface, ep, op);
   }
 
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut zcopy return %d", status);
+    ucs_fatal("BXI: PtlPut tag zcopy return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
@@ -277,8 +279,6 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_iface_send_op_t *op;
   ptl_me_t                 me;
   uct_bxi_recv_block_t    *block;
-  ptl_hdr_data_t           hdr = 0;
-  ssize_t                  size;
 
   UCT_BXI_CHECK_EP_PTR(ep);
   UCT_BXI_CHECK_RNDV_DATA(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -326,7 +326,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   UCT_BXI_IFACE_GET_TX_TAG_BCOPY_DESC_ERR(
           iface, &iface->tx.send_desc_mp, op, ep, comp,
           uct_bxi_send_op_rndv_handler, uct_bxi_pack_rndv, iov->buffer,
-          block->size, iov->memh, header, header_length, &size,
+          block->size, iov->memh, header, header_length, &op->length,
           status = UCS_ERR_NO_RESOURCE;
           goto err_deactivate_block);
 
@@ -351,22 +351,25 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
             ep->conn->id.conn_key);
 
   ucs_assert(block->size <= UCT_BXI_TAG_LENGTH_MAX);
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_HW, block->size, ep->conn);
+
+  op->flags   |= UCT_BXI_IFACE_SEND_OP_TYPE_TAG_BCOPY;
+  op->ep_fb    = ep->fence_beat;
+  op->tag.tag  = tag;
+  UCT_BXI_TAG_HDR_SET(op->tag.hdr, UCT_BXI_TAG_ID_RNDV_HW, block->size,
+                      ep->conn);
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     ucs_assert(gop != NULL);
     ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(op + 1),
-                                          size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                          ep->iface_addr.tag, tag, 0, op, hdr,
-                                          gop->cth, gop->ct_value));
+    status = uct_bxi_wrap(
+            PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(op + 1), op->length,
+                            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
+                            tag, 0, op, op->tag.hdr, gop->cth, gop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
-    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
-                                 PTL_ACK_REQ, ep->dev_addr.pid,
-                                 ep->iface_addr.tag, tag, 0, op, hdr));
+    status = uct_bxi_ep_execute_op(iface, ep, op);
   }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv zcopy return %d", status);
@@ -426,8 +429,6 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_iface_send_op_t *op;
-  ssize_t                  size;
-  ptl_hdr_data_t           hdr;
   rndv_req_hdr_t           rndv_hdr = {.hdr_len = header_length, .hdr = header};
 
   UCT_BXI_CHECK_EP(ep);
@@ -444,14 +445,15 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h tl_ep, uct_tag_t tag,
   /* Allocate a send descriptor to pack rendez-vous metadata. */
   UCT_BXI_IFACE_GET_TX_BCOPY_DESC(iface, &iface->tx.send_desc_mp, op, ep,
                                   uct_bxi_pack_rndv_request, &rndv_hdr,
-                                  uct_bxi_send_op_handler, &size);
+                                  uct_bxi_send_op_handler, &op->length);
 
-  UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_RNDV_SW, 0, ep->conn);
+  op->flags   |= UCT_BXI_IFACE_SEND_OP_TYPE_TAG_BCOPY;
+  op->ep_fb    = ep->fence_beat;
+  op->tag.tag  = tag;
+  UCT_BXI_TAG_HDR_SET(op->tag.hdr, UCT_BXI_TAG_ID_RNDV_SW, 0, ep->conn);
   ep->conn->sn++;
-  status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
-                               PTL_ACK_REQ, ep->dev_addr.pid,
-                               ep->iface_addr.tag, tag, 0, op, hdr));
 
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlPut rndv request return %d", status);
   }

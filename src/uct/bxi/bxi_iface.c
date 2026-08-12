@@ -125,8 +125,11 @@ static ucs_status_t uct_bxi_iface_block_handle_am(uct_bxi_iface_t      *iface,
   size_t       length;
 
   if (am_handler == UCT_BXI_AM_HANDLER_SHORT) {
-    status = UCS_ERR_NOT_IMPLEMENTED;
-    goto err;
+    ucs_assert(hdr_size == sizeof(uint64_t));
+
+    data              = UCS_PTR_BYTE_OFFSET(ooo->start, -hdr_size);
+    *(uint64_t *)data = ooo->match_bits;
+    length            = ooo->mlength + hdr_size;
   } else if (am_handler == UCT_BXI_AM_HANDLER_BCOPY) {
     data   = ooo->start;
     length = ooo->mlength;
@@ -315,7 +318,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   //       managed.
   attr->cap.flags = UCT_IFACE_FLAG_AM_BCOPY |
 #if !HAVE_BXI3_R6LITE
-                    UCT_IFACE_FLAG_AM_ZCOPY |
+                    UCT_IFACE_FLAG_AM_SHORT | UCT_IFACE_FLAG_AM_ZCOPY |
 #endif
                     UCT_IFACE_FLAG_PUT_BCOPY | UCT_IFACE_FLAG_GET_BCOPY |
 #if !HAVE_BXI3_R6LITE
@@ -871,7 +874,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 #if HAVE_BXI3_R6LITE
   ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #else
-  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
+  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #endif
   ptl_md.eq_handle = self->tx.eqh;
   ptl_md.ct_handle = PTL_CT_NONE;
@@ -880,6 +883,16 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   if (status != UCS_OK) {
     goto err_clean_txevq;
   }
+
+#if !HAVE_BXI3_R6LITE
+  /* Create the one for short operations. */
+  ptl_md.options |= PTL_MD_VOLATILE;
+
+  status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &self->tx.short_mdh));
+  if (status != UCS_OK) {
+    goto err_clean_txevq;
+  }
+#endif
 
   /* Allocate buffer for short message. */
   self->tx.short_desc = ucs_malloc(self->config.max_inline, "short-desc");

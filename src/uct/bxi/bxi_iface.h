@@ -97,18 +97,22 @@ enum {
   UCT_BXI_IFACE_SEND_OP_FLAG_FENCED    = UCS_BIT(3),
   UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED = UCS_BIT(4),
   UCT_BXI_IFACE_SEND_OP_FLAG_COMPLETED = UCS_BIT(5),
+  UCT_BXI_IFACE_SEND_OP_FLAG_SCHEDULE  = UCS_BIT(6),
 
   // Operation type
-  UCT_BXI_IFACE_SEND_OP_TYPE_START     = UCS_BIT(10),
-  UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY  = UCT_BXI_IFACE_SEND_OP_TYPE_START,
-  UCT_BXI_IFACE_SEND_OP_TYPE_AM_ZCOPY  = UCS_BIT(11),
-  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY = UCS_BIT(12),
-  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY = UCS_BIT(13),
-  UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY = UCS_BIT(14),
-  UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY = UCS_BIT(15),
-  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(16),
-  UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(17),
-  UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(18),
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM_SHORT  = UCS_BIT(10),
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY  = UCS_BIT(11),
+  UCT_BXI_IFACE_SEND_OP_TYPE_AM_ZCOPY  = UCS_BIT(12),
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY = UCS_BIT(13),
+  UCT_BXI_IFACE_SEND_OP_TYPE_PUT_BCOPY = UCS_BIT(14),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_ZCOPY = UCS_BIT(15),
+  UCT_BXI_IFACE_SEND_OP_TYPE_GET_BCOPY = UCS_BIT(16),
+  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(17),
+  UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(18),
+  UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(19),
+  UCT_BXI_IFACE_SEND_OP_TYPE_TAG_SHORT = UCS_BIT(20),
+  UCT_BXI_IFACE_SEND_OP_TYPE_TAG_BCOPY = UCS_BIT(21),
+  UCT_BXI_IFACE_SEND_OP_TYPE_TAG_ZCOPY = UCS_BIT(22),
 };
 
 #define UCT_BXI_IFACE_SEND_OP_MASK (~(UCS_MASK(10)))
@@ -170,7 +174,9 @@ typedef struct uct_bxi_iface_send_op {
       void            *buffer;
     } am;
     struct {
-      void *buffer;
+      const void      *buffer;
+      ptl_match_bits_t tag;
+      ptl_hdr_data_t   hdr;
     } tag;
     struct {
       void    *buffer;
@@ -344,6 +350,7 @@ typedef struct uct_bxi_iface {
     void           *short_desc;   /* Preallocated buffer for short am */
     ucs_mpool_t     flush_ops_mp; /* Memory pool for flush OP */
     ptl_handle_md_t mdh;          /* Memory Descriptor for sending data */
+    ptl_handle_md_t short_mdh;    /* Memory Descriptor for sending short data */
     ucs_mpool_t     pending_mp;   /* Memory pool of pending request */
     uint64_t        available;    /* Current available send credits */
   } tx;
@@ -390,6 +397,9 @@ uct_bxi_iface_cmp_device_addr(uct_bxi_device_addr_t *dev1,
   return dev1->pid.phys.pid == dev2->pid.phys.nid &&
          dev1->pid.phys.nid == dev2->pid.phys.nid;
 }
+
+ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                                   uct_bxi_iface_send_op_t *op);
 
 unsigned uct_bxi_iface_progress(uct_iface_t *super);
 

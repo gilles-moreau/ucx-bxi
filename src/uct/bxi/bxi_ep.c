@@ -14,10 +14,6 @@ ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_SWAP] = PTL_SWAP, [UCT_ATOMIC_OP_CSWAP] = PTL_CSWAP,
 };
 
-static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
-                                          uct_bxi_ep_t            *ep,
-                                          uct_bxi_iface_send_op_t *op);
-
 // Operation completion handlers
 void uct_bxi_send_op_handler(uct_bxi_iface_send_op_t *op, const void *resp)
 {
@@ -83,9 +79,9 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_remove_from_queue(op);
 }
 
-static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
-                                          uct_bxi_ep_t            *ep,
-                                          uct_bxi_iface_send_op_t *op)
+UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_ep_execute_op, (iface, ep, op),
+                 uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                 uct_bxi_iface_send_op_t *op)
 {
   ucs_status_t status;
 
@@ -99,6 +95,12 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
   };
 
   switch (op->flags & UCT_BXI_IFACE_SEND_OP_MASK) {
+  case UCT_BXI_IFACE_SEND_OP_TYPE_AM_SHORT:
+    status = uct_bxi_wrap(PtlPut(iface->tx.short_mdh, (ptl_size_t)op->am.buffer,
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.am, op->am.tag, 0, op,
+                                 op->am.hdr));
+    break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY:
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1),
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -153,6 +155,18 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
                     ep->iface_addr.rma, 0, op->atomic.remote_addr, op, 0,
                     &op->atomic.compare, PTL_CSWAP, op->atomic.dt));
     break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_TAG_BCOPY:
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1),
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, op->tag.tag, 0, op,
+                                 op->tag.hdr));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_TAG_ZCOPY:
+    status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->tag.buffer,
+                                 op->length, PTL_ACK_REQ, ep->dev_addr.pid,
+                                 ep->iface_addr.tag, op->tag.tag, 0, op,
+                                 op->tag.hdr));
+    break;
   default:
     ucs_error("BXI: unsupported operation. flags=%lx",
               op->flags & UCT_BXI_IFACE_SEND_OP_MASK);
@@ -168,7 +182,44 @@ out:
 ucs_status_t uct_bxi_ep_am_short(uct_ep_h tl_ep, uint8_t id, uint64_t hdr,
                                  const void *buffer, unsigned length)
 {
-  return UCS_ERR_UNSUPPORTED;
+  ucs_status_t     status = UCS_OK;
+  uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_CHECK_AM_ID(id);
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* First, get OP while setting appropriate completion callback. Use length > 0 
+   * to avoid skipping. */
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
+                               uct_bxi_send_op_handler, 1);
+
+  op->flags     |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_SHORT;
+  op->ep_fb      = ep->fence_beat;
+  op->length     = length;
+  op->am.buffer  = (void *)buffer;
+  op->am.tag     = (ptl_match_bits_t)hdr;
+  UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_SHORT, sizeof(uint64_t), id,
+                     ep->conn);
+  ep->conn->sn++;
+
+  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlPut am short return %d", status);
+  }
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_enable_flush(ep);
+  uct_bxi_conn_enable(ep->conn);
+
+  UCT_TL_EP_STAT_OP(&ep->super, AM, SHORT, length);
+  uct_bxi_iface_trace_am(ucs_derived_of(tl_ep->iface, uct_bxi_iface_t),
+                         UCT_AM_TRACE_TYPE_SEND, id, buffer, op->length);
+
+  return status;
 }
 
 ucs_status_t uct_bxi_ep_am_short_iov(uct_ep_h tl_ep, uint8_t id,
@@ -208,7 +259,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
     op->length = UCS_ERR_NO_RESOURCE;
     goto err_release_op;
   } else if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut bcopy return %d", status);
+    ucs_fatal("BXI: PtlPut am bcopy return %d", status);
   }
 
   /* Append operation descriptor to completion queue. */
@@ -235,7 +286,6 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                                  size_t iovcnt, unsigned flags,
                                  uct_completion_t *comp)
 {
-
   ucs_status_t     status = UCS_OK;
   uct_bxi_ep_t    *ep     = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface  = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
@@ -264,7 +314,7 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut zcopy return %d", status);
+    ucs_fatal("BXI: PtlPut am zcopy return %d", status);
   } else {
     /* For zcopy call, operation is always in progress. */
     status = UCS_INPROGRESS;
