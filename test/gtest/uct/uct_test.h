@@ -523,6 +523,14 @@ protected:
 
 
 /**
+ * Instantiate the parametrized test case for the BXI transports.
+ *
+ * @param _test_case  Test case class, derived from uct_test.
+ */
+#define UCT_INSTANTIATE_BXI_TEST_CASE(_test_case) \
+    UCS_PP_FOREACH(_UCT_INSTANTIATE_TEST_CASE, _test_case, bxi)
+
+/**
  * Instantiate the parametrized test case for the IB transports.
  *
  * @param _test_case  Test case class, derived from uct_test.

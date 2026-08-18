@@ -1,5 +1,5 @@
-#ifndef BXI_TYPES_H
-#define BXI_TYPES_H
+#ifndef BXI_H
+#define BXI_H
 
 #include <uct/base/uct_md.h>
 

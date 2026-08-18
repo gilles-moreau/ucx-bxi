@@ -1,3 +1,5 @@
+SUBDIRS = . bxihw
+
 if HAVE_BXI
 
 module_LTLIBRARIES = libuct_bxi.la

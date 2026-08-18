@@ -7,7 +7,52 @@ AC_DEFUN([BXI_BUILD_FLAGS],
                 $4="-I$1/include"
         )
 
-AC_DEFUN([UCX_CHECK_BXI], [
+AC_DEFUN([BXIHW_BUILD_FLAGS], 
+                $2="-I$1"
+                $3="-I$1"
+        )
+
+AC_DEFUN([UCX_CHECK_BXIHW], [
+                bxihw_happy="no"
+
+                AC_ARG_WITH([bxihw],
+                        [AS_HELP_STRING([--with-bxihw=(DIR)], [Enable the use 
+                                of HW BXI (default is guess).])],
+                        [], [with_bxihw=guess])
+
+                AS_IF([test "x$with_bxihw" != xno],
+                        [AS_IF([test "x$with_bxihw" = "xguess" -o "x$with_bxihw" = xyes -o "x$with_bxihw" = "x"],
+                                [AC_MSG_NOTICE([BXI hardware path was not found, guessing ...])
+                                 with_bxihw="/usr/include/"
+                                 BXIHW_BUILD_FLAGS([$with_bxihw], [BXIHW_CFLAGS], [BXIHW_CPPFLAGS])],
+                                [BXIHW_BUILD_FLAGS([$with_bxihw], [BXIHW_CFLAGS], [BXIHW_CPPFLAGS])])
+
+                        save_CFLAGS="$CFLAGS"
+                        save_CPPFLAGS="$CPPFLAGS"
+
+                        CFLAGS="$BXIHW_CFLAGS $CFLAGS"
+                        CPPFLAGS="$BXIHW_CPPFLAGS $CPPFLAGS"
+
+                        AC_CHECK_HEADERS([linux/bxi/hw.h],
+                                [bxihw_happy="yes"],
+                                [bxihw_happy="no"])
+
+                        AS_IF([test "x$bxihw_happy" = xyes],
+                                [AC_DEFINE([HAVE_BXIHW], 1, [Enable BXIHW support])
+                                 AC_SUBST([BXIHW_CFLAGS])
+                                 AC_SUBST([BXIHW_CPPFLAGS])],
+                                [AC_MSG_WARN([Hardware BXI not found])])
+
+                       CPPFLAGS=$save_CPPFLAGS
+                       CFLAGS=$save_CFLAGS],
+                       [AC_MSG_WARN([HW BXI was explicitly disabled])]
+                )
+
+                AM_CONDITIONAL([HAVE_BXIHW], [test "x$bxihw_happy" != xno])
+
+        ])
+
+AC_DEFUN([UCX_CHECK_PTLBXI], [
                 bxi_happy="no"
 
                 AC_ARG_WITH([bxi],
@@ -36,12 +81,14 @@ AC_DEFUN([UCX_CHECK_BXI], [
                                 [bxi_happy="yes"],
                                 [bxi_happy="no"])
 
+                        # First, check bxiv2
                         AS_IF([test "x$bxi_happy" = xyes],
                                         [AC_CHECK_LIB([portals], [PtlInit], 
                                                 bxi_happy="yes"
 						                                    BXI_LIBS="-lportals", 
                                                 bxi_happy="no")])
 
+                        # Then, check bxiv3
                         AS_IF([test "x$bxi_happy" = xno],
                               [LIBS="$save_LIBS -lportals-bxi3"
 					                          AC_CHECK_LIB([portals-bxi3], [PtlInit], 
@@ -66,7 +113,7 @@ AC_DEFUN([UCX_CHECK_BXI], [
                        LDFLAGS=$save_LDFLAGS
                        LIBS=$save_LIBS],
                        [AC_MSG_WARN([BXI was explicitly disabled])]
-        )
+                )
 
-        AM_CONDITIONAL([HAVE_BXI], [test "x$bxi_happy" != xno])
+                AM_CONDITIONAL([HAVE_BXI], [test "x$bxi_happy" != xno])
         ])

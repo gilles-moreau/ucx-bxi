@@ -1,0 +1,11 @@
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+libdir = @libdir@/ucx
+
+Name: @PACKAGE@-bxihw
+Description: Unified Communication X Library BXI module
+Version: @VERSION@
+Libs:
+Libs.private: -L${libdir} -luct_bxihw -Wl,--undefined=uct_bxihw_init
+
+
