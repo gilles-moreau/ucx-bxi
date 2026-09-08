@@ -724,6 +724,8 @@ typedef enum {
     UCP_OP_ATTR_FIELD_SCHEDH        = UCS_BIT(9),  /**< schedule handle field */
     UCP_OP_ATTR_FIELD_EPH           = UCS_BIT(10), /**< endpoint handle field */
     UCP_OP_ATTR_FIELD_SCHED_DEPS    = UCS_BIT(11), /**< scheduled explicit dependecies field */
+    UCP_OP_ATTR_FIELD_SCHED_MCPY    = UCS_BIT(12), /**< scheduled receive operation linked to 
+                                                        this one to perform a memcpy */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -1861,11 +1863,17 @@ typedef struct {
 
     /**
      * Dependencies
-     * If the scheduler is provided, this field must be set to pass depdendencies.
-     * If the scheduler is in implicit mode, this field must be set even if there
-     * is no dependency to pass.
+     * If the scheduler is provided in explicit mode, this field must be set to pass depdendencies.
      */
     ucp_deps_param_t *deps;
+
+    /**
+     * Memcpy twin receive task
+     * If the scheduler is provided and this send operation is linked to a 
+     * receive operation to perform a scheduled/offloaded memcpy operation,
+     * this field should contain the handle of this receive operation.
+     */
+    ucp_sched_task_h mcpy_recv_task;
 
     /**
      * Endpoint handle.

@@ -4,8 +4,10 @@
 #include "ucs/datastruct/callbackq.h"
 #include "ucs/datastruct/queue.h"
 #include "ucs/datastruct/queue_types.h"
+#include "ucs/debug/log_def.h"
 #include "ucs/sys/compiler_def.h"
 #include "ucs/type/status.h"
+#include "ucp_request.inl"
 
 #include <string.h>
 #include <ucp/core/ucp_ep.h>
@@ -62,6 +64,7 @@ ucp_sched_task_h ucp_sched_task_init(ucp_sched_h sched) {
   task->num_succs         = 0;
   task->rem_deps          = 0;
   task->pend_req          = NULL;
+  task->mcpy_twin         = NULL;
   ucs_debug("UCP Scheduler %p: Created task %p", sched, task);
   return task;
 }
@@ -213,6 +216,19 @@ unsigned ucp_sched_set_task_implicit_deps(ucp_sched_h schedh, ucp_request_t *req
         //NOTE: task cannot be offloaded, otherwise we would have to manually
         //      increment the counter to count for the non-offloaded dependency.
         offloaded = 0;
+      } else if ((stask->flags & UCP_SCHED_TASK_MCPY) &&
+                 ucp_sched_check_overlap(stask->mcpy_twin->buffer, stask->size, task->buffer,
+                                  task->size) &&
+                 !(task->flags & UCP_SCHED_TASK_COMPLETED)) {
+        /* Task has overlapping memory range with non-completed task, thus
+        * add it to the list of dependencies. */
+
+        /* Add task to the list of dependencies. */
+        stask->deps[stask->num_deps++] = task;
+        stask->rem_deps++;
+
+        /* Add stask to the list of successors of task */
+        task->succs[task->num_succs++] = stask;
       }
     } else { /* UCP_SCHED_TASK_RECV */
       ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
@@ -261,24 +277,13 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
 {
   ucp_request_t     *req   = ucs_container_of(self, ucp_request_t, send.uct);
   const ucp_proto_t *proto = req->send.proto_config->proto;
-  //TODO: bug when protocol is a rndv protocol since priv is not the same...
   ucp_sched_task_t                      *stask = req->task;
-  ucp_lane_index_t lane;
-  if (strcmp(proto->name, "tag/rndv")==0){
-    const ucp_proto_rndv_ctrl_priv_t    *rpriv = req->send.proto_config->priv;
-    lane = rpriv->lane;
-  } else {
-    const ucp_proto_common_lane_priv_t  *spriv = req->send.proto_config->priv;
-    lane = spriv->lane;
-  }
 
   if (stask->flags & UCP_SCHED_TASK_OFFLOADED) {
     goto start_send;
   }
 
   if (stask->rem_deps != 0) {
-    req->send.lane = lane; /* Save for pending_add */ /* FIXME is it still
-    * needed since pending_add will not be caled anymore */
     return UCS_OK;
   }
 
@@ -331,11 +336,20 @@ ucp_sched_task_h ucp_sched_send_task_init_implicit(ucp_sched_h sched, ucp_reques
   return stask;
 }
 
-ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, ucp_deps_param_t *deps_param)
+ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, const ucp_request_param_t *request_param)
 {
   ucs_status_t      status = UCS_OK;
   ucp_sched_task_t *stask;
   unsigned          offloaded = UCP_SCHED_TASK_OFFLOADED;
+  ucp_sched_task_h  mcpy_recv = UCP_REQUEST_PARAM_FIELD(request_param, SCHED_MCPY, mcpy_recv_task, NULL);
+  ucp_deps_param_t  no_deps = {
+    .deps = NULL,
+    .num_deps = 0
+  };
+  ucp_deps_param_t *deps_param = UCP_REQUEST_PARAM_FIELD(request_param, SCHED_DEPS, deps, NULL);
+  if (ucs_unlikely(deps_param == NULL)) {
+    deps_param = &no_deps;
+  }
 
   ucs_assert(sched != NULL);
   ucs_assert(req->send.state.dt_iter.dt_class == UCP_DATATYPE_CONTIG);
@@ -349,10 +363,19 @@ ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, ucp_deps_para
   /* Init task from the scheduler. */
   stask            = sched->ops.init_send_task(sched, req);  
 
+  /* Add memcpy informations */
+  if (mcpy_recv != NULL) {
+    mcpy_recv->flags     |= UCP_SCHED_TASK_MCPY;
+    stask->flags         |= UCP_SCHED_TASK_MCPY;
+    mcpy_recv->mcpy_twin  = stask;
+    stask->mcpy_twin      = mcpy_recv;
+    ucs_debug("UCP Scheduler %p: Memcpy operations with recv %p and send %p", sched, mcpy_recv, stask);
+  }
+
   offloaded &= sched->ops.set_deps(sched, req, stask, deps_param);
 
   if (stask->num_deps > 0) {
-    if (offloaded & UCP_SCHED_TASK_OFFLOADED) {
+    if ((offloaded & UCP_SCHED_TASK_OFFLOADED) && (sched->flags & UCP_SCHED_OFFLOAD_ENABLED)) {
       /* Task may be scheduled using tranport own scheduler. */
       status = ucp_sched_offload_send(sched, stask);
       if (status != UCS_OK) {
@@ -464,16 +487,18 @@ void ucp_sched_internal_dump(ucp_sched_h sched, FILE *out) {
 
   for (int i=0; i<sched->count; i++) {
     task = &sched->tasks_mp[i];
-    if (task->pend_req == NULL) {
+    if (task->flags & UCP_SCHED_TASK_RECV) {
       com_op = "recv";
     } else {
       com_op = "send";
     }
     // Print the task 
     fprintf(out,
-            "%ld [label=\" %s\" shape=ellipse]\n",
+            "%ld [label=\" %s %p..%p\" shape=ellipse]\n",
             UCS_PTR_BYTE_DIFF(sched->tasks_mp, task) / sizeof(ucp_sched_task_t),
-            com_op
+            com_op,
+            task->buffer,
+            UCS_PTR_BYTE_OFFSET(task->buffer, task->size)
             );
     
     // Print the edges
@@ -481,6 +506,11 @@ void ucp_sched_internal_dump(ucp_sched_h sched, FILE *out) {
       fprintf( out, "%ld -> %ld\n",
 					UCS_PTR_BYTE_DIFF(sched->tasks_mp, task) / sizeof(ucp_sched_task_t), 
           UCS_PTR_BYTE_DIFF(sched->tasks_mp, task->succs[j]) / sizeof(ucp_sched_task_t));
+    }
+    if ((task->flags & UCP_SCHED_TASK_MCPY) && task->flags & UCP_SCHED_TASK_SEND) {
+      fprintf(out, "%ld -> %ld [color=\"#CC00CC\" style=\"dashed\"]\n", 
+          UCS_PTR_BYTE_DIFF(sched->tasks_mp, task) / sizeof(ucp_sched_task_t),
+          UCS_PTR_BYTE_DIFF(sched->tasks_mp, task->mcpy_twin) / sizeof(ucp_sched_task_t));
     }
   }
 

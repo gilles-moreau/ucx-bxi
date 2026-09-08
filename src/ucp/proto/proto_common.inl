@@ -282,12 +282,7 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
 {
     ucp_worker_h worker = ep->worker;
     ucp_proto_select_param_t sel_param;
-    ucp_sched_h schedh;
-    ucp_deps_param_t *deps_param;
-    ucp_deps_param_t no_deps = {
-        .deps = NULL,
-        .num_deps = 0
-    };
+    ucp_sched_h schedh;  
     ucs_status_t status;
     size_t msg_length;
     uint8_t sg_count;
@@ -309,12 +304,8 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
         schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
         req->schedh = schedh;
-
-        deps_param = UCP_REQUEST_PARAM_FIELD(param, SCHED_DEPS, deps, NULL);
-        if (ucs_unlikely(deps_param == NULL)) {
-            deps_param = &no_deps;
-        }  
-        status = ucp_sched_send(schedh, req, deps_param);
+          
+        status = ucp_sched_send(schedh, req, param);
         if (status != UCS_OK) {
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);

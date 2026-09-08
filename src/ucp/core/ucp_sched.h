@@ -8,6 +8,7 @@
 #include <ucs/datastruct/list.h>
 #include <ucs/datastruct/queue.h>
 #include "ucs/datastruct/queue_types.h"
+#include "ucs/sys/compiler_def.h"
 
 #include <config.h>
 
@@ -27,6 +28,7 @@ enum {
   UCP_SCHED_TASK_COMPLETED     = UCS_BIT(2),
   UCP_SCHED_TASK_SEND          = UCS_BIT(3),
   UCP_SCHED_TASK_RECV          = UCS_BIT(4),
+  UCP_SCHED_TASK_MCPY          = UCS_BIT(5),
 };
 
 typedef struct ucp_sched_task {
@@ -41,6 +43,7 @@ typedef struct ucp_sched_task {
   uct_pending_req_t     *pend_req; /* Pending request to progress send operation */
   struct ucp_sched_task *deps[UCP_SCHED_MAX_DEPS];
   struct ucp_sched_task *succs[UCP_SCHED_MAX_DEPS]; /* tasks depending on this one */
+  struct ucp_sched_task *mcpy_twin; /* twin task of a scheduled memcpy operation */
   size_t                 num_deps;
   size_t                 num_succs; /* number of tasks depending on this one */
   size_t                 rem_deps; /* number of not yet completed dependencies (remaining dependencies) */
@@ -73,7 +76,7 @@ typedef struct ucp_sched {
   ucp_worker_h     worker;
 } ucp_sched_t;
 
-ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, ucp_deps_param_t *deps_param);
+ucs_status_t ucp_sched_send(ucp_sched_h sched, ucp_request_t *req, const ucp_request_param_t *request_param);
 ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self);
 ucs_status_t ucp_sched_recv(ucp_sched_h sched, ucp_request_t *req);
 
