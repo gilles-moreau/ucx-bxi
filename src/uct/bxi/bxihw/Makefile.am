@@ -8,10 +8,13 @@ libuct_bxihw_la_LIBADD = $(top_builddir)/src/ucs/libucs.la \
 libuct_bxihw_la_LDFLAGS = -version-info $(SOVERSION)
 
 noinst_HEADERS = \
-								 bxihw.h
-
+								 bxihw.h \
+								 bxihw_md.h \
+								 bxihw_iface.h
+								 
 libuct_bxihw_la_SOURCES = \
-												bxihw_md.c
+												bxihw_md.c \
+												bxihw_iface.c
 
 PKG_CONFIG_NAME=bxihw
 

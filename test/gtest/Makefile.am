@@ -289,14 +289,8 @@ gtest_SOURCES += \
   uct/bxi/test_bxihw.cc
 gtest_CPPFLAGS += \
 	$(BXIHW_CPPFLAGS)
-gtest_CPPFLAGS += \
-	$(BXIHW_CPPFLAGS)
-gtest_CXXFLAGS += \
-	$(BXIHW_CXXFLAGS)
 gtest_LDADD += \
-	$(BXIHW_LDFLAGS) \
-	$(BXIHW_LIBS) \
-	$(top_builddir)/src/uct/rocm/libuct_bxihw.la
+	$(top_builddir)/src/uct/bxi/bxihw/libuct_bxihw.la
 endif
 
 noinst_HEADERS = \

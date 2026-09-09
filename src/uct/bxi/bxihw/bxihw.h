@@ -6,4 +6,6 @@
 #include <linux/bxi/bxi_ioctl.h>
 #include <linux/bxi/hw.h>
 
+#include <portals4.h>
+
 #endif
