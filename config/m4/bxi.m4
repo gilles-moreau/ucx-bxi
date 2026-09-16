@@ -7,50 +7,10 @@ AC_DEFUN([BXI_BUILD_FLAGS],
                 $4="-I$1/include"
         )
 
-AC_DEFUN([BXIHW_BUILD_FLAGS], 
+AC_DEFUN([BXIDP_BUILD_FLAGS], 
                 $2="-I$1"
                 $3="-I$1"
         )
-
-AC_DEFUN([UCX_CHECK_BXIHW], [
-                bxihw_happy="no"
-
-                AC_ARG_WITH([bxihw],
-                        [AS_HELP_STRING([--with-bxihw=(DIR)], [Enable the use 
-                                of HW BXI (default is guess).])],
-                        [], [with_bxihw=guess])
-
-                AS_IF([test "x$with_bxihw" != xno],
-                        [AS_IF([test "x$with_bxihw" = "xguess" -o "x$with_bxihw" = xyes -o "x$with_bxihw" = "x"],
-                                [AC_MSG_NOTICE([BXI hardware path was not found, guessing ...])
-                                 with_bxihw="/usr/include/"
-                                 BXIHW_BUILD_FLAGS([$with_bxihw], [BXIHW_CFLAGS], [BXIHW_CPPFLAGS])],
-                                [BXIHW_BUILD_FLAGS([$with_bxihw], [BXIHW_CFLAGS], [BXIHW_CPPFLAGS])])
-
-                        save_CFLAGS="$CFLAGS"
-                        save_CPPFLAGS="$CPPFLAGS"
-
-                        CFLAGS="$BXIHW_CFLAGS $CFLAGS"
-                        CPPFLAGS="$BXIHW_CPPFLAGS $CPPFLAGS"
-
-                        AC_CHECK_HEADERS([linux/bxi/hw.h],
-                                [bxihw_happy="yes"],
-                                [bxihw_happy="no"])
-
-                        AS_IF([test "x$bxihw_happy" = xyes],
-                                [AC_DEFINE([HAVE_BXIHW], 1, [Enable BXIHW support])
-                                 AC_SUBST([BXIHW_CFLAGS])
-                                 AC_SUBST([BXIHW_CPPFLAGS])],
-                                [AC_MSG_WARN([Hardware BXI not found])])
-
-                       CPPFLAGS=$save_CPPFLAGS
-                       CFLAGS=$save_CFLAGS],
-                       [AC_MSG_WARN([HW BXI was explicitly disabled])]
-                )
-
-                AM_CONDITIONAL([HAVE_BXIHW], [test "x$bxihw_happy" != xno])
-
-        ])
 
 AC_DEFUN([UCX_CHECK_PTLBXI], [
                 bxi_happy="no"
@@ -116,4 +76,52 @@ AC_DEFUN([UCX_CHECK_PTLBXI], [
                 )
 
                 AM_CONDITIONAL([HAVE_BXI], [test "x$bxi_happy" != xno])
+
+                # Check for availability of Direct PTL
+                bxidp_happy="no"
+
+                AC_ARG_WITH([bxidp-includes],
+                        [AS_HELP_STRING([--with-bxidp-includes=(DIR)], [Enable the use 
+                                of direct Portals4 (default is guess).])],
+                        [], [with_bxidp_includes=guess])
+
+
+                # Can only be used if Portals4 available
+                AS_IF([test "x$bxi_happy" = xyes], 
+                      [AS_IF([test "x$with_bxidp_includes" != xno],
+                        [AS_IF([test "x$with_bxidp_includes" = "xguess" -o "x$with_bxidp_includes" = xyes -o "x$with_bxidp_includes" = "x"],
+                                [AC_MSG_NOTICE([BXI PTL include path was not found, guessing ...])
+                                 with_bxidp_includes="-I/usr/include/"
+                                 BXIDP_CPPFLAGS=$with_bxidp_includes],
+                                [BXIDP_CPPFLAGS=$with_bxidp_includes])
+
+                        save_CFLAGS="$CFLAGS"
+                        save_CPPFLAGS="$CPPFLAGS"
+
+                        CFLAGS="$BXIDP_CFLAGS $CFLAGS"
+                        CPPFLAGS="$BXIDP_CPPFLAGS $CPPFLAGS"
+
+                        AC_CHECK_HEADERS([ptlbxi.h],
+                                [bxidp_happy="yes"],
+                                [bxidp_happy="no"],
+                                [[
+                                #include <stdint.h>
+                                #include <linux/bxi/hw.h>
+                                ]]
+                                )
+
+                        AS_IF([test "x$bxidp_happy" = xyes],
+                                [AC_DEFINE([HAVE_BXIDP], 1, [Enable BXIDP support])
+                                 AC_SUBST([BXIDP_CFLAGS])
+                                 AC_SUBST([BXIDP_CPPFLAGS])],
+                                [AC_MSG_WARN([Direct PTL not found])])
+
+                       CPPFLAGS=$save_CPPFLAGS
+                       CFLAGS=$save_CFLAGS],
+                       [AC_MSG_WARN([Direct PTL was explicitly disabled])]
+                )
+
+                AM_CONDITIONAL([HAVE_BXIDP], [test "x$bxidp_happy" != xno])], 
+                [AS_IF([test "x$with_bxidp_includes" != xno],[AC_MSG_WARN([Direct PTL was requested but BXI not found])])
+                ])
         ])

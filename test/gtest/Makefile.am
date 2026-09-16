@@ -284,13 +284,16 @@ gtest_LDADD += \
 endif
 endif
 
-if HAVE_BXIHW
+if HAVE_BXIDP
 gtest_SOURCES += \
-  uct/bxi/test_bxihw.cc
+  uct/bxi/test_bxidp.cc
+gtest_LDFLAGS += \
+	$(BXI_LDFLAGS)
 gtest_CPPFLAGS += \
-	$(BXIHW_CPPFLAGS)
+	$(BXI_CPPFLAGS)
 gtest_LDADD += \
-	$(top_builddir)/src/uct/bxi/bxihw/libuct_bxihw.la
+	$(BXI_LIBS) \
+	$(top_builddir)/src/uct/bxi/libuct_bxi.la
 endif
 
 noinst_HEADERS = \

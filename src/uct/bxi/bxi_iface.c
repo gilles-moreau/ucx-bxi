@@ -625,7 +625,7 @@ ucs_status_t uct_bxi_iface_fence(uct_iface_h tl_iface, unsigned flags)
   return UCS_OK;
 }
 
-ucs_status_t
+static ucs_status_t
 uct_bxi_iface_query_tl_devices(uct_md_h                   uct_md,
                                uct_tl_device_resource_t **tl_devices_p,
                                unsigned                  *num_tl_devices_p)
@@ -819,6 +819,10 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
                           NULL) UCS_STATS_ARG(params->mode.device.dev_name));
 
   md = uct_bxi_iface_md(self);
+
+#if HAVE_BXIDP
+  self->dp.ni = (struct ptlbxi_ni *)md->nih.handle;
+#endif
 
   /* Initialize all config entries. */
   uct_bxi_iface_config_init(self, config);

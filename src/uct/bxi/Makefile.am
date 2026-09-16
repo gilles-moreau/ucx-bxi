@@ -1,5 +1,3 @@
-SUBDIRS = . bxihw
-
 if HAVE_BXI
 
 module_LTLIBRARIES = libuct_bxi.la
@@ -33,6 +31,12 @@ libuct_bxi_la_SOURCES = \
 												bxi_ep_tag.c \
 												bxi_rxq.c \
 												bxi_md.c
+
+if HAVE_BXIDP
+libuct_bxi_la_SOURCES += \
+												bxi_ep_dp.c
+endif
+
 
 PKG_CONFIG_NAME=bxi
 

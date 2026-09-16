@@ -254,7 +254,11 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_BCOPY, 0, id, ep->conn);
   ep->conn->sn++;
 
+#ifdef HAVE_BXIDP
+  status = uct_bxi_ep_dp_am_bcopy(iface, ep, op);
+#else
   status = uct_bxi_ep_execute_op(iface, ep, op);
+#endif
   if (status == UCS_ERR_NO_RESOURCE) {
     op->length = UCS_ERR_NO_RESOURCE;
     goto err_release_op;

@@ -375,6 +375,13 @@ typedef struct uct_bxi_iface {
       } mh; /* Memory handle */
     } rma;
   } rx;
+
+#if HAVE_BXIDP
+  struct {
+    struct ptlbxi_ni *ni;
+  } dp;
+#endif
+
   size_t                    num_eps;
   ucs_list_link_t           eps;      /* List of uct ep */
   khash_t(uct_bxi_conn_map) conn_map; /* Connection map */
@@ -586,7 +593,6 @@ uct_bxi_iface_complete_rndv(uct_bxi_iface_t *iface, uct_bxi_recv_block_t *block,
   }
 }
 
-extern ucs_config_field_t uct_bxi_iface_common_config_table[];
 extern ucs_config_field_t uct_bxi_iface_config_table[];
 
 #define uct_bxi_iface_md(iface) ucs_derived_of(iface->super.md, uct_bxi_md_t)
