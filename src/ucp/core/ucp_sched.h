@@ -33,6 +33,7 @@ enum {
 
 typedef struct ucp_sched_task {
   unsigned               flags;
+  int                    index; /* Index of task in sched->task_mp, used in transitive closure */
   void                  *buffer;
   size_t                 size;
   ucp_ep_h               ep;
@@ -64,6 +65,7 @@ typedef struct ucp_sched_ops {
 
 typedef struct ucp_sched {
   ucp_sched_task_t tasks_mp[UCP_SCHED_MAX_SCHEDULE_SIZE];
+  int              sched_tc[UCP_SCHED_MAX_SCHEDULE_SIZE][UCP_SCHED_MAX_SCHEDULE_SIZE]; /* transitive closure */
   unsigned         flags;
   ucs_list_link_t  schedule;
   size_t           count;
