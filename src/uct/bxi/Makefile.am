@@ -14,6 +14,11 @@ libuct_bxi_la_LDFLAGS += $(GDR_COPY_LDFAGS)
 libuct_bxi_la_LIBADD += $(GDR_COPY_LIBS)
 endif
 
+if HAVE_BXIDP
+libuct_bxi_la_CPPFLAGS += $(BXIDP_CPPFLAGS)
+endif
+
+
 noinst_HEADERS = \
 								 bxi.h \
 								 bxi_iface.h \

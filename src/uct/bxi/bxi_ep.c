@@ -249,13 +249,19 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   }
 
   /* Initialize other operation field. */
-  op->flags |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY;
-  op->ep_fb  = ep->fence_beat;
+  op->flags     |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY;
+  op->ep_fb      = ep->fence_beat;
+  op->am.buffer  = (void *)(op + 1);
   UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_BCOPY, 0, id, ep->conn);
   ep->conn->sn++;
 
 #ifdef HAVE_BXIDP
+  ucs_debug("BXIDP: txq. head=%d, hwhead=%d, tail=%d",
+            *iface->dp.ni->dev->txq.head, *iface->dp.ni->dev->txq.hw_head,
+            *iface->dp.ni->dev->txq.tail);
+  status = uct_bxi_ep_execute_op(iface, ep, op);
   status = uct_bxi_ep_dp_am_bcopy(iface, ep, op);
+  PtlAtomicSync();
 #else
   status = uct_bxi_ep_execute_op(iface, ep, op);
 #endif
