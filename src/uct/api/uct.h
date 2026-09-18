@@ -3222,6 +3222,21 @@ UCT_INLINE_API ucs_status_t uct_ep_atomic64_post(uct_ep_h ep, uct_atomic_op_t op
     return ep->iface->ops.ep_atomic64_post(ep, opcode, value, remote_addr, rkey);
 }
 
+/**
+ * @ingroup UCT_AMO
+ * @brief
+ */
+UCT_INLINE_API ucs_status_t uct_ep_atomicv_post(uct_ep_h ep, uct_atomic_op_t opcode,
+                                                uct_atomic_type_t optype,
+                                                const uct_iov_t *iov,
+                                                size_t iovcnt,
+                                                uint64_t remote_addr,
+                                                uct_rkey_t rkey, unsigned flags)
+{
+    return ep->iface->ops.ep_atomicv_post(ep, opcode, optype, iov, iovcnt, 
+                                          remote_addr, rkey, flags);
+}
+
 
 /**
  * @ingroup UCT_AMO

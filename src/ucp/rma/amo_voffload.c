@@ -17,15 +17,6 @@
 #include <ucp/proto/proto_init.h>
 #include <ucp/proto/proto_single.inl>
 
-static UCS_F_ALWAYS_INLINE void
-ucp_amo_memtype_unpack_reply_buffer(ucp_request_t *req)
-{
-  ucp_dt_contig_unpack(req->send.ep->worker, req->send.amo.reply_buffer,
-                       &req->send.amo.result, req->send.state.dt_iter.length,
-                       ucp_amo_request_reply_mem_type(req),
-                       req->send.state.dt_iter.length);
-}
-
 static void ucp_proto_amo_completion(uct_completion_t *self)
 {
   ucp_request_t *req =
@@ -34,103 +25,44 @@ static void ucp_proto_amo_completion(uct_completion_t *self)
   ucp_request_complete_send(req, self->status);
 }
 
-static void ucp_proto_amo_completion_mtype(uct_completion_t *self)
-{
-  ucp_request_t *req =
-          ucs_container_of(self, ucp_request_t, send.state.uct_comp);
-
-  ucp_amo_memtype_unpack_reply_buffer(req);
-  ucp_request_complete_send(req, self->status);
-}
-
 static UCS_F_ALWAYS_INLINE ucs_status_t
-ucp_proto_amo_progress(uct_pending_req_t *self, ucp_operation_id_t op_id,
-                       size_t op_size, int is_memtype)
+ucp_proto_amo_vec_progress(uct_pending_req_t *self)
 {
   ucp_request_t *req = ucs_container_of(self, ucp_request_t, send.uct);
   const ucp_proto_single_priv_t *spriv       = req->send.proto_config->priv;
   ucp_ep_t                      *ep          = req->send.ep;
   uint64_t                       remote_addr = req->send.amo.remote_addr;
   uct_atomic_op_t                op          = req->send.amo.uct_op;
-  uct_completion_callback_t      comp_cb;
-  ucs_memory_type_t              mem_type;
   uct_ep_h                       uct_ep;
-  uint64_t                       value;
+  ucp_datatype_iter_t            next_iter;
+  ucp_md_map_t                   md_map;
   ucs_status_t                   status;
   uct_rkey_t                     tl_rkey;
-  void                          *result;
+  uct_iov_t                      iov[1];
 
   req->send.lane = spriv->super.lane;
   uct_ep         = ucp_ep_get_fast_lane(ep, req->send.lane);
   tl_rkey = ucp_rkey_get_tl_rkey(req->send.amo.rkey, spriv->super.rkey_index);
 
   if (!(req->flags & UCP_REQUEST_FLAG_PROTO_INITIALIZED)) {
-    if (!(req->flags & UCP_REQUEST_FLAG_PROTO_AMO_PACKED)) {
-      mem_type = is_memtype ? req->send.state.dt_iter.mem_info.type :
-                              UCS_MEMORY_TYPE_HOST;
-      ucp_dt_contig_pack(req->send.ep->worker, &req->send.amo.value,
-                         req->send.state.dt_iter.type.contig.buffer, op_size,
-                         mem_type, op_size);
-      req->flags |= UCP_REQUEST_FLAG_PROTO_AMO_PACKED;
-    }
-
-    if (op_id != UCP_OP_ID_AMO_POST) {
-      comp_cb = is_memtype ? ucp_proto_amo_completion_mtype :
-                             ucp_proto_amo_completion;
-      ucp_proto_completion_init(&req->send.state.uct_comp, comp_cb);
-    }
-
-    if (op_id == UCP_OP_ID_AMO_CSWAP) {
-      ucp_dt_contig_pack(ep->worker, &req->send.amo.result,
-                         req->send.amo.reply_buffer, op_size,
-                         ucp_amo_request_reply_mem_type(req), op_size);
-    }
+    md_map = (spriv->reg_md == UCP_NULL_RESOURCE) ? 0 : UCS_BIT(spriv->reg_md);
+    status = ucp_proto_request_zcopy_init(req, md_map, ucp_proto_amo_completion,
+                                          UCT_MD_MEM_ACCESS_LOCAL_READ,
+                                          UCS_BIT(UCP_DATATYPE_CONTIG));
 
     req->flags |= UCP_REQUEST_FLAG_PROTO_INITIALIZED;
   }
 
-  value  = req->send.amo.value;
-  result = is_memtype ? &req->send.amo.result : req->send.amo.reply_buffer;
+  ucp_datatype_iter_next_iov(&req->send.state.dt_iter, SIZE_MAX,
+                             spriv->super.md_index,
+                             UCS_BIT(UCP_DATATYPE_CONTIG), &next_iter, iov, 1);
 
-  if (op_size == sizeof(uint64_t)) {
-    if (op_id == UCP_OP_ID_AMO_POST) {
-      status = UCS_PROFILE_CALL(uct_ep_atomic64_post, uct_ep, op, value,
-                                remote_addr, tl_rkey);
-    } else if (op_id == UCP_OP_ID_AMO_FETCH) {
-      status =
-              UCS_PROFILE_CALL(uct_ep_atomic64_fetch, uct_ep, op, value, result,
-                               remote_addr, tl_rkey, &req->send.state.uct_comp);
-    } else {
-      ucs_assert(op_id == UCP_OP_ID_AMO_CSWAP);
-      status = UCS_PROFILE_CALL(uct_ep_atomic_cswap64, uct_ep, value,
-                                *(uint64_t *)result, remote_addr, tl_rkey,
-                                result, &req->send.state.uct_comp);
-    }
-  } else {
-    ucs_assert(op_size == sizeof(uint32_t));
-    if (op_id == UCP_OP_ID_AMO_POST) {
-      status = UCS_PROFILE_CALL(uct_ep_atomic32_post, uct_ep, op, value,
-                                remote_addr, tl_rkey);
-    } else if (op_id == UCP_OP_ID_AMO_FETCH) {
-      status =
-              UCS_PROFILE_CALL(uct_ep_atomic32_fetch, uct_ep, op, value, result,
-                               remote_addr, tl_rkey, &req->send.state.uct_comp);
-    } else {
-      ucs_assert(op_id == UCP_OP_ID_AMO_CSWAP);
-      status = UCS_PROFILE_CALL(uct_ep_atomic_cswap32, uct_ep, value,
-                                *(uint32_t *)result, remote_addr, tl_rkey,
-                                result, &req->send.state.uct_comp);
-    }
-  }
+  status = UCS_PROFILE_CALL(
+          uct_ep_atomicv_post, uct_ep, op, req->send.amo.uct_type,
+          iov, 1, remote_addr, tl_rkey, 0);
 
   if (status == UCS_OK) {
-    /* fast path is OK */
-    if ((op_id != UCP_OP_ID_AMO_POST) && is_memtype) {
-      ucp_amo_memtype_unpack_reply_buffer(req);
-    }
     ucp_request_complete_send(req, status);
-  } else if (status == UCS_INPROGRESS) {
-    ucs_assert(op_id != UCP_OP_ID_AMO_POST);
   } else if (status == UCS_ERR_NO_RESOURCE) {
     /* keep on pending queue */
     return UCS_ERR_NO_RESOURCE;
@@ -143,23 +75,23 @@ ucp_proto_amo_progress(uct_pending_req_t *self, ucp_operation_id_t op_id,
 
 static void ucp_proto_amo_vec_probe(const ucp_proto_init_params_t *init_params)
 {
-  ucp_worker_h                   worker = init_params->worker;
   ucp_proto_single_init_params_t params = {
           .super.super         = *init_params,
           .super.latency       = 0,
           .super.overhead      = 0,
           .super.cfg_thresh    = 0,
           .super.cfg_priority  = 20,
-          .super.min_length    = sizeof(uint32_t),
-          .super.max_length    = length,
+          .super.min_length    = 0,
+          .super.max_length    = SIZE_MAX,
           .super.min_iov       = 0,
           .super.min_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
-          .super.max_frag_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
-          .super.max_iov_offs  = UCP_PROTO_COMMON_OFFSET_INVALID,
-          .super.hdr_size      = 0,
-          .super.send_op       = UCT_EP_OP_ATOMIC_POST,
-          .super.memtype_op    = UCT_EP_OP_GET_SHORT,
-          .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
+          .super.max_frag_offs =
+                  ucs_offsetof(uct_iface_attr_t, cap.atomicv.max_atomic_size),
+          .super.max_iov_offs = UCP_PROTO_COMMON_OFFSET_INVALID,
+          .super.hdr_size     = 0,
+          .super.send_op      = UCT_EP_OP_ATOMIC_POST,
+          .super.memtype_op   = UCT_EP_OP_GET_SHORT,
+          .super.flags        = UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
                          UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY |
                          UCP_PROTO_COMMON_INIT_FLAG_SINGLE_FRAG,
           .super.exclude_map  = 0,
@@ -195,6 +127,6 @@ ucp_proto_t ucp_amo_vec_proto = {.name     = "amovec",
                                  .desc     = NULL,
                                  .probe    = ucp_proto_amo_vec_probe,
                                  .query    = ucp_proto_amo_vec_query,
-                                 .progress = ucp_proto_amo_vec_progress,
+                                 .progress = {ucp_proto_amo_vec_progress},
                                  .abort = ucp_proto_abort_fatal_not_implemented,
                                  .reset = ucp_proto_request_bcopy_reset};

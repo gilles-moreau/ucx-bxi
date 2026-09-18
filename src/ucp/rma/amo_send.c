@@ -23,7 +23,8 @@
 
 
 #define UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _action) \
+                            _last_opcode, _count, _type, _last_type, \
+                            _action) \
     { \
         if (ENABLE_PARAMS_CHECK && \
             ucs_unlikely(((_remote_addr) % (_size)) != 0)) { \
@@ -43,19 +44,31 @@
                                         UCP_FEATURE_AMO32 : UCP_FEATURE_AMO64, \
                                         _action); \
         \
+        UCP_CONTEXT_CHECK_FEATURE_FLAGS((_context), ((_count) >= 1) ? \
+                                        UCP_FEATURE_VAMO : 0, \
+                                        _action); \
+        \
         if (ENABLE_PARAMS_CHECK && \
             (ucs_unlikely((_opcode) >= (_last_opcode)))) { \
             ucs_error("invalid atomic opcode %d ", _opcode); \
+            _action; \
+        } \
+        \
+        if (ENABLE_PARAMS_CHECK && \
+            (ucs_unlikely((_type) >= (_last_type)))) { \
+            ucs_error("invalid atomic type %d ", _type); \
             _action; \
         } \
     }
 
 
 #define UCP_AMO_CHECK_PARAM_NBX(_context, _remote_addr, _size, _count, \
-                                _opcode, _last_opcode, _action) \
+                                _opcode, _last_opcode, _type, _last_type, \
+                                _action) \
     { \
         UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _action); \
+                            _last_opcode, _count, _type, _last_type, \
+                            _action); \
     }
 
 
@@ -75,6 +88,13 @@ static uct_atomic_op_t ucp_uct_atomic_op_table[] = {
     [UCP_ATOMIC_OP_CSWAP]       = UCT_ATOMIC_OP_CSWAP
 };
 
+static uct_atomic_type_t ucp_uct_atomic_type_table[] = {
+    [UCP_ATOMIC_TYPE_UINT32]         = UCT_ATOMIC_TYPE_UINT32,
+    [UCP_ATOMIC_TYPE_UINT64]         = UCT_ATOMIC_TYPE_UINT64,
+    [UCP_ATOMIC_TYPE_FLOAT]          = UCT_ATOMIC_TYPE_FLOAT,
+    [UCP_ATOMIC_TYPE_DOUBLE]         = UCT_ATOMIC_TYPE_DOUBLE
+};
+
 
 static void ucp_amo_completed_single(uct_completion_t *self)
 {
@@ -86,9 +106,11 @@ static void ucp_amo_completed_single(uct_completion_t *self)
 
 static UCS_F_ALWAYS_INLINE void
 ucp_amo_init_proto(ucp_request_t *req, uct_atomic_op_t op,
-                   uint64_t remote_addr, ucp_rkey_h rkey)
+                   uint64_t remote_addr, ucp_rkey_h rkey,
+                   uct_atomic_type_t type)
 {
     req->send.amo.uct_op      = op;
+    req->send.amo.uct_type    = type;
     req->send.amo.remote_addr = remote_addr;
     req->send.amo.rkey        = rkey;
 }
@@ -105,7 +127,7 @@ ucp_amo_init_common(ucp_request_t *req, ucp_ep_h ep, uct_atomic_op_t op,
 #if UCS_ENABLE_ASSERT
     req->send.lane            = UCP_NULL_LANE;
 #endif
-    ucp_amo_init_proto(req, op, remote_addr, rkey);
+    ucp_amo_init_proto(req, op, remote_addr, rkey, UCT_ATOMIC_TYPE_LAST);
 }
 
 static UCS_F_ALWAYS_INLINE void
@@ -157,6 +179,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
 {
     ucp_worker_h worker   = ep->worker;
     ucp_context_h context = worker->context;
+    ucp_atomic_type_t type;
     ucs_status_ptr_t status_p;
     ucs_status_t status;
     ucp_request_t *req;
@@ -187,8 +210,11 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM);
     }
 
+    type = UCP_REQUEST_PARAM_FIELD(param, AMO_TYPE, type, 
+                                   UCP_ATOMIC_TYPE_LAST);
     UCP_AMO_CHECK_PARAM_NBX(context, remote_addr, op_size, count, opcode,
-                            UCP_ATOMIC_OP_LAST,
+                            UCP_ATOMIC_OP_LAST, type, 
+                            UCP_ATOMIC_TYPE_LAST,
                             return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
     UCP_WORKER_THREAD_CS_ENTER_CONDITIONAL(worker);
 
@@ -207,7 +233,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
 
     if (context->config.ext.proto_enable) {
         ucp_amo_init_proto(req, ucp_uct_atomic_op_table[opcode], remote_addr,
-                           rkey);
+                           rkey, ucp_uct_atomic_type_table[type]);
         if (param->op_attr_mask & UCP_OP_ATTR_FIELD_REPLY_BUFFER) {
             req->send.amo.reply_buffer = param->reply_buffer;
             op_id    = (opcode == UCP_ATOMIC_OP_CSWAP) ? UCP_OP_ID_AMO_CSWAP :
@@ -220,7 +246,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
             status_p = ucp_proto_request_send_op(
                     ep, &ucp_rkey_config(worker, rkey)->proto_select,
                     rkey->cfg_index, req, UCP_OP_ID_AMO_POST, buffer, count,
-                    param->datatype, op_size, param, 0, 0);
+                    param->datatype, op_size * count, param, 0, 0);
         }
         if (UCS_PTR_IS_PTR(status_p) &&
             ucs_likely(req->flags & UCP_REQUEST_FLAG_PROTO_AMO_PACKED)) {

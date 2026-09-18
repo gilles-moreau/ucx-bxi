@@ -109,6 +109,7 @@ enum {
   UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC    = UCS_BIT(16),
   UCT_BXI_IFACE_SEND_OP_TYPE_FETCH     = UCS_BIT(17),
   UCT_BXI_IFACE_SEND_OP_TYPE_CAS       = UCS_BIT(18),
+  UCT_BXI_IFACE_SEND_OP_TYPE_ATOMICV   = UCS_BIT(19),
 };
 
 #define UCT_BXI_IFACE_SEND_OP_MASK (~(UCS_MASK(10)))
@@ -188,6 +189,7 @@ typedef struct uct_bxi_iface_send_op {
     struct {
       ptl_op_t       op_code;
       uint64_t       value;
+      void *buffer;
       uint64_t       compare;
       ptl_datatype_t dt;
       uint64_t       remote_addr;

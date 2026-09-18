@@ -67,6 +67,7 @@ public:
         uint64_t            value;
         unsigned            count;
         bool                running;
+        size_t              length;
 
     private:
         void run();
@@ -91,6 +92,14 @@ public:
         return uct_ep_atomic64_post(ep, opcode, value, remote_addr, rkey);
     }
 
+    ucs_status_t atomicv_post(uct_ep_h ep, uct_atomic_op_t opcode,
+                              uct_atomic_type_t optype,
+                              const uct_iov_t *iov, size_t iovcnt, 
+                              uint64_t remote_addr, uct_rkey_t rkey) {
+        return uct_ep_atomicv_post(ep, opcode, optype, iov, iovcnt, remote_addr, 
+                                   rkey, 0);
+    }
+
     ucs_status_t atomic_fetch_nb(uct_ep_h ep, uct_atomic_op_t opcode,
                                  uint32_t value, uint32_t *result,
                                  uint64_t remote_addr, uct_rkey_t rkey,
@@ -109,6 +118,13 @@ public:
     ucs_status_t atomic_op(uct_ep_h ep, worker& worker, const mapped_buffer& recvbuf,
                            uint64_t *result, completion *comp) {
         return atomic_post(ep, opcode, (T)worker.value, recvbuf.addr(), recvbuf.rkey());
+    }
+
+    template <typename T, uct_atomic_op_t opcode, uct_atomic_type_t optype>
+    ucs_status_t atomicv_op(uct_ep_h ep, worker& worker, const mapped_buffer& sendbuf,
+                            const mapped_buffer& recvbuf, completion *comp) {
+        return atomicv_post(ep, opcode, optype, sendbuf.iov(), 1, 
+                            recvbuf.addr(), recvbuf.rkey());
     }
 
     template <typename T, uct_atomic_op_t opcode>

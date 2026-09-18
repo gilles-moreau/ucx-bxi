@@ -164,7 +164,10 @@ enum ucp_feature {
      * @ref ucp_mem_map and packed by @ref ucp_memh_pack with the flag
      * @ref UCP_MEMH_PACK_FLAG_EXPORT and use it for local operations
      */
-    UCP_FEATURE_EXPORTED_MEMH = UCS_BIT(7)
+    UCP_FEATURE_EXPORTED_MEMH = UCS_BIT(7),
+
+    /** Request vector atomic operations support */
+    UCP_FEATURE_VAMO          = UCS_BIT(8),
 };
 
 
@@ -686,6 +689,21 @@ typedef enum {
     UCP_ATOMIC_OP_LAST
 } ucp_atomic_op_t;
 
+/**
+ * @ingroup UCP_COMM
+ * @brief Atomic type requested for ucp_atomic_op_nbx
+ *
+ * This enumeration defines which atomic type should be
+ * used by the @ref ucp_atomic_op_nbx routine.
+ */
+typedef enum {
+    UCP_ATOMIC_TYPE_UINT32,   /**< 32 bits unsigned integer */
+    UCP_ATOMIC_TYPE_UINT64,   /**< 64 bits unsigned integer */
+    UCP_ATOMIC_TYPE_FLOAT,    /**< 32 bits floating point */
+    UCP_ATOMIC_TYPE_DOUBLE,   /**< 64 bits floating point  */
+    UCP_ATOMIC_TYPE_LAST
+} ucp_atomic_type_t;
+
 
 /**
  * @ingroup UCP_COMM
@@ -723,6 +741,7 @@ typedef enum {
     UCP_OP_ATTR_FIELD_MEMH          = UCS_BIT(8),  /**< memory handle field */
     UCP_OP_ATTR_FIELD_SCHEDH        = UCS_BIT(9),  /**< schedule handle field */
     UCP_OP_ATTR_FIELD_EPH           = UCS_BIT(10), /**< endpoint handle field */
+    UCP_OP_ATTR_FIELD_AMO_TYPE      = UCS_BIT(11), /**< primitive type field */
 
     UCP_OP_ATTR_FLAG_NO_IMM_CMPL    = UCS_BIT(16), /**< Deny immediate completion,
                                                         i.e NULL cannot be returned.
@@ -1789,6 +1808,13 @@ typedef struct {
     ucp_datatype_t datatype;
 
     /**
+     * Primitive type of the data in the buffer. 
+     * Needed for offloaded atomic operation when the transport supports 
+     * it. Supported only for BXI.
+     */
+    ucp_atomic_type_t type;
+
+    /**
      * Pointer to user data passed to callback function.
      */
     void          *user_data;
@@ -1844,10 +1870,7 @@ typedef struct {
      * Endpoint handle.
      * Endpoint is required by the receive operation in case the size of the 
      * message exceeds rendez-vous threshold. It is used to set up the GET 
-     * operation. Note that this can be used only actual message size matches 
-     * the receive size which thus prevents the use during usual MPI P2P 
-     * communication. However, it is suited for collectives since they guarranty 
-     * same message size.
+     * operation for BXI. 
      */
     ucp_ep_h reply_ep;
 

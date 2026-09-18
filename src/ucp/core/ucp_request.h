@@ -358,6 +358,7 @@ struct ucp_request {
                     uint64_t              result;      /* Atomic result */
                     void                  *reply_buffer;
                     uct_atomic_op_t       uct_op;      /* Requested UCT AMO */
+                    uct_atomic_type_t     uct_type;    /* Primitive data type */
                 } amo;
 
                 struct {

@@ -8,6 +8,13 @@
 #include <ucs/profile/profile.h>
 #include <uct/base/uct_log.h>
 
+ptl_datatype_t uct_bxi_atomic_type_table[] = {
+        [UCT_ATOMIC_TYPE_UINT32] = PTL_UINT32_T,
+        [UCT_ATOMIC_TYPE_UINT64] = PTL_UINT64_T,
+        [UCT_ATOMIC_TYPE_FLOAT]  = PTL_FLOAT,
+        [UCT_ATOMIC_TYPE_DOUBLE] = PTL_DOUBLE,
+};
+
 ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_ADD] = PTL_SUM,   [UCT_ATOMIC_OP_AND] = PTL_BAND,
         [UCT_ATOMIC_OP_OR] = PTL_BOR,    [UCT_ATOMIC_OP_XOR] = PTL_BXOR,
@@ -152,6 +159,12 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
                     (uint64_t)&op->atomic.value, op->length, ep->dev_addr.pid,
                     ep->iface_addr.rma, 0, op->atomic.remote_addr, op, 0,
                     &op->atomic.compare, PTL_CSWAP, op->atomic.dt));
+    break;
+  case UCT_BXI_IFACE_SEND_OP_TYPE_ATOMICV:
+    status = uct_bxi_wrap(PtlAtomic(
+            iface->tx.mdh, (uint64_t)&op->atomic.buffer, op->length, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
+            0, op->atomic.op_code, op->atomic.dt));
     break;
   default:
     ucs_error("BXI: unsupported operation. flags=%lx",
@@ -681,6 +694,46 @@ ucs_status_t uct_bxi_ep_atomic64_fetch(uct_ep_h tl_ep, uct_atomic_op_t opcode,
   return uct_bxi_ep_atomic_fetch_common(tl_ep, opcode, value, result,
                                         sizeof(uint64_t), PTL_UINT64_T,
                                         remote_addr, rkey, comp);
+}
+ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, uct_atomic_op_t opcode,
+                                     uct_atomic_type_t optype, void *buffer,
+                                     size_t length, uint64_t remote_addr,
+                                     uct_rkey_t uct_rkey, unsigned flags)
+{
+  ucs_status_t     status;
+  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
+  uct_bxi_iface_send_op_t *op;
+
+  UCT_BXI_CHECK_EP(ep);
+  UCT_BXI_CHECK_IFACE_RES(iface, ep);
+
+  /* First, get OP while setting appropriate completion callback */
+  UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
+                               uct_bxi_send_ato_op_handler, length);
+
+  /* Store the value since the Atomic call needs an address. */
+  op->ep_fb              = ep->fence_beat;
+  op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC;
+  op->length             = length;
+  op->atomic.dt          = uct_bxi_atomic_type_table[optype];
+  op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
+  op->atomic.buffer      = buffer;
+  op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
+
+  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: PtlAtomic request return %d", status);
+  }
+
+  /* Append operation descriptor to completion queue. */
+  uct_bxi_ep_add_send_op(ep, op);
+  uct_bxi_ep_enable_flush(ep);
+
+  UCT_TL_EP_STAT_ATOMIC(&ep->super);
+
+  return status;
 }
 
 ucs_status_t uct_bxi_ep_flush(uct_ep_h tl_ep, unsigned flags,

@@ -124,6 +124,15 @@ typedef ucs_status_t (*uct_ep_atomic64_post_func_t)(uct_ep_h ep,
                                                     uint64_t remote_addr,
                                                     uct_rkey_t rkey);
 
+typedef ucs_status_t (*uct_ep_atomicv_post_func_t)(uct_ep_h ep,
+                                                   unsigned opcode,
+                                                   unsigned optype,
+                                                   const uct_iov_t *iov,
+                                                   size_t iovcnt,
+                                                   uint64_t remote_addr,
+                                                   uct_rkey_t rkey,
+                                                   unsigned flags);
+
 typedef ucs_status_t (*uct_ep_atomic32_fetch_func_t)(uct_ep_h ep,
                                                      unsigned opcode,
                                                      uint32_t value,
@@ -336,6 +345,7 @@ typedef struct uct_iface_ops {
     uct_ep_atomic_cswap32_func_t        ep_atomic_cswap32;
     uct_ep_atomic32_post_func_t         ep_atomic32_post;
     uct_ep_atomic64_post_func_t         ep_atomic64_post;
+    uct_ep_atomicv_post_func_t          ep_atomicv_post;
     uct_ep_atomic32_fetch_func_t        ep_atomic32_fetch;
     uct_ep_atomic64_fetch_func_t        ep_atomic64_fetch;
 
