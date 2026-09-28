@@ -207,6 +207,7 @@ typedef ucs_status_t (*uct_iface_tag_sched_recv_func_t)(uct_iface_h        iface
 
 typedef ucs_status_t (*uct_iface_tag_sched_send_func_t)(uct_iface_h iface,
                                                         uct_gop_h *gop_p, 
+                                                        uct_gop_h *tgop_p,
                                                         uct_gop_h *gops,
                                                         size_t gop_cnt);
 

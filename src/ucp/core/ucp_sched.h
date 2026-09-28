@@ -39,6 +39,7 @@ typedef struct ucp_sched_task {
   ucp_ep_h               ep;
   uct_tag_t              tag;
   uct_gop_h              comph; /* Transport completion handle */
+  uct_gop_h              trigh; /* Transport completion handle used to trigger send operations */
   ucs_list_link_t        elem;  /* Element in the schedule list */
   ucs_queue_elem_t       qelem; /* Element in the ready queue */
   uct_pending_req_t     *pend_req; /* Pending request to progress send operation */

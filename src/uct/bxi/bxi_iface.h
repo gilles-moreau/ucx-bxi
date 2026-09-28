@@ -4,6 +4,8 @@
 #include "bxi_conn.h"
 #include "bxi_md.h"
 #include "bxi_rxq.h"
+#include "portals4.h"
+#include "uct/api/uct.h"
 
 #include <ucs/algorithm/crc.h>
 #include <uct/base/uct_iov.inl>
@@ -333,6 +335,7 @@ typedef struct uct_bxi_iface {
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
     ucs_mpool_t         recv_block_mp;   /* MP of exp block */
+    ucs_mpool_t         send_block_mp;   /* MP of MD for offloaded send */
     uct_bxi_conn_ooo_t *unexp_ooo;       /* Cached unexp ooo, used for cancel */
     unsigned int        rndv_hdr_offset; /* Offset of rndv hdr in payload */
   } tm;                                  /* Tag matching */

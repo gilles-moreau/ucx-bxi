@@ -287,6 +287,7 @@ ucp_proto_tag_offload_zcopy_send_func(ucp_request_t *req,
 
     if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
         req->send.state.uct_comp.gop = req->task->comph;
+        req->send.state.uct_comp.tgop = req->task->trigh;
         flags = UCT_TAG_SCHEDULE;
     }
 

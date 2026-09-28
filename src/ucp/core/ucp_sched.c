@@ -348,7 +348,7 @@ ucp_sched_offload_send(ucp_sched_h sched, ucp_sched_task_t *stask)
     stask->flags |= UCP_SCHED_TASK_RELEASE_SCHED;
   }
 
-  return uct_iface_tag_sched_send(wiface->iface, &stask->comph, gops, length);
+  return uct_iface_tag_sched_send(wiface->iface, &stask->comph, &stask->trigh, gops, length);
 }
 
 ucp_sched_task_h ucp_sched_send_task_init(ucp_sched_h sched, ucp_request_t *req) {
@@ -579,9 +579,20 @@ void ucp_sched_fini(ucp_sched_h sched)
   ucs_callbackq_remove_safe(&sched->worker->uct->progress_q, sched->cbq_id);
 
   for (int i = 0; i < sched->count; i++) {
-    if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_RELEASE_SCHED) {
-      uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
-                                  sched->tasks_mp[i].comph);
+    if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_SEND) {
+      if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_OFFLOADED) {
+        uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
+                                    sched->tasks_mp[i].comph);
+      }
+      if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_RELEASE_SCHED) {
+        uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
+                                    sched->tasks_mp[i].trigh);
+      }
+    } else {
+      if (sched->tasks_mp[i].flags & UCP_SCHED_TASK_RELEASE_SCHED) {
+        uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
+                                    sched->tasks_mp[i].comph);
+      }
     }
   }
 

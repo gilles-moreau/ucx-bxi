@@ -242,6 +242,72 @@ static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
         .obj_cleanup   = uct_bxi_iface_recv_block_cleanup,
         .obj_str       = NULL};
 
+static void uct_bxi_iface_send_block_init(ucs_mpool_t *mp, void *obj,
+                                          void *chunk)
+{
+  uct_bxi_iface_t *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tm.send_block_mp);
+  ucs_status_t          status;
+  uct_bxi_recv_block_t *block = obj;
+  ptl_md_t              md;
+
+  block->flags = 0;
+  block->size  = 0;
+  block->start = NULL;
+  block->rxq   = iface->rx.tag.q;
+  block->list  = PTL_PRIORITY_LIST;
+  block->meh   = PTL_INVALID_HANDLE;
+
+  block->eager_limit = iface->config.tm.eager_limit;
+
+  /* Initialize the byte counter for rendez-vous offload or scheduling. */
+  block->ct_value = 0;
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cth));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not allocate counter.");
+  }
+
+  /* Initialize the MD for eager offload. */
+  md.eq_handle = iface->tx.eqh;
+  md.length    = PTL_SIZE_MAX;
+  //NOTE: We do not count bytes because we do not know in advance the
+  //      actual size that will be read by the PUT operation.
+  md.options   = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_SEND_DISABLE;
+  md.start     = 0;
+  md.ct_handle = block->cth;
+
+  status = uct_bxi_wrap(
+          PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &block->mdh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not bind MD.");
+  }
+}
+
+static void uct_bxi_iface_send_block_cleanup(ucs_mpool_t *mp, void *obj)
+{
+  uct_bxi_recv_block_t *block = obj;
+  ptl_ct_event_t        ct_value;
+
+  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
+  if (ct_value.success != block->ct_value) {
+    ucs_error("BXI: error tracking ct value. exp=%lu, val=%lu",
+              ct_value.success, block->ct_value);
+  }
+
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlCTFree(block->cth));
+
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlMDRelease(block->mdh));
+}
+
+static ucs_mpool_ops_t uct_bxi_send_block_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_block_init,
+        .obj_cleanup   = uct_bxi_iface_send_block_cleanup,
+        .obj_str       = NULL};
+
 static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
 {
   ucs_status_t     status;
@@ -377,6 +443,23 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto err_release_rxq;
   }
 
+  /* Pool of send blocks for sending messages. */
+  ucs_mpool_params_reset(&mp_param);
+  mp_param.max_chunk_size =
+          iface->config.tm.max_tags * sizeof(uct_bxi_recv_block_t);
+  mp_param.elems_per_chunk = mp_param.max_elems =
+          ucs_min(uct_bxi_iface_md(iface)->config.limits.max_entries,
+                  iface->config.tm.max_tags);
+  mp_param.elem_size   = sizeof(uct_bxi_recv_block_t);
+  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops         = &uct_bxi_send_block_mpool_ops;
+  mp_param.name        = "tag-send-block";
+  mp_param.grow_factor = 1;
+  status               = ucs_mpool_init(&mp_param, &iface->tm.send_block_mp);
+  if (status != UCS_OK) {
+    goto err_release_rxq;
+  }
+
   /* Create RXQ for rendez-vous blocks, see uct_bxi_ep_tag_rndv_zcopy for 
    * details.*/
   rxq_param.flags = UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL;
@@ -437,6 +520,7 @@ err_clean_ctrl_rxq:
   uct_bxi_rxq_fini(iface->rx.ctrl.q);
 err_release_blockrecvmp:
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 0);
+  ucs_mpool_cleanup(&iface->tm.send_block_mp, 0);
 err_release_rxq:
   uct_bxi_rxq_fini(iface->rx.tag.q);
 err:

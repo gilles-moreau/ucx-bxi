@@ -1,4 +1,5 @@
 #include "bxi_ep.h"
+#include "bxi.h"
 #include "bxi_iface.h"
 #include "bxi_log.h"
 
@@ -13,6 +14,18 @@ ptl_op_t uct_bxi_atomic_op_table[] = {
         [UCT_ATOMIC_OP_OR] = PTL_BOR,    [UCT_ATOMIC_OP_XOR] = PTL_BXOR,
         [UCT_ATOMIC_OP_SWAP] = PTL_SWAP, [UCT_ATOMIC_OP_CSWAP] = PTL_CSWAP,
 };
+
+ptl_size_t gop_get_ct_value(uct_bxi_gop_t *gop) {
+  ptl_ct_event_t ct_value;
+  PtlCTGet(gop->cth, &ct_value);
+  return ct_value.success;
+}
+
+ptl_size_t block_get_ct_value(uct_bxi_recv_block_t *block) {
+  ptl_ct_event_t ct_value;
+  PtlCTGet(block->cth, &ct_value);
+  return ct_value.success;
+}
 
 static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
                                           uct_bxi_ep_t            *ep,

@@ -1,7 +1,10 @@
+#include "bxi.h"
 #include "bxi_ep.h"
 #include "bxi_iface.h"
 #include "bxi_log.h"
 #include "bxi_rxq.h"
+#include "portals4.h"
+#include "ucs/sys/compiler_def.h"
 
 #include <sys/types.h>
 #include <time.h>
@@ -183,6 +186,8 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  uct_bxi_gop_t   *tgop  = ucs_derived_of(comp->tgop, uct_bxi_gop_t);
+  uct_bxi_recv_block_t    *block;
   uct_bxi_iface_send_op_t *op;
   ptl_hdr_data_t           hdr;
 
@@ -208,11 +213,26 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   UCT_BXI_TAG_HDR_SET(hdr, UCT_BXI_TAG_ID_EAGER, op->length, ep->conn);
   ep->conn->sn++;
 
+
+  // TODO Use a specific MD to have a counter and use it to offload send->send deps
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
+        block = ucs_mpool_get_inline(&iface->tm.send_block_mp);
+    if (ucs_unlikely(block == NULL)) {
+      status = UCS_ERR_NO_RESOURCE;
+      goto err;
+    }
+
+    status = uct_bxi_wrap(
+            PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC, block->cth, block->ct_value+1));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: could not trig ct inc.");
+    }
+    gop->ct_value += 1;
+
     status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mdh, (ptl_size_t)op->tag.buffer, op->length, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
-            gop->ct_value));
+            block->mdh, (ptl_size_t)op->tag.buffer, op->length, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, tgop->cth,
+            tgop->ct_value));
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->tag.buffer,
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -274,6 +294,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  uct_bxi_gop_t   *tgop  = ucs_derived_of(comp->tgop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
   ptl_me_t                 me;
   uct_bxi_recv_block_t    *block;
@@ -309,6 +330,23 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   me.options           = PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
                PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_MAY_ALIGN |
                PTL_ME_IS_ACCESSIBLE | PTL_ME_USE_ONCE;
+  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
+    /* Counter is needed. */
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
+    me.ct_handle  = block->cth;
+    me.options   |= PTL_ME_EVENT_CT_COMM | PTL_ME_EVENT_CT_OVERFLOW;
+
+    /* Triggered increment completion gop counter */
+    status = uct_bxi_wrap(
+            PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC, block->cth, block->ct_value+1));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: could not trig ct inc.");
+    }
+    gop->ct_value += 1;
+    // For debugging purpose
+    // TODO delete the following line
+    gop->block = block;
+  }
 
   /* Then, post the memory entry to the CTRL RXQ. Target will execute 
    * a GET operation on this. */
@@ -319,6 +357,7 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   if (status != UCS_OK) {
     goto err_release_block;
   }
+  // FIXME Why isn't the block counter incremented when the send is completed?
 
   /* Now, allocate a send descriptor and pack rendez-vous metadata. 
    * NOTE: source address should be the original address because target 
@@ -355,13 +394,13 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
-    ucs_assert(gop != NULL);
-    ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
+    ucs_assert(tgop != NULL);
+    ucs_assert(!PtlHandleIsEqual(tgop->cth, PTL_INVALID_HANDLE));
 
     status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(op + 1),
                                           size, PTL_ACK_REQ, ep->dev_addr.pid,
                                           ep->iface_addr.tag, tag, 0, op, hdr,
-                                          gop->cth, gop->ct_value));
+                                          tgop->cth, tgop->ct_value));
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
@@ -768,23 +807,31 @@ err:
 }
 
 ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
-                                          uct_gop_h *gop_p, uct_gop_h *tl_gops,
+                                          uct_gop_h *gop_p, uct_gop_h *tgop_p, uct_gop_h *tl_gops,
                                           size_t gop_cnt)
 {
   ucs_status_t     status = UCS_OK;
   uct_bxi_iface_t *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
   uct_bxi_gop_t   *gop;
+  uct_bxi_gop_t   *tgop;
   uct_bxi_gop_t   *tmp_gop;
   size_t           i;
 
+  gop = ucs_mpool_get(&iface->tm.gop_mp);
+  if (gop == NULL) {
+    status = UCS_ERR_NO_RESOURCE;
+    goto err;
+  }
+  *gop_p = (uct_gop_h)gop;
+  
   if (gop_cnt == 0) {
-    *gop_p = NULL;
+    *tgop_p = NULL;
     return UCS_OK;
   }
 
   if (gop_cnt > 1) {
-    gop = ucs_mpool_get(&iface->tm.gop_mp);
-    if (gop == NULL) {
+    tgop = ucs_mpool_get(&iface->tm.gop_mp);
+    if (tgop == NULL) {
       status = UCS_ERR_NO_RESOURCE;
       goto err;
     }
@@ -794,18 +841,18 @@ ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
 
       ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
 
-      status = uct_bxi_wrap(PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC,
+      status = uct_bxi_wrap(PtlTriggeredCTInc(tgop->cth, UCT_BXI_CT_INC,
                                               tmp_gop->cth, tmp_gop->ct_value));
       if (status != UCS_OK) {
         ucs_fatal("BXI: failed setting trig inc.");
       }
-      gop->ct_value++;
+      tgop->ct_value++;
     }
   } else {
-    gop = ucs_derived_of(tl_gops[0], uct_bxi_gop_t);
+    tgop = ucs_derived_of(tl_gops[0], uct_bxi_gop_t);
   }
 
-  *gop_p = (uct_gop_h)gop;
+  *tgop_p = (uct_gop_h)tgop;
 
 err:
   return status;

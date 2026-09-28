@@ -51,6 +51,32 @@ typedef struct uct_bxi_recv_block {
   uint64_t                 pad;      /* Padding for zcopy */
 } uct_bxi_recv_block_t;
 
+typedef struct uct_bxi_send_block {
+  unsigned              flags;
+  const void           *orig;        /* Original address, GPU address */
+  void                 *start;       /* Address of the receive block, may be 
+                                        GDR mapped address for GPU mem */
+  ssize_t               size;        /* Size of the receive block */
+  size_t                send_size;   /* Actual size sent on the receive block */
+  size_t                eager_limit; /* Cached eager limit for easy access 
+                                        in release */
+  uct_bxi_rxq_t        *rxq;         /* Back reference to the RX Queue */
+  ucs_list_link_t       c_elem;      /* Element in the cancel list */
+  uct_tag_t             tag;         /* Needed in case block is cancelled */
+  uct_tag_t             stag;        /* Send tag */
+  ptl_list_t            list;        /* overflow or priority list */
+  uct_bxi_block_handler handler;     /* Receive block handler on event */
+  uct_tag_context_t    *ctx;         /* Tag context provided by upper layer */
+  ptl_handle_me_t       meh;         /* Memory Entry handle */
+  ptl_handle_ct_t       cth;         /* Counter handle associated to 
+                                        the block */
+  ptl_handle_md_t       mdh;         /* Memory Descriptor used for GET */
+  ptl_size_t            ct_value;    /* SW counter tracking HW counter */
+  int                   pending_ooo; /* Number of pending ooo */
+  uct_bxi_iface_send_op_t *op;       /* OP in case of GET protocol */
+  uint64_t                 pad;      /* Padding for zcopy */
+} uct_bxi_send_block_t;
+
 enum {
   UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL = UCS_BIT(1),
 };

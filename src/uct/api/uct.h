@@ -1768,6 +1768,7 @@ struct uct_completion {
                                             be initialized with UCS_OK before
                                             first operation is started. */
     uct_gop_h                 gop;     /**< Generic operation handle. */
+    uct_gop_h                 tgop;    /**< Generic operation handle triggering operation */
 };
 
 
@@ -3701,10 +3702,11 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_sched_recv(uct_iface_h        iface,
  */
 UCT_INLINE_API ucs_status_t uct_iface_tag_sched_send(uct_iface_h iface,
                                                      uct_gop_h *gop_p,
+                                                     uct_gop_h *tgop_p,
                                                      uct_gop_h *gops,
                                                      size_t gop_cnt)
 {
-    return iface->ops.iface_tag_sched_send(iface, gop_p, gops, gop_cnt);
+    return iface->ops.iface_tag_sched_send(iface, gop_p, tgop_p, gops, gop_cnt);
 }
 
 /**

@@ -3,6 +3,7 @@
 
 #include "bxi_iface.h"
 #include "bxi_md.h"
+#include "uct/api/uct_def.h"
 
 #include <ucs/debug/debug_int.h>
 #include <uct/api/uct.h>
@@ -145,8 +146,13 @@ ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
                                           uct_gop_h         *gop_p);
 
 ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
-                                          uct_gop_h *tl_gop, uct_gop_h *tl_gops,
+                                          uct_gop_h *tl_gop, uct_gop_h *tl_tgop, 
+                                          uct_gop_h *tl_gops,
                                           size_t gop_cnt);
+
+/* DEBUG FUNCTION, DO NOT COMMIT IT */
+// TODO delete this function. 
+ptl_size_t gop_get_ct_value(uct_bxi_gop_t *gop);
 
 void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop);
 
