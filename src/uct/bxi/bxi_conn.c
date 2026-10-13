@@ -64,6 +64,7 @@ ucs_status_t uct_bxi_conn_insert(uct_bxi_iface_t *iface, uct_bxi_conn_t *conn,
       ucs_mpool_put(ooo_tmp);
     }
   } else if (err == UCS_FRAG_LIST_INSERT_SLOW) {
+    ucs_debug("BXIDP: insert slow. sn=%d", sn);
     block->pending_ooo++;
   } else if (err == UCS_FRAG_LIST_INSERT_FAIL) {
     ucs_error("BXI: failed msg inserted. sn=%d", sn);

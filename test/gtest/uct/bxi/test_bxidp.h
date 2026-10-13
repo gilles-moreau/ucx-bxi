@@ -16,5 +16,6 @@ class test_uct_bxidp : public uct_test {
   }
 
     protected:
-  entity *m_e1, *m_e2;
+  entity  *m_e1, *m_e2;
+  unsigned m_am_count;
 };

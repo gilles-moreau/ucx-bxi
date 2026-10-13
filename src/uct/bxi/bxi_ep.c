@@ -79,9 +79,11 @@ static void uct_bxi_ep_flush_comp_op_handler(uct_bxi_iface_send_op_t *op,
   uct_bxi_ep_remove_from_queue(op);
 }
 
-UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_ep_execute_op, (iface, ep, op),
-                 uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
-                 uct_bxi_iface_send_op_t *op)
+//NOTE: Function should be inlined. Ideally, we dont want to store all operation
+//      parameters (buffer, length, tag, hdr,...) but since the operation can be
+//      fenced and scheduled later, we need to...
+ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                                   uct_bxi_iface_send_op_t *op)
 {
   ucs_status_t status;
 
@@ -94,6 +96,9 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_bxi_ep_execute_op, (iface, ep, op),
     goto out;
   };
 
+  //NOTE: switch cannot be optimized away since op->flags is not a constant.
+  //      To improve implementation, we should be op_execute inlined and have
+  //      a specific dedicated op type.
   switch (op->flags & UCT_BXI_IFACE_SEND_OP_MASK) {
   case UCT_BXI_IFACE_SEND_OP_TYPE_AM_SHORT:
     status = uct_bxi_wrap(PtlPut(iface->tx.short_mdh, (ptl_size_t)op->am.buffer,
@@ -252,19 +257,11 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
   op->flags     |= UCT_BXI_IFACE_SEND_OP_TYPE_AM_BCOPY;
   op->ep_fb      = ep->fence_beat;
   op->am.buffer  = (void *)(op + 1);
+  op->am.tag     = 0;
   UCT_BXI_AM_HDR_SET(op->am.hdr, UCT_BXI_AM_HANDLER_BCOPY, 0, id, ep->conn);
   ep->conn->sn++;
 
-#ifdef HAVE_BXIDP
-  ucs_debug("BXIDP: txq. head=%d, hwhead=%d, tail=%d",
-            *iface->dp.ni->dev->txq.head, *iface->dp.ni->dev->txq.hw_head,
-            *iface->dp.ni->dev->txq.tail);
   status = uct_bxi_ep_execute_op(iface, ep, op);
-  status = uct_bxi_ep_dp_am_bcopy(iface, ep, op);
-  PtlAtomicSync();
-#else
-  status = uct_bxi_ep_execute_op(iface, ep, op);
-#endif
   if (status == UCS_ERR_NO_RESOURCE) {
     op->length = UCS_ERR_NO_RESOURCE;
     goto err_release_op;
@@ -283,6 +280,7 @@ ssize_t uct_bxi_ep_am_bcopy(uct_ep_h tl_ep, uint8_t id,
 
   return op->length;
 err_release_op:
+  ep->conn->sn--;
   ucs_mpool_put(op);
 err:
   return op->length;
@@ -340,6 +338,11 @@ ucs_status_t uct_bxi_ep_am_zcopy(uct_ep_h tl_ep, uint8_t id, const void *header,
                          UCT_AM_TRACE_TYPE_SEND, id,
                          (char *)op->am.buffer - header_length, op->length);
 
+  return status;
+
+err_release_op:
+  ucs_mpool_put(op);
+  ep->conn->sn--;
   return status;
 }
 
@@ -1015,6 +1018,13 @@ UCS_CLASS_INIT_FUNC(uct_bxi_ep_t, const uct_ep_params_t *params)
 
   /* Append endpoint to interface list. */
   ucs_list_add_head(&iface->eps, &self->elem);
+
+#ifdef HAVE_BXIDP
+  /* Set caches slot to win some cycles */
+  if (iface->dp.enabled) {
+    uct_bxi_ep_dp_cache_slot(iface, self);
+  }
+#endif
 
   iface->num_eps++;
 

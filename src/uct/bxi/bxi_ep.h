@@ -25,6 +25,15 @@ typedef struct uct_bxi_ep {
   ucs_list_link_t       send_ops;   /* Queue of outstanding OPs */
   uint16_t              fence_beat; /* Endpoint local fence beat */
   ucs_queue_head_t      pending_q;  /* Head of pending queue */
+#ifdef HAVE_BXIDP
+  struct {
+    uint64_t s0;
+    uint64_t s1;
+    uint64_t s2;
+    uint64_t s3;
+    uint64_t s4;
+  } inl;
+#endif
 } uct_bxi_ep_t;
 
 static UCS_F_ALWAYS_INLINE void *uct_bxi_resolve_laddr(void *local_addr,
@@ -212,8 +221,8 @@ void uct_bxi_ep_pending_purge_cb(uct_pending_req_t *self, void *arg);
 void uct_bxi_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
                               void *arg);
 
-ucs_status_t uct_bxi_ep_dp_am_bcopy(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
-                                    uct_bxi_iface_send_op_t *op);
+ucs_status_t uct_bxi_ep_dp_am_short(uct_ep_h tl_ep, uint8_t am_id, uint64_t hdr,
+                                    const void *buffer, unsigned length);
 
 static UCS_F_ALWAYS_INLINE void
 uct_bxi_iface_op_res(uct_bxi_iface_t *iface, uct_bxi_iface_send_op_t *op)

@@ -290,7 +290,8 @@ gtest_SOURCES += \
 gtest_LDFLAGS += \
 	$(BXI_LDFLAGS)
 gtest_CPPFLAGS += \
-	$(BXI_CPPFLAGS)
+	$(BXI_CPPFLAGS) \
+	$(BXIDP_CPPFLAGS)
 gtest_LDADD += \
 	$(BXI_LIBS) \
 	$(top_builddir)/src/uct/bxi/libuct_bxi.la

@@ -11,6 +11,10 @@
 
 #include <ucs/sys/math.h>
 
+#if HAVE_BXIDP
+#include <ptlbxi.h>
+#endif
+
 #define UCT_BXI_IFACE_MAX_EPS  8192
 #define UCT_BXI_IFACE_OVERHEAD 75e-9
 #define UCT_BXI_IFACE_LATENCY  ucs_linear_func_make(1000e-9, 0)
@@ -108,6 +112,9 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
          "Number of operation context allocable (default: 128)",
          ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
+
+        {"DP_ENABLE", "n", "Enable Direct Portals4",
+         ucs_offsetof(uct_bxi_iface_config_t, enable_dp), UCS_CONFIG_TYPE_BOOL},
 
         {NULL},
 };
@@ -460,10 +467,18 @@ static UCS_F_ALWAYS_INLINE void uct_bxi_iface_check_flush(uct_bxi_ep_t *ep)
   }
 }
 
-static UCS_F_ALWAYS_INLINE int
+static int UCS_F_ALWAYS_INLINE
 uct_bxi_iface_op_is_inlined(uct_bxi_iface_t *iface, ptl_size_t length)
 {
   return length <= iface->config.max_inline;
+}
+
+void uct_bxi_iface_progress_hw_head(uct_bxi_iface_t *iface)
+{
+  struct ptlbxi_ni *ni = (struct ptlbxi_ni *)iface->dp.ni;
+  struct ptlbxi_cq *q  = &ni->dev->txq;
+
+  *q->head = *q->hw_head;
 }
 
 /* Poll tx is both used for interface progression. Only events 
@@ -477,6 +492,12 @@ unsigned uct_bxi_iface_poll_tx(uct_bxi_iface_t *iface)
   ptl_event_t                   ev;
   uct_bxi_ep_t                 *ep;
   uct_pending_req_priv_queue_t *priv;
+
+#ifdef HAVE_BXIDP
+  if (iface->dp.enabled) {
+    uct_bxi_iface_progress_hw_head(iface);
+  }
+#endif
 
   while (1) {
     ret = PtlEQGet(iface->tx.eqh, &ev);
@@ -679,6 +700,8 @@ uct_bxi_iface_config_init(uct_bxi_iface_t              *iface,
   iface->config.device_addr_size = sizeof(uct_bxi_device_addr_t);
   iface->config.iface_addr_size  = sizeof(uct_bxi_iface_addr_t);
   iface->config.ep_addr_size     = sizeof(uct_bxi_ep_addr_t);
+
+  iface->config.enable_dp = config->enable_dp;
 }
 
 void uct_bxi_iface_send_init(ucs_mpool_t *mp, void *obj, void *chunk)
@@ -820,12 +843,20 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   md = uct_bxi_iface_md(self);
 
-#if HAVE_BXIDP
-  self->dp.ni = (struct ptlbxi_ni *)md->nih.handle;
-#endif
-
   /* Initialize all config entries. */
   uct_bxi_iface_config_init(self, config);
+
+  self->dp.enabled = 0;
+  if (self->config.enable_dp) {
+#if HAVE_BXIDP
+    self->dp.ni                       = (uct_bxi_ptlni_t *)md->nih.handle;
+    self->dp.enabled                  = 1;
+    self->dp.dummy.comp.comp          = UINT_MAX;
+    self->dp.dummy.flags              = UCT_BXI_IFACE_SEND_OP_FLAG_INUSE;
+    self->super.super.ops.ep_am_short = uct_bxi_ep_dp_am_short;
+    self->super.super.ops.ep_am_bcopy = uct_bxi_ep_dp_am_bcopy;
+#endif
+  }
 
   /* Create Event Queue used for RX events. */
   status = uct_bxi_wrap(
@@ -873,13 +904,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   /* Before setting TX operations, create the Memory Descriptor that
    * spans the whole virtual memory range. */
-  ptl_md.start  = NULL;
-  ptl_md.length = PTL_SIZE_MAX;
-#if HAVE_BXI3_R6LITE
-  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
-#else
-  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
-#endif
+  ptl_md.start     = NULL;
+  ptl_md.length    = PTL_SIZE_MAX;
+  ptl_md.options   = PTL_MD_EVENT_SEND_DISABLE;
   ptl_md.eq_handle = self->tx.eqh;
   ptl_md.ct_handle = PTL_CT_NONE;
 
@@ -894,16 +921,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   status = uct_bxi_wrap(PtlMDBind(md->nih, &ptl_md, &self->tx.short_mdh));
   if (status != UCS_OK) {
-    goto err_clean_txevq;
-  }
-#endif
-
-  /* Allocate buffer for short message. */
-  self->tx.short_desc = ucs_malloc(self->config.max_inline, "short-desc");
-  if (self->tx.short_desc == NULL) {
-    status = UCS_ERR_NO_MEMORY;
     goto err_clean_mem_desc;
   }
+#endif
 
   /* Create TX buffers mempool */
   ucs_mpool_params_reset(&mp_params);
@@ -919,7 +939,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 
   status = ucs_mpool_init(&mp_params, &self->tx.send_desc_mp);
   if (status != UCS_OK) {
-    goto err_clean_short_desc;
+    goto err_clean_short_mem_desc;
   }
 
   /* Initialize operation for the TX Queue. They are not associated with 
@@ -1033,8 +1053,8 @@ err_clean_txops:
   uct_bxi_iface_tx_ops_fini(self);
 err_clean_txbuffer:
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);
-err_clean_short_desc:
-  ucs_free(self->tx.short_desc);
+err_clean_short_mem_desc:
+  uct_bxi_wrap(PtlMDRelease(self->tx.short_mdh));
 err_clean_mem_desc:
   uct_bxi_wrap(PtlMDRelease(self->tx.mdh));
 err_clean_txevq:
@@ -1070,7 +1090,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_bxi_iface_t)
   PtlPTFree(md->nih, self->rx.rma.pti);
 
   /* Clean TX resources. */
-  ucs_free(self->tx.short_desc);
   ucs_mpool_cleanup(&self->tx.pending_mp, 1);
   uct_bxi_iface_tx_ops_fini(self);
   ucs_mpool_cleanup(&self->tx.send_desc_mp, 1);

@@ -19,10 +19,6 @@
 #include <portals4.h>
 #endif
 
-#if HAVE_BXIDP
-#include <ptlbxi.h>
-#endif
-
 /*********************************/
 /********** Forward Decl *********/
 /*********************************/

@@ -6,7 +6,9 @@
 #include "bxi_rxq.h"
 
 #include <ucs/algorithm/crc.h>
+#include <ucs/time/time.h>
 #include <uct/base/uct_iov.inl>
+#include <unistd.h>
 
 #define UCT_BXI_MD_PACKED_RKEY_SIZE sizeof(uint64_t) + sizeof(void *)
 
@@ -117,6 +119,7 @@ enum {
 
 #define UCT_BXI_IFACE_SEND_OP_MASK (~(UCS_MASK(10)))
 
+typedef struct uct_bxi_ptlni         uct_bxi_ptlni_t;
 typedef struct uct_bxi_iface         uct_bxi_iface_t;
 typedef struct uct_bxi_iface_send_op uct_bxi_iface_send_op_t;
 typedef struct uct_bxi_ep            uct_bxi_ep_t;
@@ -241,6 +244,7 @@ typedef struct uct_bxi_iface_config {
   int      max_copyin_buf;
   int      max_copyout_buf;
   unsigned features;
+  int      enable_dp;
   struct {
     int                      enable;
     unsigned int             list_size;
@@ -291,6 +295,7 @@ KHASH_INIT(uct_bxi_tag_addrs, void *, char, 0, uct_bxi_tag_addr_hash,
 
 typedef struct uct_bxi_iface {
   uct_base_iface_t super;
+  ucs_time_t       samples[4];
   struct {
     struct {
       int max_events;              /*NOTE: non configurable */
@@ -324,6 +329,7 @@ typedef struct uct_bxi_iface {
     size_t device_addr_size;
     size_t ep_addr_size;
     size_t max_num_eps;
+    int    enable_dp;
   } config;
 
   struct {
@@ -347,7 +353,6 @@ typedef struct uct_bxi_iface {
     ptl_handle_eq_t eqh;          /* Event Queue for OP completion. */
     ucs_mpool_t     send_desc_mp; /* Memory pool of send descriptor */
     ucs_mpool_t     send_op_mp;   /* Memory pool of send operations */
-    void           *short_desc;   /* Preallocated buffer for short am */
     ucs_mpool_t     flush_ops_mp; /* Memory pool for flush OP */
     ptl_handle_md_t mdh;          /* Memory Descriptor for sending data */
     ptl_handle_md_t short_mdh;    /* Memory Descriptor for sending short data */
@@ -378,7 +383,9 @@ typedef struct uct_bxi_iface {
 
 #if HAVE_BXIDP
   struct {
-    struct ptlbxi_ni *ni;
+    uct_bxi_ptlni_t        *ni;
+    int                     enabled;
+    uct_bxi_iface_send_op_t dummy;
   } dp;
 #endif
 
@@ -424,6 +431,30 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
                                     const uct_bxi_iface_config_t *config);
 
 void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface);
+
+#if HAVE_BXIDP
+UCS_F_MAYBE_UNUSED volatile uint8_t *
+uct_bxi_iface_hw_head(uct_bxi_iface_t *iface);
+UCS_F_MAYBE_UNUSED volatile unsigned int *
+uct_bxi_iface_tail(uct_bxi_iface_t *iface);
+
+ucs_status_t uct_bxi_get_txslot(uct_bxi_iface_t    *iface,
+                                volatile uint64_t **slot);
+void         uct_bxi_txslot_commit(uct_bxi_iface_t *iface);
+
+void uct_bxi_ep_dp_write(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
+                         volatile uint64_t *slot, uint8_t am_id, uint64_t hdr,
+                         const void *buffer, unsigned length);
+
+void uct_bxi_ep_dp_cache_slot(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep);
+
+void         uct_bxi_iface_progress_hw_head(uct_bxi_iface_t *iface);
+ucs_status_t uct_bxi_ep_dp_am_short(uct_ep_h tl_ep, uint8_t am_id, uint64_t hdr,
+                                    const void *buffer, unsigned length);
+ssize_t      uct_bxi_ep_dp_am_bcopy(uct_ep_h tl_ep, uint8_t id,
+                                    uct_pack_callback_t pack, void *arg,
+                                    unsigned flags);
+#endif
 
 static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_bxi_iface_tag_add_to_hash(uct_bxi_iface_t *iface, void *buffer)
