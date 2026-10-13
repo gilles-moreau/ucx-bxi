@@ -307,3 +307,101 @@ UCS_TEST_P(test_ucp_atomic64, misaligned_post) {
 #endif
 
 UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomic64)
+
+template<typename T>
+struct ucp_atomic_type_map;
+
+template<>
+struct ucp_atomic_type_map<uint32_t> {
+    static constexpr ucp_atomic_type_t value = UCP_ATOMIC_TYPE_UINT32;
+};
+
+template<>
+struct ucp_atomic_type_map<uint64_t> {
+    static constexpr ucp_atomic_type_t value = UCP_ATOMIC_TYPE_UINT64;
+};
+
+template<>
+struct ucp_atomic_type_map<float> {
+    static constexpr ucp_atomic_type_t value = UCP_ATOMIC_TYPE_FLOAT;
+};
+
+template<>
+struct ucp_atomic_type_map<double> {
+    static constexpr ucp_atomic_type_t value = UCP_ATOMIC_TYPE_DOUBLE;
+};
+
+template <typename T>
+class test_ucp_atomicv : public test_ucp_atomic<T> {
+
+public:
+
+    void postv(size_t size, void *expected_data, ucp_mem_h memh,
+              void *target_ptr, ucp_rkey_h rkey, void *arg)
+    {
+        const typename test_ucp_atomic<T>::send_func_data* data = 
+            (typename test_ucp_atomic<T>::send_func_data*)arg;
+        T value                    = (T)ucs::rand() * (T)ucs::rand();
+        T prev;
+        T result;
+
+        mem_buffer::copy_to(expected_data, &value, sizeof(T),
+                            data->send_mem_type);
+        mem_buffer::copy_from(&prev, target_ptr, sizeof(T),
+                              data->recv_mem_type);
+        result = atomic_op_result(data->op, value, prev, 0);
+
+        ucp_request_param_t param;
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_AMO_TYPE;
+        param.type = ucp_atomic_type_map<T>::value;
+        ucs_status_t status = do_atomic(data->op, size, target_ptr, rkey,
+                                        expected_data, param);
+        ASSERT_UCS_OK(status);
+        mem_buffer::copy_to(expected_data, &result, sizeof(T),
+                            data->send_mem_type);
+    }
+
+protected:
+    static const uint64_t POST_ATOMIC_OPS  = UCS_BIT(UCP_ATOMIC_OP_ADD);
+
+private:
+    static T atomic_op_result(ucp_atomic_op_t op, T x, T y, T z) {
+        switch (op) {
+        case UCP_ATOMIC_OP_ADD:
+            return x + y;
+        case UCP_ATOMIC_OP_SWAP:
+            return x;
+        case UCP_ATOMIC_OP_CSWAP:
+            return (x == y) ? z : y;
+        case UCP_ATOMIC_OP_AND:
+            return x & y;
+        case UCP_ATOMIC_OP_OR:
+            return x | y;
+        case UCP_ATOMIC_OP_XOR:
+            return x ^ y;
+        default:
+            return 0;
+        }
+    }
+
+    ucs_status_t do_atomic(ucp_atomic_op_t op, size_t size, void *target_ptr,
+                           ucp_rkey_h rkey, void* value, ucp_request_param_t &param) {
+
+        param.op_attr_mask |= UCP_OP_ATTR_FIELD_DATATYPE;
+        param.datatype      = ucp_dt_make_contig(sizeof(T));
+
+        EXPECT_EQ(sizeof(T), size);
+        ucs_status_ptr_t status_ptr = ucp_atomic_op_nbx(this->sender().ep(), op,
+                                                        value, 1,
+                                                        (uintptr_t)target_ptr,
+                                                        rkey, &param);
+        return this->request_wait(status_ptr);
+    }
+};
+
+class test_ucp_atomicv32 : public test_ucp_atomicv<uint32_t> {
+};
+
+UCS_TEST_P(test_ucp_atomicv32, postv) {
+    test(static_cast<send_func_t>(&test_ucp_atomicv32::postv), POST_ATOMIC_OPS);
+}
