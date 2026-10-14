@@ -243,6 +243,9 @@ unsigned ucp_sched_set_task_implicit_deps(ucp_sched_h schedh, ucp_request_t *req
         deps[num_deps++].task = task;
         ucs_list_add_head(&P, &deps[num_deps-1].p_elem);
 
+        /* Task may be offloaded only if all dependent tasks have been 
+        * offloaded. */
+        offloaded &= task->flags & UCP_SCHED_TASK_OFFLOADED;
       }
     } else { /* UCP_SCHED_TASK_RECV */
       ucp_trace_req(req, "\tcheck overlap region recv %p..%p", task->buffer,
@@ -433,6 +436,118 @@ err:
   return status;
 }
 
+ucs_status_t ucp_offload_activate(ucp_worker_h worker) {
+  ucs_status_t status;
+  ucp_ep_h ep_self;
+  ucp_address_t *address;
+  size_t address_length;
+  ucp_ep_params_t ep_params;
+  ucp_request_t *sreq;
+  ucp_request_t *rreq;
+  ucp_request_t *rreq2;
+  ucp_tag_recv_info_t tag_info;
+  size_t size, size2;
+  uint8_t *sendbuf;
+  uint8_t *recvbuf;
+  uint8_t *recvbuf2;
+  ucp_tag_t tag = 0x11;
+  ucp_tag_t tag2 = 0x22;
+  ucp_tag_t tag_mask = UCP_TAG_MASK_FULL;
+  ucp_request_param_t params;
+
+  status = UCS_OK;
+  if (worker->tm.offload.iface != NULL) {
+    goto err;
+  }
+
+  /* Create ep self */
+  status = ucp_worker_get_address(worker, &address, &address_length);
+  if (status != UCS_OK) {
+    goto err;
+  }
+  memset(&ep_params, 0, sizeof(ep_params));
+  ep_params.field_mask |= UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
+  ep_params.address     = address;
+  status = ucp_ep_create(worker, &ep_params, &ep_self);
+  if (status == UCS_ERR_UNREACHABLE) {
+      goto err_release_address;
+  }
+
+  /* prepare buffers */
+  size = ucs_max(worker->context->config.ext.tm_thresh, 1); // pb: size=0
+  sendbuf = ucs_malloc(size, "offload activate sendbuf");
+  recvbuf = ucs_malloc(size, "offload activate recvbuf 1");
+  
+  /* Recv to activate offloading */
+  params.op_attr_mask  = UCP_OP_ATTR_FIELD_DATATYPE |
+                         UCP_OP_ATTR_FLAG_NO_IMM_CMPL |
+                         UCP_OP_ATTR_FIELD_MEMORY_TYPE;
+  // params.op_attr_mask |= UCP_OP_ATTR_FLAG_OP_OFFLOAD;
+  params.datatype      = UCP_DATATYPE_CONTIG;
+  params.memory_type   = UCS_MEMORY_TYPE_HOST;
+  params.op_attr_mask |= UCP_OP_ATTR_FIELD_EPH;
+  params.reply_ep      = ep_self;
+  // params.op_attr_mask |= UCP_OP_ATTR_FIELD_CALLBACK |
+  //                             UCP_OP_ATTR_FIELD_USER_DATA;
+  // TODO chose a callback or do not set it
+  // params.cb.recv       = recv_callback;
+  // params.user_data     = user_data;
+  rreq = ucp_tag_recv_nbx(worker, recvbuf, size, tag, tag_mask, &params);
+  ucs_assert(!UCS_PTR_IS_ERR(rreq));
+  ucs_assert(rreq != NULL);
+
+  // Post and cancel another receive to make sure the first one was offloaded
+  size2 = worker->context->config.ext.tm_thresh+1;
+  recvbuf2 = ucs_malloc(size2, "offload activate recvbuf 2");
+  rreq2 = ucp_tag_recv_nbx(worker, recvbuf2, size2, tag2, tag_mask, &params);
+  ucs_assert(!UCS_PTR_IS_ERR(rreq2));
+  ucs_assert(rreq2 != NULL);
+  ucp_request_cancel(worker, rreq2);
+  // wait
+  status = ucp_request_test(rreq2, &tag_info);
+  while (status == UCS_INPROGRESS) {
+    ucp_worker_progress(worker);
+    status = ucp_request_test(rreq2, &tag_info);
+  }
+  ucp_request_free(rreq2);
+
+  for (int i = 0; i < 3; ++i) {
+    ucp_worker_progress(worker);
+  }
+
+  // TODO set the right params
+  params.op_attr_mask &= ~UCP_OP_ATTR_FIELD_EPH;
+  params.reply_ep      = NULL;
+  sreq = ucp_tag_send_nbx(ep_self, sendbuf, size, tag, &params);
+  if (UCS_PTR_IS_ERR(sreq)) {
+    ucs_assert(UCS_PTR_STATUS(sreq));
+  } else if (sreq != NULL) {
+    // wait
+    status = ucp_request_test(sreq, &tag_info);
+    while (status == UCS_INPROGRESS) { 
+      ucp_worker_progress(worker);
+      status = ucp_request_test(sreq, &tag_info);
+    }
+    ucp_request_free(sreq);
+  }
+
+  status = ucp_request_test(rreq, &tag_info);
+  while (status == UCS_INPROGRESS) {
+    ucp_worker_progress(worker);
+    status = ucp_request_test(rreq, &tag_info);
+  }
+  ucp_request_free(rreq);
+
+err_free_buffers:
+  ucs_free(sendbuf);
+  ucs_free(recvbuf);
+  ucs_free(recvbuf2);
+err_release_address:
+  ucp_worker_release_address(worker, address);
+err:
+  return status;
+}
+
 ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sched_h *sched_p)
 {
   ucs_status_t status = UCS_OK;
@@ -489,6 +604,7 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_mode_t mode, ucp_sc
 
   sched->cbq_id = ucs_callbackq_add_safe(&sched->worker->uct->progress_q, ucp_sched_progress_cb, sched);
 
+  ucp_offload_activate(worker);
   /* If offload interface has been activated, enable scheduling on it. */
   if (worker->tm.offload.iface != NULL) {
     //FIXME: multiple interface are not supported
