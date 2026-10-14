@@ -549,6 +549,7 @@ void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
 
   /* Receive block memory pool.*/
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
+  ucs_mpool_cleanup(&iface->tm.send_block_mp, 1);
   /* And operation contexts.*/
   ucs_mpool_cleanup(&iface->tm.gop_mp, 1);
 

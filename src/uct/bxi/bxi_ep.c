@@ -37,6 +37,13 @@ void uct_bxi_send_op_handler(uct_bxi_iface_send_op_t *op, const void *resp)
   if (op->user_comp != NULL) {
     uct_invoke_completion(op->user_comp, UCS_OK);
   }
+  
+  if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_BLOCK) {
+    if (op->rndv.block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
+      uct_bxi_recv_block_update_cnt(op->rndv.block);
+    }
+    uct_bxi_recv_block_release(op->rndv.block);
+  }
 
   uct_bxi_ep_remove_from_queue(op);
 }

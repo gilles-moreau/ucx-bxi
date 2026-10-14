@@ -70,6 +70,8 @@ static void uct_bxi_send_op_rndv_handler(uct_bxi_iface_send_op_t *op,
   if (op->flags & UCT_BXI_IFACE_SEND_OP_FLAG_CANCELLED) {
     uct_bxi_recv_block_deactivate(op->rndv.block);
     goto release_block;
+  } else if (op->rndv.block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED) {
+    uct_bxi_recv_block_update_cnt(op->rndv.block);
   }
 
   if (op->user_comp != NULL) {
@@ -221,6 +223,12 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
       status = UCS_ERR_NO_RESOURCE;
       goto err;
     }
+
+    op->flags |= UCT_BXI_IFACE_SEND_OP_FLAG_BLOCK;
+    // FIXME wrong name: add eager in the union
+    op->rndv.block = block;
+    block->flags |= UCT_BXI_RECV_BLOCK_FLAG_IN_USE 
+                    | UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED;
 
     status = uct_bxi_wrap(
             PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC, block->cth, block->ct_value+1));
