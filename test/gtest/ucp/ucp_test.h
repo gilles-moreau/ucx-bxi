@@ -480,6 +480,8 @@ std::vector<ucp_test_param> enum_test_params(const std::string& tls)
     UCP_INSTANTIATE_TEST_CASE_TLS_GPU_AWARE(_test_case, ugni, \
                                             "ugni") \
     UCP_INSTANTIATE_TEST_CASE_TLS_GPU_AWARE(_test_case, tcp, \
-                                            "tcp")
+                                            "tcp") \
+    UCP_INSTANTIATE_TEST_CASE_TLS_GPU_AWARE(_test_case, bxi, \
+                                            "bxi")
 
 #endif

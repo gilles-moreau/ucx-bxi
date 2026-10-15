@@ -23,8 +23,7 @@
 
 
 #define UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _count, _type, _last_type, \
-                            _action) \
+                            _last_opcode, _count, _action) \
     { \
         if (ENABLE_PARAMS_CHECK && \
             ucs_unlikely(((_remote_addr) % (_size)) != 0)) { \
@@ -44,8 +43,33 @@
                                         UCP_FEATURE_AMO32 : UCP_FEATURE_AMO64, \
                                         _action); \
         \
-        UCP_CONTEXT_CHECK_FEATURE_FLAGS((_context), ((_count) >= 1) ? \
-                                        UCP_FEATURE_VAMO : 0, \
+        if (ENABLE_PARAMS_CHECK && \
+            (ucs_unlikely((_opcode) >= (_last_opcode)))) { \
+            ucs_error("invalid atomic opcode %d ", _opcode); \
+            _action; \
+        } \
+    }
+
+
+#define UCP_AMO_CHECK_PARAM_NBX(_context, _remote_addr, _size, _count, \
+                                _opcode, _last_opcode, _action) \
+    { \
+        UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
+                            _last_opcode, _count, _action); \
+    }
+
+#define UCP_AMOV_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
+                            _last_opcode, _type, _last_type, _action) \
+    { \
+        if (ENABLE_PARAMS_CHECK && \
+            ucs_unlikely(((_remote_addr) % (_size)) != 0)) { \
+            ucs_error("atomic variable must be naturally aligned " \
+                      "(remote address 0x%"PRIx64", size %zu)", (_remote_addr), \
+                      (_size)); \
+            _action; \
+        } \
+        \
+        UCP_CONTEXT_CHECK_FEATURE_FLAGS((_context), UCP_FEATURE_VAMO, \
                                         _action); \
         \
         if (ENABLE_PARAMS_CHECK && \
@@ -61,14 +85,11 @@
         } \
     }
 
-
-#define UCP_AMO_CHECK_PARAM_NBX(_context, _remote_addr, _size, _count, \
-                                _opcode, _last_opcode, _type, _last_type, \
-                                _action) \
+#define UCP_AMOV_CHECK_PARAM_NBX(_context, _remote_addr, _size, _opcode, \
+                                 _last_opcode, _type, _last_type, _action) \
     { \
-        UCP_AMO_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
-                            _last_opcode, _count, _type, _last_type, \
-                            _action); \
+        UCP_AMOV_CHECK_PARAM(_context, _remote_addr, _size, _opcode, \
+                            _last_opcode, _type, _last_type, _action); \
     }
 
 
@@ -212,10 +233,16 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
 
     type = UCP_REQUEST_PARAM_FIELD(param, AMO_TYPE, type, 
                                    UCP_ATOMIC_TYPE_LAST);
-    UCP_AMO_CHECK_PARAM_NBX(context, remote_addr, op_size, count, opcode,
-                            UCP_ATOMIC_OP_LAST, type, 
-                            UCP_ATOMIC_TYPE_LAST,
-                            return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
+    if (type != UCP_ATOMIC_TYPE_LAST) {
+        UCP_AMOV_CHECK_PARAM_NBX(context, remote_addr, op_size, opcode,
+                                 UCP_ATOMIC_OP_LAST, type, 
+                                 UCP_ATOMIC_TYPE_LAST,
+                                 return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
+    } else {
+        UCP_AMO_CHECK_PARAM_NBX(context, remote_addr, op_size, count, opcode,
+                                UCP_ATOMIC_OP_LAST, 
+                                return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
+    }
     UCP_WORKER_THREAD_CS_ENTER_CONDITIONAL(worker);
 
     ucs_trace_req("atomic_op_nbx opcode %d buffer %p result %p "

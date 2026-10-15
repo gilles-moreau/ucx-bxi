@@ -99,7 +99,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_gop",
                 ucs_offsetof(uct_bxi_iface_config_t, tm.gop_mp), "\n"),
 
-        {"TM_LIST_SIZE", "256",
+        {"TM_LIST_SIZE", "32",
          "Limits the number of tags posted to the HW for matching.",
          ucs_offsetof(uct_bxi_iface_config_t, tm.list_size),
          UCS_CONFIG_TYPE_UINT},

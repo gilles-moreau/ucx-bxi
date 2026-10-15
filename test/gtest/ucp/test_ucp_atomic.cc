@@ -336,6 +336,23 @@ class test_ucp_atomicv : public test_ucp_atomic<T> {
 
 public:
 
+    static void get_test_variants(std::vector<ucp_test_variant>& variants,
+                                  int variant, const std::string& name)
+    {
+        uint64_t features = (sizeof(T) == sizeof(uint32_t)) ?
+                            UCP_FEATURE_AMO32 : UCP_FEATURE_AMO64;
+        features |= UCP_FEATURE_VAMO;
+        
+        ucp_test::add_variant_with_value(variants, features, variant | UCP_ATOMIC_MODE_CPU, "cpu" + name);
+        ucp_test::add_variant_with_value(variants, features, variant | UCP_ATOMIC_MODE_DEVICE, "device" + name);
+        ucp_test::add_variant_with_value(variants, features, variant | UCP_ATOMIC_MODE_GUESS, "guess" + name);
+    }
+
+    static void get_test_variants(std::vector<ucp_test_variant>& variants)
+    {
+        get_test_variants(variants, 0, "");
+    }
+
     void postv(size_t size, void *expected_data, ucp_mem_h memh,
               void *target_ptr, ucp_rkey_h rkey, void *arg)
     {
@@ -399,9 +416,21 @@ private:
     }
 };
 
-class test_ucp_atomicv32 : public test_ucp_atomicv<uint32_t> {
+class test_ucp_atomicvu32 : public test_ucp_atomicv<uint32_t> {
 };
 
-UCS_TEST_P(test_ucp_atomicv32, postv) {
-    test(static_cast<send_func_t>(&test_ucp_atomicv32::postv), POST_ATOMIC_OPS);
+UCS_TEST_P(test_ucp_atomicvu32, postv) {
+    test(static_cast<send_func_t>(&test_ucp_atomicvu32::postv), POST_ATOMIC_OPS);
 }
+
+UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomicvu32)
+
+class test_ucp_atomicvu64 : public test_ucp_atomicv<uint64_t> {
+};
+
+UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomicvu64)
+
+class test_ucp_atomicvfloat : public test_ucp_atomicv<float> {
+};
+
+UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomicvfloat)
