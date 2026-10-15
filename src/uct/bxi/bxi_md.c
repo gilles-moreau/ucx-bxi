@@ -34,6 +34,8 @@ ucs_config_field_t uct_bxi_md_config_table[] = {
 
         {NULL}};
 
+pthread_mutex_t ptl_lock = PTHREAD_MUTEX_INITIALIZER;
+
 #if HAVE_BXI3_R6LITE
 static const ptl_ni_limits_t default_limits = {
         .max_entries            = INT_MAX,
@@ -485,7 +487,9 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   }
 
   uct_bxi_md_config_init(md, md_config);
+  md->ptl_lock = &ptl_lock;
 
+  pthread_mutex_lock(&ptl_lock);
   /* init one physical interface */
 #if HAVE_BXI3_R6LITE
   status = uct_bxi_wrap(PtlNIInit(
@@ -512,6 +516,8 @@ static ucs_status_t uct_bxi_md_open(uct_component_t       *component,
   if (status != UCS_OK) {
     goto err_freedev;
   }
+
+  pthread_mutex_unlock(&ptl_lock);
 
   status = uct_bxi_set_device_syspath(md);
   if (status != UCS_OK) {

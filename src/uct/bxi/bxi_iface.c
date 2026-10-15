@@ -833,6 +833,9 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   /* Initialize all config entries. */
   uct_bxi_iface_config_init(self, config);
 
+  //NOTE: Initialization of context from multiple thread may result in race.
+  pthread_mutex_lock(md->ptl_lock);
+
   /* Create Event Queue used for RX events. */
   status = uct_bxi_wrap(
           PtlEQAlloc(md->nih, self->config.max_events, &self->rx.eqh));
@@ -992,6 +995,8 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
    * hash table uses ptl_process_t supposing it is 8 bytes. */
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_hdr_data_t));
   ucs_assert(sizeof(uint64_t) <= sizeof(ptl_process_t));
+
+  pthread_mutex_unlock(md->ptl_lock);
 
 #if HAVE_BXI3_R6LITE
   ucs_debug("BXI: interface info. nih=%s, nid=%d, pid=%d",

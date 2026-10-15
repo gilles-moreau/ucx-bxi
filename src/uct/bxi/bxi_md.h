@@ -62,6 +62,7 @@ typedef struct uct_bxi_md {
 #ifdef HAVE_GDR_COPY
   gdr_t gdrcpy_ctx;
 #endif
+  pthread_mutex_t *ptl_lock;
 } uct_bxi_md_t;
 
 ucs_status_t uct_bxi_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr);
