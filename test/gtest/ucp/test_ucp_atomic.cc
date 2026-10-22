@@ -428,6 +428,10 @@ UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomicvu32)
 class test_ucp_atomicvu64 : public test_ucp_atomicv<uint64_t> {
 };
 
+UCS_TEST_P(test_ucp_atomicvu64, postv) {
+    test(static_cast<send_func_t>(&test_ucp_atomicvu64::postv), POST_ATOMIC_OPS);
+}
+
 UCP_INSTANTIATE_TEST_CASE_GPU_AWARE(test_ucp_atomicvu64)
 
 class test_ucp_atomicvfloat : public test_ucp_atomicv<float> {

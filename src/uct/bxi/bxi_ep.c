@@ -162,9 +162,9 @@ static ucs_status_t uct_bxi_ep_execute_op(uct_bxi_iface_t         *iface,
     break;
   case UCT_BXI_IFACE_SEND_OP_TYPE_ATOMICV:
     status = uct_bxi_wrap(PtlAtomic(
-            iface->tx.mdh, (uint64_t)&op->atomic.buffer, op->length, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
-            0, op->atomic.op_code, op->atomic.dt));
+            iface->tx.mdh, (uint64_t)&op->atomic.buffer, op->length,
+            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+            op->atomic.remote_addr, op, 0, op->atomic.op_code, op->atomic.dt));
     break;
   default:
     ucs_error("BXI: unsupported operation. flags=%lx",
@@ -695,15 +695,17 @@ ucs_status_t uct_bxi_ep_atomic64_fetch(uct_ep_h tl_ep, uct_atomic_op_t opcode,
                                         sizeof(uint64_t), PTL_UINT64_T,
                                         remote_addr, rkey, comp);
 }
-ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, uct_atomic_op_t opcode,
-                                     uct_atomic_type_t optype, void *buffer,
-                                     size_t length, uint64_t remote_addr,
+
+ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
+                                     unsigned optype, const uct_iov_t *iov,
+                                     size_t iovcnt, uint64_t remote_addr,
                                      uct_rkey_t uct_rkey, unsigned flags)
 {
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
   uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
+  uct_bxi_mem_t   *mem   = (uct_bxi_mem_t *)iov->memh;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -711,15 +713,15 @@ ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, uct_atomic_op_t opcode,
 
   /* First, get OP while setting appropriate completion callback */
   UCT_BXI_IFACE_GET_TX_OP_COMP(iface, &iface->tx.send_op_mp, op, ep, NULL,
-                               uct_bxi_send_ato_op_handler, length);
+                               uct_bxi_send_ato_op_handler, iov->length);
 
   /* Store the value since the Atomic call needs an address. */
   op->ep_fb              = ep->fence_beat;
   op->flags              = UCT_BXI_IFACE_SEND_OP_TYPE_ATOMIC;
-  op->length             = length;
+  op->length             = iov->length;
   op->atomic.dt          = uct_bxi_atomic_type_table[optype];
   op->atomic.op_code     = uct_bxi_atomic_op_table[opcode];
-  op->atomic.buffer      = buffer;
+  op->atomic.buffer      = uct_bxi_resolve_laddr(iov->buffer, mem);
   op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   status = uct_bxi_ep_execute_op(iface, ep, op);

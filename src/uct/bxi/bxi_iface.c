@@ -324,7 +324,8 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
                     UCT_IFACE_FLAG_PUT_ZCOPY | UCT_IFACE_FLAG_GET_ZCOPY |
                     UCT_IFACE_FLAG_PENDING | UCT_IFACE_FLAG_CB_SYNC |
                     UCT_IFACE_FLAG_INTER_NODE |
-                    UCT_IFACE_FLAG_CONNECT_TO_IFACE | UCT_IFACE_FLAG_EP_CHECK;
+                    UCT_IFACE_FLAG_CONNECT_TO_IFACE | UCT_IFACE_FLAG_EP_CHECK |
+                    UCT_IFACE_FLAG_ATOMIC_CPU;
 
   //TODO: UCT_IFACE_FLAG_ERRHANDLE_ZCOPY_BUF: currently not handled by Portals4
   //      simulator. A kernel segfault is raised instead of ni_fail_type set to
@@ -346,7 +347,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.atomic32.fop_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
-          UCS_BIT(UCT_ATOMIC_OP_CSWAP);
+          UCS_BIT(UCT_ATOMIC_OP_SWAP) | UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.atomic32.max_atomic_size  = sizeof(uint32_t);
   attr->cap.atomic32.type_flags      |= UCS_BIT(UCT_ATOMIC_TYPE_UINT32);
 
@@ -357,7 +358,7 @@ ucs_status_t uct_bxi_iface_query(uct_iface_h uct_iface, uct_iface_attr_t *attr)
   attr->cap.atomic64.fop_flags |=
           UCS_BIT(UCT_ATOMIC_OP_ADD) | UCS_BIT(UCT_ATOMIC_OP_AND) |
           UCS_BIT(UCT_ATOMIC_OP_XOR) | UCS_BIT(UCT_ATOMIC_OP_OR) |
-          UCS_BIT(UCT_ATOMIC_OP_CSWAP);
+          UCS_BIT(UCT_ATOMIC_OP_SWAP) | UCS_BIT(UCT_ATOMIC_OP_CSWAP);
   attr->cap.atomic64.max_atomic_size  = sizeof(uint64_t);
   attr->cap.atomic64.type_flags      |= UCS_BIT(UCT_ATOMIC_TYPE_UINT64);
 
@@ -1116,6 +1117,7 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .ep_atomic_cswap32        = uct_bxi_ep_atomic_cswap32,
         .ep_atomic32_post         = uct_bxi_ep_atomic32_post,
         .ep_atomic32_fetch        = uct_bxi_ep_atomic32_fetch,
+        .ep_atomicv_post          = uct_bxi_ep_atomicv_post,
         .ep_pending_add           = uct_bxi_ep_pending_add,
         .ep_pending_purge         = uct_bxi_ep_pending_purge,
         .ep_flush                 = uct_bxi_ep_flush,

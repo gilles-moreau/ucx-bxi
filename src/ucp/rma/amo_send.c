@@ -221,24 +221,28 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM);
     }
 
-    if (param->datatype == ucp_dt_make_contig(8)) {
-        op_size = sizeof(uint64_t);
-    } else if (param->datatype == ucp_dt_make_contig(4)) {
-        op_size = sizeof(uint32_t);
-    } else {
-        ucs_error("invalid atomic operation datatype: 0x%"PRIx64,
-                  param->datatype);
-        return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM);
-    }
-
     type = UCP_REQUEST_PARAM_FIELD(param, AMO_TYPE, type, 
                                    UCP_ATOMIC_TYPE_LAST);
     if (type != UCP_ATOMIC_TYPE_LAST) {
-        UCP_AMOV_CHECK_PARAM_NBX(context, remote_addr, op_size, opcode,
-                                 UCP_ATOMIC_OP_LAST, type, 
+        UCP_AMOV_CHECK_PARAM_NBX(context, remote_addr, 
+                                 ucp_contig_dt_elem_size(param->datatype), 
+                                 opcode, UCP_ATOMIC_OP_LAST, type, 
                                  UCP_ATOMIC_TYPE_LAST,
                                  return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
+
+        op_size = ucp_contig_dt_elem_size(param->datatype);
     } else {
+
+        if (param->datatype == ucp_dt_make_contig(8)) {
+            op_size = sizeof(uint64_t);
+        } else if (param->datatype == ucp_dt_make_contig(4)) {
+            op_size = sizeof(uint32_t);
+        } else {
+            ucs_error("invalid atomic operation datatype: 0x%"PRIx64,
+                      param->datatype);
+            return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM);
+        }
+
         UCP_AMO_CHECK_PARAM_NBX(context, remote_addr, op_size, count, opcode,
                                 UCP_ATOMIC_OP_LAST, 
                                 return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));

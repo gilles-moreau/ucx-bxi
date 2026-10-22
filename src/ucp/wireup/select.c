@@ -1192,7 +1192,7 @@ ucp_wireup_add_amo_lanes(const ucp_wireup_select_params_t *select_params,
     ucp_tl_bitmap_t tl_bitmap;
 
     if (!ucs_test_flags(context->config.features, UCP_FEATURE_AMO32,
-                        UCP_FEATURE_AMO64) ||
+                        UCP_FEATURE_AMO64, UCP_FEATURE_VAMO) ||
         (ep_init_flags & (UCP_EP_INIT_FLAG_MEM_TYPE |
                           UCP_EP_INIT_CREATE_AM_LANE_ONLY))) {
         return UCS_OK;
