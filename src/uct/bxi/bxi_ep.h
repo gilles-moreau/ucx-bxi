@@ -180,7 +180,8 @@ ucs_status_t uct_bxi_ep_atomic64_post(uct_ep_h tl_ep, unsigned opcode,
 ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
                                      unsigned optype, const uct_iov_t *iov,
                                      size_t iovcnt, uint64_t remote_addr,
-                                     uct_rkey_t uct_rkey, unsigned flags);
+                                     uct_rkey_t uct_rkey, unsigned flags,
+                                     uct_completion_t *comp);
 
 ucs_status_t uct_bxi_ep_atomic32_fetch(uct_ep_h tl_ep, unsigned opcode,
                                        uint32_t value, uint32_t *result,

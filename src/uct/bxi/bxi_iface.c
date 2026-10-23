@@ -240,6 +240,8 @@ static unsigned uct_bxi_iface_poll_rx(uct_bxi_iface_t *iface)
       case PTL_EVENT_ACK:
       case PTL_EVENT_REPLY:
       case PTL_EVENT_ATOMIC:
+        status = UCS_OK;
+        break;
       case PTL_EVENT_FETCH_ATOMIC:
       case PTL_EVENT_FETCH_ATOMIC_OVERFLOW:
       case PTL_EVENT_ATOMIC_OVERFLOW:
@@ -888,7 +890,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 #if HAVE_BXI3_R6LITE
   ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #else
-  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
+  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #endif
   ptl_md.eq_handle = self->tx.eqh;
   ptl_md.ct_handle = PTL_CT_NONE;
@@ -981,7 +983,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
   me.start             = NULL;
   me.length            = PTL_SIZE_MAX;
   me.options = PTL_ME_OP_PUT | PTL_ME_OP_GET | PTL_ME_EVENT_LINK_DISABLE |
-               PTL_ME_EVENT_UNLINK_DISABLE | PTL_ME_EVENT_COMM_DISABLE;
+               PTL_ME_EVENT_UNLINK_DISABLE | PTL_LE_EVENT_COMM_DISABLE;
 
   /* RDMA operations are always matched on the same silent ME. */
   status = uct_bxi_wrap(PtlMEAppend(md->nih, self->rx.rma.pti, &me,

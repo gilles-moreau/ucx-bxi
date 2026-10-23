@@ -3231,10 +3231,11 @@ UCT_INLINE_API ucs_status_t uct_ep_atomicv_post(uct_ep_h ep, uct_atomic_op_t opc
                                                 const uct_iov_t *iov,
                                                 size_t iovcnt,
                                                 uint64_t remote_addr,
-                                                uct_rkey_t rkey, unsigned flags)
+                                                uct_rkey_t rkey, unsigned flags,
+                                                uct_completion_t *comp)
 {
     return ep->iface->ops.ep_atomicv_post(ep, opcode, optype, iov, iovcnt, 
-                                          remote_addr, rkey, flags);
+                                          remote_addr, rkey, flags, comp);
 }
 
 

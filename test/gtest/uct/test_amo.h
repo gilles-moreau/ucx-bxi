@@ -97,7 +97,7 @@ public:
                               const uct_iov_t *iov, size_t iovcnt, 
                               uint64_t remote_addr, uct_rkey_t rkey) {
         return uct_ep_atomicv_post(ep, opcode, optype, iov, iovcnt, remote_addr, 
-                                   rkey, 0);
+                                   rkey, 0, NULL);
     }
 
     ucs_status_t atomic_fetch_nb(uct_ep_h ep, uct_atomic_op_t opcode,

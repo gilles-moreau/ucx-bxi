@@ -131,7 +131,8 @@ typedef ucs_status_t (*uct_ep_atomicv_post_func_t)(uct_ep_h ep,
                                                    size_t iovcnt,
                                                    uint64_t remote_addr,
                                                    uct_rkey_t rkey,
-                                                   unsigned flags);
+                                                   unsigned flags,
+                                                   uct_completion_t *comp);
 
 typedef ucs_status_t (*uct_ep_atomic32_fetch_func_t)(uct_ep_h ep,
                                                      unsigned opcode,

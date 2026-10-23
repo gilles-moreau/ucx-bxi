@@ -57,12 +57,13 @@ ucp_proto_amo_vec_progress(uct_pending_req_t *self)
                              spriv->super.md_index,
                              UCS_BIT(UCP_DATATYPE_CONTIG), &next_iter, iov, 1);
 
-  status = UCS_PROFILE_CALL(
-          uct_ep_atomicv_post, uct_ep, op, req->send.amo.uct_type,
-          iov, 1, remote_addr, tl_rkey, 0);
+  status = uct_ep_atomicv_post(uct_ep, op, req->send.amo.uct_type, iov, 1,
+                               remote_addr, tl_rkey, 0,
+                               &req->send.state.uct_comp);
 
   if (status == UCS_OK) {
     ucp_request_complete_send(req, status);
+  } else if (status == UCS_INPROGRESS) {
   } else if (status == UCS_ERR_NO_RESOURCE) {
     /* keep on pending queue */
     return UCS_ERR_NO_RESOURCE;
