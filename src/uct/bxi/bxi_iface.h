@@ -189,7 +189,7 @@ typedef struct uct_bxi_iface_send_op {
     struct {
       ptl_op_t       op_code;
       uint64_t       value;
-      void *buffer;
+      void          *buffer;
       uint64_t       compare;
       ptl_datatype_t dt;
       uint64_t       remote_addr;
@@ -199,10 +199,10 @@ typedef struct uct_bxi_iface_send_op {
 } uct_bxi_iface_send_op_t;
 
 typedef struct uct_bxi_gop {
-  uct_gop_t             super;    /* Generic operation handle */
-  ptl_handle_ct_t       cth;      /* Counter handle */
-  ptl_size_t            ct_value; /* SW value tracking HW counter value */
-  uct_bxi_recv_block_t *block;    /* Receive block from rndv protocol */
+  uct_gop_t       super;    /* Generic operation handle */
+  ptl_handle_ct_t cth;      /* Counter handle */
+  ptl_size_t      ct_value; /* SW value tracking HW counter value */
+  ptl_handle_md_t mdh;      /* MD used for scheduled send op */
 } uct_bxi_gop_t;
 
 typedef struct uct_bxi_device_addr {

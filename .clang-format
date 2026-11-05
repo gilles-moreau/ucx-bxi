@@ -1,5 +1,5 @@
 # C
-BasedOnStyle: LLVM
+#BasedOnStyle: LLVM
 AlignAfterOpenBracket: true
 AlignArrayOfStructures: None
 AlignConsecutiveAssignments:

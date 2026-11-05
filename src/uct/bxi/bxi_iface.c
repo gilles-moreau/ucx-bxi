@@ -90,8 +90,8 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
                 "Memory pool of bounced buffers posted in the Portals overflow "
                 "list.\n"),
 
-        {"MAX_TM_OP_CTX", "256",
-         "Maximum number of tag matching generic operation (default: 256).",
+        {"MAX_TM_OP_CTX", "64",
+         "Maximum number of tag matching generic operation (default: 64).",
          ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
          UCS_CONFIG_TYPE_UINT},
 
@@ -890,7 +890,7 @@ UCS_CLASS_INIT_FUNC(uct_bxi_iface_t, uct_md_h tl_md, uct_worker_h worker,
 #if HAVE_BXI3_R6LITE
   ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
 #else
-  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE,
+  ptl_md.options = PTL_MD_EVENT_SEND_DISABLE | PTL_MD_VOLATILE,
 #endif
   ptl_md.eq_handle = self->tx.eqh;
   ptl_md.ct_handle = PTL_CT_NONE;

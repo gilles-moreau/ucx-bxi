@@ -230,6 +230,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
                                  UCP_ATOMIC_TYPE_LAST,
                                  return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
 
+        ucs_assert(UCP_DT_IS_CONTIG(param->datatype));
         op_size = ucp_contig_dt_elem_size(param->datatype);
     } else {
 
@@ -265,6 +266,20 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
     if (context->config.ext.proto_enable) {
         ucp_amo_init_proto(req, ucp_uct_atomic_op_table[opcode], remote_addr,
                            rkey, ucp_uct_atomic_type_table[type]);
+
+        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
+                                                         schedh, NULL);
+
+            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_AMO, 
+                                         (void *)buffer, (void *)remote_addr, 
+                                         count, param->datatype, &req->task);
+            if (status != UCS_OK) {
+                ucp_request_put_param(param, req);
+                return UCS_STATUS_PTR(status);
+            }
+        }
+
         if (param->op_attr_mask & UCP_OP_ATTR_FIELD_REPLY_BUFFER) {
             req->send.amo.reply_buffer = param->reply_buffer;
             op_id    = (opcode == UCP_ATOMIC_OP_CSWAP) ? UCP_OP_ID_AMO_CSWAP :

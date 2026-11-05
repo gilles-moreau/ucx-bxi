@@ -205,6 +205,11 @@ ucp_proto_put_offload_zcopy_send_func(ucp_request_t *req,
                                               lpriv->super.rkey_index);
     uct_iov_t iov;
 
+    if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
+        req->send.state.uct_comp.gop = req->task->comph;
+        req->send.state.uct_comp.flags = UCT_TAG_SCHEDULE;
+    }
+
     ucp_datatype_iter_next_iov(&req->send.state.dt_iter,
                                ucp_proto_multi_max_payload(req, lpriv, 0),
                                lpriv->super.md_index, UCP_DT_MASK_CONTIG_IOV,
@@ -254,6 +259,7 @@ ucp_proto_put_offload_zcopy_probe(const ucp_proto_init_params_t *init_params)
         .super.flags         = UCP_PROTO_COMMON_INIT_FLAG_SEND_ZCOPY    |
                                UCP_PROTO_COMMON_INIT_FLAG_RECV_ZCOPY    |
                                UCP_PROTO_COMMON_INIT_FLAG_REMOTE_ACCESS |
+                               UCP_PROTO_COMMON_INIT_FLAG_OP_OFFLOAD    |
                                UCP_PROTO_COMMON_INIT_FLAG_ERR_HANDLING,
         .super.exclude_map   = 0,
         .super.reg_mem_info  = ucp_proto_common_select_param_mem_info(

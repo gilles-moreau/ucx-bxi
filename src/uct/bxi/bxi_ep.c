@@ -388,8 +388,9 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
-  uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
   UCT_BXI_CHECK_EP(ep);
   UCT_CHECK_IOV_SIZE(iovcnt, (unsigned long)iface->config.max_iovecs,
@@ -407,9 +408,17 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   op->flags              |= UCT_BXI_IFACE_SEND_OP_TYPE_PUT_ZCOPY;
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (ucs_unlikely(comp->flags & UCT_TAG_SCHEDULE)) {
+    status = uct_bxi_wrap(
+            PtlTriggeredPut(gop->mdh, (ptl_size_t)op->tag.buffer, op->length,
+                            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma,
+                            0, 0, op, 0, gop->cth, gop->ct_value));
+  } else {
+    status = uct_bxi_ep_execute_op(iface, ep, op);
+  }
+
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlPut bcopy return %d", status);
+    ucs_fatal("BXI: rma PtlPut zcopy return %d", status);
   } else {
     /* For zcopy call, operation is always in progress. */
     status = UCS_INPROGRESS;
@@ -453,7 +462,7 @@ ucs_status_t uct_bxi_ep_get_bcopy(uct_ep_h              tl_ep,
 
   status = uct_bxi_ep_execute_op(iface, ep, op);
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlGet bcopy return %d", status);
+    ucs_fatal("BXI: rma PtlGet bcopy return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
@@ -475,6 +484,7 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_iface_send_op_t *op;
   uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
@@ -494,9 +504,16 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   op->length              = uct_iov_get_length(iov);
   op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (ucs_unlikely(comp->flags & UCT_TAG_SCHEDULE)) {
+    status = uct_bxi_wrap(PtlTriggeredGet(
+            iface->tx.mdh, (ptl_size_t)op->get.buffer, op->length,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->get.resolved_raddr, op,
+            gop->cth, gop->ct_value));
+  } else {
+    status = uct_bxi_ep_execute_op(iface, ep, op);
+  }
   if (status != UCS_OK) {
-    ucs_fatal("BXI: PtlGet bcopy return %d", status);
+    ucs_fatal("BXI: rma PtlGet zcopy return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
@@ -705,6 +722,7 @@ ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
   ucs_status_t     status;
   uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
   uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
   uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_mem_t   *mem   = (uct_bxi_mem_t *)iov->memh;
   uct_bxi_iface_send_op_t *op;
@@ -725,15 +743,23 @@ ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
   op->atomic.buffer      = uct_bxi_resolve_laddr(iov->buffer, mem);
   op->atomic.remote_addr = uct_bxi_resolve_raddr(remote_addr, rkey);
 
-  status = uct_bxi_ep_execute_op(iface, ep, op);
+  if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
+    status = uct_bxi_wrap(PtlTriggeredAtomic(
+            gop->mdh, (uint64_t)op->atomic.buffer, op->length, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
+            0, op->atomic.op_code, op->atomic.dt, gop->cth, gop->ct_value));
+    gop->ct_value++;
+  } else {
+    status = uct_bxi_wrap(PtlAtomic(
+            iface->tx.mdh, (uint64_t)op->atomic.buffer, op->length, PTL_ACK_REQ,
+            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
+            0, op->atomic.op_code, op->atomic.dt));
+  }
   if (status != UCS_OK) {
     ucs_fatal("BXI: PtlAtomic request return %d", status);
   } else {
     status = UCS_INPROGRESS;
   }
-
-  ucs_debug("BXI: amo vec. op=%p, buf=%p, remote buf=%p", op, op->atomic.buffer,
-            (void *)op->atomic.remote_addr);
 
   /* Append operation descriptor to completion queue. */
   uct_bxi_ep_add_send_op(ep, op);

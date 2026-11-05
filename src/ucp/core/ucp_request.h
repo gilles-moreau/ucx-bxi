@@ -132,8 +132,6 @@ struct ucp_request {
     uint32_t          flags;
     /* Local request ID taken from PTR MAP */
     ucs_ptr_map_key_t id;
-    /* Schedule */
-    ucp_sched_h       schedh;
     /* Task in schedule */
     ucp_sched_task_t  *task;     
 

@@ -166,9 +166,16 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
     }
 
     if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
-        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
 
-        status = ucp_sched_recv(req);
+        status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_RECV, NULL, 
+                                     buffer, count, ucp_request_param_datatype(param), 
+                                     &req->task);
+        if (status != UCS_OK) {
+            goto out_request_put;
+        }
+
+        status = ucp_sched_task_recv(schedh, req->task);
         if (status != UCS_OK) {
             goto out_request_put;
         }

@@ -204,8 +204,6 @@ static void uct_bxi_iface_recv_block_init(ucs_mpool_t *mp, void *obj,
   /* Initialize the MD for rendez-vous offload. */
   md.eq_handle = iface->tx.eqh;
   md.length    = PTL_SIZE_MAX;
-  //NOTE: We do not count bytes because we do not know in advance the
-  //      actual size that will be read by the GET operation.
   md.options   = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
   md.start     = 0;
   md.ct_handle = block->cth;
@@ -247,13 +245,26 @@ static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
   ucs_status_t     status;
   uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.gop_mp);
   uct_bxi_gop_t   *gop   = obj;
+  ptl_md_t         md;
 
   gop->ct_value = 0;
-  gop->block    = NULL;
 
   status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
   if (status != UCS_OK) {
     ucs_error("BXI: could not allocate counter.");
+  }
+
+  /* Initialize the MD for rendez-vous offload. */
+  md.eq_handle = iface->tx.eqh;
+  md.length    = PTL_SIZE_MAX;
+  md.options   = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_SEND_DISABLE;
+  md.start     = 0;
+  md.ct_handle = gop->cth;
+
+  status = uct_bxi_wrap(
+          PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &gop->mdh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not bind MD.");
   }
 }
 
@@ -418,7 +429,7 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   mp_param.elems_per_chunk = config->tm.gop_mp.bufs_grow;
   mp_param.max_elems   = ucs_min(uct_bxi_iface_md(iface)->config.limits.max_cts,
                                  iface->config.tm.max_gop);
-  mp_param.elem_size   = sizeof(uct_bxi_gop_t) + iface->config.seg_size;
+  mp_param.elem_size   = sizeof(uct_bxi_gop_t);
   mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
   mp_param.ops         = &uct_bxi_gop_mpool_ops;
   mp_param.name        = "gop";

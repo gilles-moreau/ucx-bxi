@@ -274,6 +274,19 @@ ucs_status_ptr_t ucp_put_nbx(ucp_ep_h ep, const void *buffer, size_t count,
         req->send.rma.rkey        = rkey;
         req->send.rma.remote_addr = remote_addr;
 
+        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
+                                                         schedh, NULL);
+
+            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_PUT, 
+                                         (void *)buffer, (void *)remote_addr, 
+                                         count, datatype, &req->task);
+            if (status != UCS_OK) {
+                ucp_request_put_param(param, req);
+                return UCS_STATUS_PTR(status);
+            }
+        }
+
         if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_DATATYPE)) {
             datatype = param->datatype;
             if (UCP_DT_IS_CONTIG(datatype)) {
@@ -381,6 +394,19 @@ ucs_status_ptr_t ucp_get_nbx(ucp_ep_h ep, void *buffer, size_t count,
         req = ucp_request_get_param(worker, param,
                                     {ret = UCS_STATUS_PTR(UCS_ERR_NO_MEMORY);
                                     goto out_unlock;});
+
+        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
+                                                         schedh, NULL);
+
+            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_GET, 
+                                         (void *)remote_addr, (void *)buffer, 
+                                         count, datatype, &req->task);
+            if (status != UCS_OK) {
+                ucp_request_put_param(param, req);
+                return UCS_STATUS_PTR(status);
+            }
+        }
 
         req->send.rma.rkey             = rkey;
         req->send.rma.remote_addr      = remote_addr;

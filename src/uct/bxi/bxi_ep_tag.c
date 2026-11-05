@@ -475,9 +475,10 @@ uct_bxi_iface_block_init_trigget(uct_bxi_iface_t *iface, uct_bxi_ep_t *ep,
 
   /* There are three main cases for the triggered get:
    * - No offloaded rendez-vous, no schedule => no counters.
-   * - Offloaded rendez-vous => with counters, counted by bytes to handle 
-   *   eager send and rendez-vous recv (mpi standard). 
-   *   Rendez-vous is offloaded only if size > eager_limit.
+   * - Offloaded rendez-vous => with counters, counted by events. In case 
+   *   of send/receiver disymmetry, get will match remote 0 length ME and 
+   *   be ignored.
+   *   Rendez-vous is offloaded only if UCT_TAG_RECV_RNDV is set.
    * - Schedule => with counters, counted by event. UCT_TAG_SCHEDULE must 
    *   be set. Rendez-vous is offloaded iff UCT_TAG_RECV_RNDV. 
    *   UCT_TAG_RECV_REPLY_EP and UCT_TAG_SCHEDULE must be set as well.

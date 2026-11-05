@@ -8,7 +8,7 @@
   {                                                                            \
     ucs_assert(!((_task)->flags & UCP_SCHED_TASK_COMPLETED));                  \
                                                                                \
-    (_task)->flags |= UCP_SCHED_TASK_COMPLETED;                                \
+    ucp_sched_task_remove(_task);                                              \
   }
 
 static UCS_F_ALWAYS_INLINE int ucp_sched_task_is_offload(ucp_request_t *req)

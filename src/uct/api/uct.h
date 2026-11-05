@@ -1784,6 +1784,7 @@ struct uct_completion {
                                             be initialized with UCS_OK before
                                             first operation is started. */
     uct_gop_h                 gop;     /**< Generic operation handle. */
+    unsigned                  flags;   /**< Tag flags, @ref uct_tag_flags. */
 };
 
 

@@ -300,9 +300,9 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
                                 &req->send.state.dt_iter.mem_info, sg_count);
 
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-        req->schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
 
-        status = ucp_sched_send(req);
+        status = ucp_sched_task_send(schedh, req->task);
         if (status != UCS_OK) {
             ucp_request_put_param(param, req);
             return UCS_STATUS_PTR(status);

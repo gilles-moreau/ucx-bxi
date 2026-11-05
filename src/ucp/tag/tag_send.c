@@ -297,6 +297,19 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
     if (worker->context->config.ext.proto_enable) {
         req->send.msg_proto.tag = tag;
 
+        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
+            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
+                                                         schedh, NULL);
+
+            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_SEND, 
+                                         (void *)buffer, NULL, count, datatype, 
+                                         &req->task);
+            if (status != UCS_OK) {
+                ucp_request_put_param(param, req);
+                return UCS_STATUS_PTR(status);
+            }
+        }
+
         ret = ucp_proto_request_send_op(ep, &ucp_ep_config(ep)->proto_select,
                                         UCP_WORKER_CFG_INDEX_NULL, req,
                                         UCP_OP_ID_TAG_SEND, buffer, count,

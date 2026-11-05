@@ -3580,8 +3580,8 @@ ucs_status_ptr_t ucp_stream_recv_data_nb(ucp_ep_h ep, size_t *length);
  *
  * @return error code if resources might not be available for example 
  */
-ucs_status_t ucp_sched_create(ucp_worker_h          worker,
-                                      ucp_sched_h  *ctx);
+ucs_status_t ucp_sched_create(ucp_worker_h  worker,
+                              ucp_sched_h  *ctx);
 
 void ucp_sched_fini(ucp_sched_h ctx);
 
