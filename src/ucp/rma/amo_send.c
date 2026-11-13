@@ -204,6 +204,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
     ucs_status_ptr_t status_p;
     ucs_status_t status;
     ucp_request_t *req;
+    ucp_sched_t *sched;
     uint64_t value;
     size_t op_size;
     int op_id;
@@ -267,13 +268,13 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_atomic_op_nbx,
         ucp_amo_init_proto(req, ucp_uct_atomic_op_table[opcode], remote_addr,
                            rkey, ucp_uct_atomic_type_table[type]);
 
-        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                         schedh, NULL);
-
-            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_AMO, 
-                                         (void *)buffer, (void *)remote_addr, 
-                                         count, param->datatype, &req->task);
+        sched     = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        req->task = NULL;
+        if (ucs_unlikely(sched != NULL)) {
+            status = ucp_sched_task_init(sched, req, UCP_SCHED_TASK_TYPE_AMO, 
+                                         (void*)buffer, (void*)remote_addr, 
+                                         ucp_contig_dt_length(param->datatype, count), 
+                                         ep, &req->task);
             if (status != UCS_OK) {
                 ucp_request_put_param(param, req);
                 return UCS_STATUS_PTR(status);

@@ -245,6 +245,7 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
     uintptr_t datatype;
     uint32_t attr_mask;
     ucp_worker_h worker;
+    ucp_sched_h sched;
 
     UCP_CONTEXT_CHECK_FEATURE_FLAGS(ep->worker->context, UCP_FEATURE_TAG,
                                     return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
@@ -297,13 +298,13 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_send_nbx,
     if (worker->context->config.ext.proto_enable) {
         req->send.msg_proto.tag = tag;
 
-        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                         schedh, NULL);
-
-            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_SEND, 
-                                         (void *)buffer, NULL, count, datatype, 
-                                         &req->task);
+        sched     = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        req->task = NULL;
+        if (ucs_unlikely(sched != NULL)) {
+            status = ucp_sched_task_init(sched, req, UCP_SCHED_TASK_TYPE_SEND, 
+                                         (void *)buffer, NULL, 
+                                         ucp_contig_dt_length(datatype, count),
+                                         ep, &req->task);
             if (status != UCS_OK) {
                 ucp_request_put_param(param, req);
                 return UCS_STATUS_PTR(status);

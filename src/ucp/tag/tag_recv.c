@@ -165,22 +165,6 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
                       req + 1);
     }
 
-    if (param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH) {
-        ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
-
-        status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_RECV, NULL, 
-                                     buffer, count, ucp_request_param_datatype(param), 
-                                     &req->task);
-        if (status != UCS_OK) {
-            goto out_request_put;
-        }
-
-        status = ucp_sched_task_recv(schedh, req->task);
-        if (status != UCS_OK) {
-            goto out_request_put;
-        }
-    }
-
     ucp_request_set_callback_param(param, recv, req, recv.tag);
     return req + 1;
 
@@ -239,6 +223,24 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nb,
     return ucp_tag_recv_nbx(worker, buffer, count, tag, tag_mask, &param);
 }
 
+ucs_status_t ucp_tag_sched_recv_progress(ucp_sched_task_t *task) {
+    ucp_recv_desc_t *rdesc;
+    ucs_status_ptr_t ret;
+
+    rdesc = ucp_tag_unexp_search(&task->sched->worker->tm, task->recv.tag, 
+                                 task->recv.tag_mask, 1, "recv_nbx");
+    ret   = ucp_tag_recv_common(task->sched->worker, task->recv.buffer, 
+                                task->recv.count, task->recv.tag, 
+                                task->recv.tag_mask, task->req,
+                                rdesc, &task->recv.param, "recv_nbx");
+
+    if (UCS_PTR_IS_ERR(ret)) {
+        return UCS_PTR_RAW_STATUS(ret);
+    } else {
+        return UCS_OK;
+    }
+}
+
 UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nbx,
                  (worker, buffer, count, tag, tag_mask, param),
                  ucp_worker_h worker, void *buffer, size_t count,
@@ -247,7 +249,9 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nbx,
 {
     ucp_recv_desc_t *rdesc;
     ucs_status_ptr_t ret;
+    ucs_status_t status;
     ucp_request_t *req;
+    ucp_sched_t *sched;
 
     UCP_CONTEXT_CHECK_FEATURE_FLAGS(worker->context, UCP_FEATURE_TAG,
                                     return UCS_STATUS_PTR(UCS_ERR_INVALID_PARAM));
@@ -259,6 +263,33 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nbx,
         ret = UCS_STATUS_PTR(UCS_ERR_NO_MEMORY);
         goto out;
     });
+
+    sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+    if (sched != NULL) {
+        status = ucp_sched_task_init(sched, req, UCP_SCHED_TASK_TYPE_RECV, 
+                                     NULL, buffer, 
+                                     ucp_contig_dt_length(param->datatype, count), 
+                                     NULL, &req->task);
+        if (status != UCS_OK) {
+            return UCS_STATUS_PTR(status);
+        }
+
+        req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
+
+        ret = ucp_sched_task_schedule(req->task); 
+        if (UCS_PTR_IS_ERR(ret)) {
+            req->flags &= ~UCP_REQUEST_FLAG_SCHEDULED;
+            ucp_request_put_param(param, req);
+            goto out;
+        } else if (UCS_PTR_RAW_STATUS(ret) == UCS_INPROGRESS) {
+            ucp_sched_task_recv_save_params(req->task, param, tag, tag_mask, 
+                                            count, buffer, 
+                                            ucp_tag_sched_recv_progress);
+            goto out;
+        } else if (UCS_PTR_IS_PTR(ret)) {
+            req = ret;
+        } 
+    }
 
     rdesc = ucp_tag_unexp_search(&worker->tm, tag, tag_mask, 1, "recv_nbx");
     ret   = ucp_tag_recv_common(worker, buffer, count, tag, tag_mask, req,

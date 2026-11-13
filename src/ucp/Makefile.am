@@ -38,8 +38,6 @@ noinst_HEADERS = \
 	core/ucp_rkey.inl \
 	core/ucp_worker.h \
 	core/ucp_worker.inl \
-	core/ucp_sched.h \
-	core/ucp_sched.inl \
 	core/ucp_thread.h \
 	core/ucp_types.h \
 	core/ucp_vfs.h \
@@ -72,6 +70,8 @@ noinst_HEADERS = \
 	rndv/rndv_mtype.inl \
 	rndv/rndv.h \
 	rndv/rndv.inl \
+	sched/ucp_sched.h \
+	sched/ucp_sched.inl \
 	tag/eager.h \
 	tag/proto_eager.inl \
 	tag/tag_rndv.h \
@@ -116,7 +116,6 @@ libucp_la_SOURCES = \
 	core/ucp_version.c \
 	core/ucp_vfs.c \
 	core/ucp_worker.c \
-	core/ucp_sched.c \
 	dt/datatype_iter.c \
 	dt/dt_iov.c \
 	dt/dt_generic.c \
@@ -154,6 +153,7 @@ libucp_la_SOURCES = \
 	rndv/rndv_ats.c \
 	rndv/rndv_rkey_ptr.c \
 	rndv/rndv.c \
+	sched/ucp_sched.c \
 	stream/stream_multi.c \
 	stream/stream_recv.c \
 	stream/stream_send.c \

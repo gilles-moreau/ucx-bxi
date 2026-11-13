@@ -175,9 +175,7 @@ ucp_proto_request_set_stage(ucp_request_t *req, uint8_t proto_stage)
     req->send.proto_stage = proto_stage;
 
     /* Set pointer to progress function */
-    if (req->flags & UCP_REQUEST_FLAG_SCHEDULED) {
-        req->send.uct.func = ucp_sched_progress_wrapper;
-    } else if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
+    if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
         req->send.uct.func = ucp_request_progress_wrapper;
     } else {
         req->send.uct.func = proto->progress[proto_stage];
@@ -240,6 +238,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_proto_request_send_op_common(
         const ucp_proto_select_param_t *select_param, size_t msg_length)
 {
     ucs_string_buffer_t strb;
+    ucs_status_ptr_t status_ptr;
     ucs_status_t status;
 
     status = UCS_PROFILE_CALL(ucp_proto_request_lookup_proto, worker, ep, req,
@@ -250,7 +249,18 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_proto_request_send_op_common(
         return UCS_STATUS_PTR(status);
     }
 
-    UCS_PROFILE_CALL_VOID(ucp_request_send, req);
+    if (ucs_unlikely(req->task != NULL)) {
+        status_ptr = ucp_sched_task_schedule(req->task);
+        if (UCS_PTR_IS_ERR(status_ptr)) {
+            ucp_request_put_param(param, req);
+            return status_ptr;
+        }
+        req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
+
+        ucp_sched_task_progress(req->task);
+    } else {
+        UCS_PROFILE_CALL_VOID(ucp_request_send, req);
+    }
     if (req->flags & UCP_REQUEST_FLAG_COMPLETED) {
         /* coverity[offset_free] */
         ucp_request_imm_cmpl_param(param, req, send);
@@ -298,16 +308,6 @@ ucp_proto_request_send_op(ucp_ep_h ep, ucp_proto_select_t *proto_select,
     ucp_proto_select_param_init(&sel_param, op_id, param->op_attr_mask,
                                 op_flags, req->send.state.dt_iter.dt_class,
                                 &req->send.state.dt_iter.mem_info, sg_count);
-
-    if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-        ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
-
-        status = ucp_sched_task_send(schedh, req->task);
-        if (status != UCS_OK) {
-            ucp_request_put_param(param, req);
-            return UCS_STATUS_PTR(status);
-        }
-    }
 
     msg_length = req->send.state.dt_iter.length + header_length;
     return ucp_proto_request_send_op_common(worker, ep, proto_select,

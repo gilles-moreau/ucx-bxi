@@ -106,7 +106,7 @@ ucp_tag_rndv_offload_send_func(ucp_request_t                 *req,
   void    *rndv_op;
   unsigned flags = 0;
 
-  if (ucs_unlikely(ucp_sched_task_is_offload(req))) {
+  if (ucs_unlikely(ucp_request_is_offloaded(req))) {
     req->send.state.uct_comp.gop = req->task->comph;
     flags                        = UCT_TAG_SCHEDULE;
   }

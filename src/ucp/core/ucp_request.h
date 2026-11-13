@@ -12,7 +12,6 @@
 
 #include "ucp_context.h"
 #include "ucp_mm.h"
-#include "ucp_sched.h"
 
 #include <ucp/api/ucp.h>
 #include <ucp/dt/datatype_iter.h>
@@ -25,6 +24,7 @@
 #include <ucp/wireup/wireup.h>
 #include <ucp/core/ucp_am.h>
 #include <ucp/core/ucp_worker.h>
+#include <ucp/sched/ucp_sched.h>
 
 
 #define ucp_trace_req(_sreq, _message, ...) \

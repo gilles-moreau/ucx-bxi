@@ -249,6 +249,7 @@ ucs_status_ptr_t ucp_put_nbx(ucp_ep_h ep, const void *buffer, size_t count,
     ucp_ep_rma_config_t *rma_config;
     ucs_status_ptr_t ret;
     ucs_status_t status;
+    ucp_sched_t *sched;
     ucp_request_t *req;
 
     UCP_REQUEST_CHECK_PARAM(param);
@@ -274,13 +275,13 @@ ucs_status_ptr_t ucp_put_nbx(ucp_ep_h ep, const void *buffer, size_t count,
         req->send.rma.rkey        = rkey;
         req->send.rma.remote_addr = remote_addr;
 
-        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                         schedh, NULL);
+        sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        if (ucs_unlikely(sched != NULL)) {
 
-            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_PUT, 
+            status = ucp_sched_task_init(sched, req, UCP_SCHED_TASK_TYPE_PUT, 
                                          (void *)buffer, (void *)remote_addr, 
-                                         count, datatype, &req->task);
+                                         ucp_contig_dt_length(datatype, count), 
+                                         ep, &req->task);
             if (status != UCS_OK) {
                 ucp_request_put_param(param, req);
                 return UCS_STATUS_PTR(status);
@@ -374,6 +375,7 @@ ucs_status_ptr_t ucp_get_nbx(ucp_ep_h ep, void *buffer, size_t count,
     ucs_status_ptr_t ret;
     ucs_status_t status;
     ucp_request_t *req;
+    ucp_sched_t *sched;
     uintptr_t datatype;
 
     if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL)) {
@@ -395,13 +397,12 @@ ucs_status_ptr_t ucp_get_nbx(ucp_ep_h ep, void *buffer, size_t count,
                                     {ret = UCS_STATUS_PTR(UCS_ERR_NO_MEMORY);
                                     goto out_unlock;});
 
-        if (ucs_unlikely(param->op_attr_mask & UCP_OP_ATTR_FIELD_SCHEDH)) {
-            ucp_sched_h schedh = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, 
-                                                         schedh, NULL);
-
-            status = ucp_sched_task_init(schedh, req, UCP_SCHED_TASK_GET, 
+        sched = UCP_REQUEST_PARAM_FIELD(param, SCHEDH, schedh, NULL);
+        if (ucs_unlikely(sched != NULL)) {
+            status = ucp_sched_task_init(sched, req, UCP_SCHED_TASK_TYPE_GET, 
                                          (void *)remote_addr, (void *)buffer, 
-                                         count, datatype, &req->task);
+                                         ucp_contig_dt_length(datatype, count), 
+                                         ep, &req->task);
             if (status != UCS_OK) {
                 ucp_request_put_param(param, req);
                 return UCS_STATUS_PTR(status);

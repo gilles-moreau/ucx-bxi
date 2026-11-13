@@ -119,10 +119,50 @@ static ucs_status_t ucp_sched_edge_add(ucp_sched_h       sched,
   return UCS_OK;
 }
 
+ucs_status_t ucp_sched_task_recv_init(ucp_sched_h schedh, ucp_request_t *req,
+                                      void *out, size_t count,
+                                      ucp_datatype_t dt, ucp_tag_t tag,
+                                      ucp_tag_t                 tag_mask,
+                                      ucp_request_param_t      *param,
+                                      ucp_sched_recv_callback_t cb,
+                                      ucp_sched_task_t        **task_p)
+{
+  ucp_sched_task_t *task;
+
+  ucs_assert(UCP_DT_IS_CONTIG(dt));
+
+  task = ucp_sched_task_alloc(schedh);
+  if (task == NULL) {
+    return UCS_ERR_NO_MEMORY;
+  }
+
+  task->schedh         = schedh;
+  task->flags          = 0;
+  task->type           = UCP_SCHED_TASK_RECV;
+  task->req            = req;
+  task->out            = out;
+  task->tag            = tag;
+  task->tag_mask       = tag_mask;
+  task->cb             = cb;
+  task->size           = ucp_contig_dt_length(dt, count);
+  task->comph          = NULL;
+  task->num_deps       = 0;
+  task->remaining_deps = 0;
+  ucs_list_head_init(&task->predecessors);
+  ucs_list_head_init(&task->successors);
+
+  *task_p = task;
+
+  return UCS_OK;
+err:
+  ucp_sched_task_unalloc(schedh, task);
+  return UCS_ERR_INVALID_PARAM;
+}
+
 ucs_status_t ucp_sched_task_init(ucp_sched_h schedh, ucp_request_t *req,
                                  ucp_sched_task_type_t type, void *in,
-                                 void *out, size_t count, ucp_datatype_t dt,
-                                 ucp_sched_task_t **task_p)
+                                 void *out, size_t count, ucp_ep_h ep,
+                                 ucp_datatype_t dt, ucp_sched_task_t **task_p)
 {
   ucp_sched_task_t *task;
 
@@ -139,6 +179,7 @@ ucs_status_t ucp_sched_task_init(ucp_sched_h schedh, ucp_request_t *req,
   task->req            = req;
   task->in             = in;
   task->out            = out;
+  task->ep             = ep;
   task->size           = ucp_contig_dt_length(dt, count);
   task->comph          = NULL;
   task->num_deps       = 0;
@@ -152,7 +193,6 @@ ucs_status_t ucp_sched_task_init(ucp_sched_h schedh, ucp_request_t *req,
   case UCP_SCHED_TASK_PUT:
   case UCP_SCHED_TASK_GET:
   case UCP_SCHED_TASK_AMO:
-    task->ep = req->send.ep;
     break;
   case UCP_SCHED_TASK_RECV:
     break;
@@ -192,7 +232,7 @@ int ucp_sched_check_overlap(const void *a_buf, size_t a_size, const void *b_buf,
   uintptr_t a = (uintptr_t)a_buf;
   uintptr_t b = (uintptr_t)b_buf;
 
-  if ((a_size == 0) || (b_size == 0)) {
+  if ((a_size == 0) || (b_size == 0) || (a_buf == NULL) || (b_buf == NULL)) {
     return 0;
   }
 
@@ -213,14 +253,23 @@ int ucp_sched_check_overlap(const void *a_buf, size_t a_size, const void *b_buf,
 static int ucp_sched_depends_on(const ucp_sched_task_t *task,
                                 const ucp_sched_task_t *prev)
 {
-  if (ucp_sched_check_overlap(task->in, task->size, prev->out, prev->size)) {
-    return 1;
-  }
+  if (task->type == UCP_SCHED_TASK_RECV) {
+    /* Receive task cannot be executed if a previous task's input buffer 
+     * overlap. Otherwise, it may overwrite its data before prev task has 
+     * been executed. */
+    if (ucp_sched_check_overlap(task->out, task->size, prev->in, prev->size)) {
+      return 1;
+    }
+  } else {
+    if (ucp_sched_check_overlap(task->in, task->size, prev->out, prev->size)) {
+      return 1;
+    }
 
-  if ((task->type == UCP_SCHED_TASK_SEND) &&
-      (prev->type == UCP_SCHED_TASK_SEND) && (task->ep == prev->ep) &&
-      (task->tag == prev->tag) && !(prev->flags & UCP_SCHED_TASK_OFFLOADED)) {
-    return 1;
+    if ((task->type == UCP_SCHED_TASK_SEND) &&
+        (prev->type == UCP_SCHED_TASK_SEND) && (task->ep == prev->ep) &&
+        (task->tag == prev->tag) && !(prev->flags & UCP_SCHED_TASK_OFFLOADED)) {
+      return 1;
+    }
   }
 
   return 0;
@@ -283,6 +332,7 @@ static ucs_status_t ucp_sched_offload_send(ucp_sched_h       sched,
 ucs_status_t ucp_sched_task_recv(ucp_sched_h schedh, ucp_sched_task_t *task)
 {
   ucp_request_t      *req = task->req;
+  ucp_sched_task_t   *prev;
   ucp_worker_iface_t *wiface;
   ucs_status_t        status;
 
@@ -291,6 +341,22 @@ ucs_status_t ucp_sched_task_recv(ucp_sched_h schedh, ucp_sched_task_t *task)
   if ((req->recv.op_attr & UCP_OP_ATTR_FLAG_OP_OFFLOAD) &&
       !(schedh->flags & UCP_SCHED_OFFLOAD_ENABLED)) {
     return UCS_ERR_INVALID_PARAM;
+  }
+
+  ucs_list_for_each (prev, &schedh->schedule, elem) {
+    if (!ucp_sched_depends_on(task, prev)) {
+      continue;
+    }
+
+    ucp_trace_req(req, "\tdepends on. task=%p, type=%s, region %p..%p", prev,
+                  ucp_sched_type_to_str[prev->type], prev->out,
+                  UCS_PTR_BYTE_OFFSET(prev->out, prev->size));
+
+    status = ucp_sched_edge_add(schedh, prev, task);
+    if (status != UCS_OK) {
+      ucp_sched_task_unalloc(schedh, task);
+      return status;
+    }
   }
 
   if ((schedh->flags & UCP_SCHED_OFFLOAD_ENABLED) &&
@@ -308,10 +374,14 @@ ucs_status_t ucp_sched_task_recv(ucp_sched_h schedh, ucp_sched_task_t *task)
   ucs_list_add_tail(&schedh->schedule, &task->elem);
   req->task   = task;
   req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
+  ucp_sched_make_ready(schedh, task);
 
-  ucp_trace_req(req, "scheduled recv task %p. region %p..%p", task, task->out,
-                UCS_PTR_BYTE_OFFSET(task->out, task->size));
-  return UCS_OK;
+  ucp_trace_req(req, "schedule %p recv task %p. region %p..%p, ready ? %d",
+                schedh, task, task->out,
+                UCS_PTR_BYTE_OFFSET(task->out, task->size),
+                !!(task->flags & UCP_SCHED_TASK_READY));
+
+  return (task->flags & UCP_SCHED_TASK_READY) ? UCS_OK : UCS_INPROGRESS;
 }
 
 /* Wrapper is called by ucp_request_send already. */
@@ -337,7 +407,8 @@ ucs_status_t ucp_sched_progress_wrapper(uct_pending_req_t *self)
     req->send.uct.func = proto->progress[req->send.proto_stage];
   }
 
-  ucp_trace_req(req, "scheduled send task %p can be progressed", req->task);
+  ucp_trace_req(req, "schedule %p task %p type %s can be progressed",
+                task->schedh, task, ucp_sched_type_to_str[task->type]);
   return req->send.uct.func(self);
 }
 
@@ -351,7 +422,8 @@ ucs_status_t ucp_sched_task_send(ucp_sched_h schedh, ucp_sched_task_t *task)
   ucs_assert(sched != NULL);
 
   /* Build incoming DAG edges to all earlier conflicting operations. */
-  ucp_trace_req(req, "send task %p, region %p..%p", task, task->in,
+  ucp_trace_req(req, "task %p type %s region %p..%p", task,
+                ucp_sched_type_to_str[task->type], task->in,
                 UCS_PTR_BYTE_OFFSET(task->in, task->size));
   ucs_list_for_each (prev, &schedh->schedule, elem) {
     if (!ucp_sched_depends_on(task, prev)) {
@@ -389,8 +461,10 @@ ucs_status_t ucp_sched_task_send(ucp_sched_h schedh, ucp_sched_task_t *task)
   req->flags         |= UCP_REQUEST_FLAG_SCHEDULED;
   req->send.uct.func  = ucp_sched_progress_wrapper;
 
-  ucp_trace_req(req, "scheduled send task %p, %zu dependencies, %zu remaining",
-                task, task->num_deps, task->remaining_deps);
+  ucp_trace_req(req,
+                "schedule %p task %p type %s %zu dependencies, %zu remaining",
+                schedh, task, ucp_sched_type_to_str[task->type], task->num_deps,
+                task->remaining_deps);
   ucp_sched_make_ready(schedh, task);
   return UCS_OK;
 
@@ -424,6 +498,25 @@ ucs_status_t ucp_sched_task_remove(ucp_sched_task_t *task)
               ucs_status_string(req->status));
   } else {
     task->flags |= UCP_SCHED_TASK_COMPLETED;
+    ucp_trace_req(req, "schedule %p task %p type %s is completed.",
+                  task->schedh, task, ucp_sched_type_to_str[task->type]);
+    if (task->type == UCP_SCHED_TASK_RECV) {
+      ucs_debug("src[0]=%d, src[1]=%d, src[2]=%d", ((uint32_t *)task->out)[0],
+                ((uint32_t *)task->out)[1], ((uint32_t *)task->out)[2]);
+    } else if (task->type == UCP_SCHED_TASK_AMO) {
+      ucs_debug("src[0]=%d, src[1]=%d, src[2]=%d", ((uint32_t *)task->in)[0],
+                ((uint32_t *)task->in)[1], ((uint32_t *)task->in)[2]);
+      ucs_debug("dst[0]=%d, dst[1]=%d, dst[2]=%d", ((uint32_t *)task->out)[0],
+                ((uint32_t *)task->out)[1], ((uint32_t *)task->out)[2]);
+    } else if (task->type == UCP_SCHED_TASK_SEND) {
+      ucs_debug("src[0]=%d, src[1]=%d, src[2]=%d", ((uint32_t *)task->in)[0],
+                ((uint32_t *)task->in)[1], ((uint32_t *)task->in)[2]);
+    } else if (task->type == UCP_SCHED_TASK_GET) {
+      ucs_debug("src[0]=%d, src[1]=%d, src[2]=%d", ((uint32_t *)task->in)[0],
+                ((uint32_t *)task->in)[1], ((uint32_t *)task->in)[2]);
+      ucs_debug("dst[0]=%d, dst[1]=%d, dst[2]=%d", ((uint32_t *)task->out)[0],
+                ((uint32_t *)task->out)[1], ((uint32_t *)task->out)[2]);
+    }
     ucs_list_for_each (edge, &task->successors, from_link) {
       ucs_assert(edge->to->remaining_deps > 0);
       --edge->to->remaining_deps;
@@ -490,6 +583,7 @@ static void ucp_sched_destroy(ucp_sched_h sched)
 unsigned ucp_sched_progress_cb(void *arg)
 {
   ucs_status_t       status;
+  ucs_status_ptr_t   status_ptr;
   ucp_sched_h        sched = arg;
   ucp_sched_task_t  *task;
   ucp_request_t     *req;
@@ -505,24 +599,40 @@ unsigned ucp_sched_progress_cb(void *arg)
     task->flags &= ~UCP_SCHED_TASK_READY;
     task->flags |= UCP_SCHED_TASK_STARTED;
 
-    req   = task->req;
-    proto = req->send.proto_config->proto;
+    req = task->req;
 
-    /* A start callback can synchronously complete a request, append ready
+    if (task->type == UCP_SCHED_TASK_RECV) {
+      status_ptr = task->cb(task->worker, task->out, task->count, task->tag,
+                            task->tag_mask, task->param, task->req);
+      if (UCS_PTR_IS_ERR(status_ptr)) {
+        return UCS_PTR_RAW_STATUS(status_ptr);
+      }
+    } else {
+      proto = req->send.proto_config->proto;
+
+      /* A start callback can synchronously complete a request, append ready
      * tasks, or even request schedule destruction. Never access task/req
      * after the callback without revalidating the scheduler lifecycle. */
-    ucp_trace_req(task->req, "scheduler starting scheduled task %p", task);
+      ucp_trace_req(task->req,
+                    "scheduler %p starting scheduled task %p type %s", sched,
+                    task, ucp_sched_type_to_str[task->type]);
 
-    /* Call ucp_sched_progress_wrapper. */
-    if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
-      req->send.uct.func = ucp_request_progress_wrapper;
-    } else {
-      req->send.uct.func = proto->progress[req->send.proto_stage];
-    }
+      /* Call ucp_sched_progress_wrapper. */
+      if (req->send.ep->worker->context->config.progress_wrapper_enabled) {
+        req->send.uct.func = ucp_request_progress_wrapper;
+      } else {
+        req->send.uct.func = proto->progress[req->send.proto_stage];
+      }
 
-    status = req->send.uct.func(&req->send.uct);
-    if (status != UCS_OK) {
-      return status;
+      ucs_debug("SCHED: sched=%p, src[0]=%d, src[1]=%d, src[2]=%d", sched,
+                ((uint32_t *)req->send.state.dt_iter.type.contig.buffer)[0],
+                ((uint32_t *)req->send.state.dt_iter.type.contig.buffer)[1],
+                ((uint32_t *)req->send.state.dt_iter.type.contig.buffer)[2]);
+
+      status = req->send.uct.func(&req->send.uct);
+      if (status != UCS_OK) {
+        return status;
+      }
     }
     ++progressed;
   }
@@ -533,6 +643,110 @@ unsigned ucp_sched_progress_cb(void *arg)
   }
 
   return progressed;
+}
+
+ucs_status_t ucp_sched_dump_dot(ucp_sched_h sched, const char *filename)
+{
+  ucp_sched_task_t *task;
+  ucp_sched_edge_t *edge;
+  const char       *state;
+  const char       *fill;
+  const char       *type_name;
+  size_t            index = 0;
+  FILE             *stream;
+  int               io_error;
+
+  if ((sched == NULL) || (filename == NULL)) {
+    return UCS_ERR_INVALID_PARAM;
+  }
+
+  stream = fopen(filename, "w");
+  if (stream == NULL) {
+    ucs_error("SCHED: cannot open DOT file '%s': %s", filename,
+              strerror(errno));
+    return UCS_ERR_IO_ERROR;
+  }
+
+  fprintf(stream, "digraph ucp_schedule {\n");
+  fprintf(stream,
+          "  graph [label=\"Schedule %p\\nTasks: %zu\", "
+          "labelloc=t, fontsize=16, rankdir=TB];\n",
+          (void *)sched, sched->count);
+  fprintf(stream, "  node [shape=box, style=\"rounded,filled\", "
+                  "fontname=\"Helvetica\", fontsize=10];\n");
+  fprintf(stream, "  edge [arrowsize=0.7];\n\n");
+
+  /* The schedule retains completed tasks, so include those as well. */
+  ucs_list_for_each (task, &sched->schedule, elem) {
+    if (task->flags & UCP_SCHED_TASK_FAILED) {
+      state = "failed";
+      fill  = "#f8cccc";
+    } else if (task->flags & UCP_SCHED_TASK_COMPLETED) {
+      state = "completed";
+      fill  = "#d3efcf";
+    } else if (task->flags & UCP_SCHED_TASK_STARTED) {
+      state = "started";
+      fill  = "#d0e5ff";
+    } else if (task->flags & UCP_SCHED_TASK_READY) {
+      state = "ready";
+      fill  = "#fff0b3";
+    } else if (task->remaining_deps != 0) {
+      state = "blocked";
+      fill  = "#e5e7eb";
+    } else {
+      state = "pending";
+      fill  = "#f3f4f6";
+    }
+
+    type_name = ((unsigned)task->type < UCP_SCHED_TASK_LAST) &&
+                                (ucp_sched_type_to_str[task->type] != NULL) ?
+                        ucp_sched_type_to_str[task->type] :
+                        "unknown";
+
+    fprintf(stream,
+            "  \"task_%p\" [label=\"#%zu %s\\n%s%s\\n"
+            "task=%p\\nsize=%zu\\ndeps=%zu, remaining=%zu\\n"
+            "in=%p\\nout=%p",
+            (void *)task, index++, type_name, state,
+            (task->flags & UCP_SCHED_TASK_OFFLOADED) ? " (offloaded)" : "",
+            (void *)task, task->size, task->num_deps, task->remaining_deps,
+            task->in, task->out);
+
+    if (task->type == UCP_SCHED_TASK_SEND) {
+      fprintf(stream, "\\ntag=0x%" PRIx64, (uint64_t)task->tag);
+    }
+    fprintf(stream, "\", fillcolor=\"%s\"];\n", fill);
+  }
+
+  /* Emit each edge once, from predecessor to successor. */
+  fputc('\n', stream);
+  ucs_list_for_each (task, &sched->schedule, elem) {
+    ucs_list_for_each (edge, &task->successors, from_link) {
+      if (task->flags & UCP_SCHED_TASK_COMPLETED) {
+        /* The edge is still in the graph, but its dependency is satisfied. */
+        fprintf(stream,
+                "  \"task_%p\" -> \"task_%p\" "
+                "[style=dashed, color=\"#a0a0a0\"];\n",
+                (void *)edge->from, (void *)edge->to);
+      } else {
+        fprintf(stream, "  \"task_%p\" -> \"task_%p\";\n", (void *)edge->from,
+                (void *)edge->to);
+      }
+    }
+  }
+
+  fprintf(stream, "}\n");
+  io_error = ferror(stream);
+  if (fclose(stream) != 0) {
+    io_error = 1;
+  }
+
+  if (io_error) {
+    ucs_error("SCHED: failed writing DOT file '%s'", filename);
+    return UCS_ERR_IO_ERROR;
+  }
+
+  return UCS_OK;
 }
 
 ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
@@ -603,6 +817,8 @@ err_sched:
 void ucp_sched_fini(ucp_sched_h sched)
 {
   ucp_sched_task_t *task;
+
+  ucp_sched_dump_dot(sched, "test.dot");
 
   /* Destruction with live requests would leave req->task dangling. */
   ucs_list_for_each (task, &sched->schedule, elem) {

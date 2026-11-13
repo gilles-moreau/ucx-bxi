@@ -11,8 +11,8 @@
 #include "ucp_worker.h"
 #include "ucp_ep.inl"
 #include "ucp_mm.inl"
-#include "ucp_sched.inl"
 
+#include <ucp/sched/ucp_sched.inl>
 #include <ucp/dt/dt.h>
 #include <ucs/profile/profile.h>
 #include <ucs/datastruct/mpool.inl>
@@ -85,7 +85,8 @@ UCS_PTR_MAP_IMPL(request, 0);
             (_req)->_cb((_req) + 1, (_status), ## __VA_ARGS__); \
         } \
         if (ucs_unlikely((_req)->flags & UCP_REQUEST_FLAG_SCHEDULED)) { \
-            ucp_sched_task_complete((_req)->task); \
+            ucp_sched_task_complete((_req)->task, _status); \
+            (_req)->flags &= ~UCP_REQUEST_FLAG_SCHEDULED; \
         } \
         if (ucs_unlikely(_flags & UCP_REQUEST_FLAG_RELEASED)) { \
             ucp_request_put(_req); \
@@ -259,6 +260,13 @@ ucp_request_complete_send(ucp_request_t *req, ucs_status_t status)
     /* coverity[offset_free] */
     ucp_request_complete(req, send.cb, status, req->user_data);
 }
+
+static UCS_F_ALWAYS_INLINE int ucp_request_is_offloaded(ucp_request_t *req)
+{
+  return (req->flags & UCP_REQUEST_FLAG_SCHEDULED) && 
+         (req->flags & UCP_REQUEST_FLAG_OFFLOADED);
+}
+
 
 static UCS_F_ALWAYS_INLINE void
 ucp_request_complete_tag_recv(ucp_request_t *req, ucs_status_t status)

@@ -3,6 +3,7 @@
 
 #include <ucp/api/ucp_def.h>
 #include <uct/api/uct_def.h>
+#include <ucp/core/ucp_types.h> /* ucp_operation_id_t */
 
 #include "ucp_types.h"
 
@@ -36,6 +37,10 @@ enum {
   UCP_SCHED_TASK_FAILED        = UCS_BIT(10)
 };
 
+typedef ucs_status_ptr_t (*ucp_sched_recv_callback_t)(
+        ucp_worker_h worker, void *buffer, size_t count, ucp_tag_t tag,
+        ucp_tag_t tag_mask, ucp_request_param_t *param, ucp_request_t *req);
+
 /*
  * Edge from predecessor to successor. An edge can be removed independently
  * of its neighbors, which makes a later transitive-reduction pass possible.
@@ -54,10 +59,17 @@ struct ucp_sched_task {
   ucp_sched_task_type_t type;
   void                 *in;
   void                 *out;
+  size_t                count;
   size_t                size;
+  ucp_worker_h          worker;
   ucp_ep_h              ep;
-  uct_tag_t             tag;
   uct_gop_h             comph;
+
+  /* Recv */
+  ucp_request_param_t      *param;
+  ucp_tag_t                 tag;
+  ucp_tag_t                 tag_mask;
+  ucp_sched_recv_callback_t cb;
 
   ucp_request_t *req;
 
@@ -93,8 +105,8 @@ typedef struct ucp_sched {
 
 ucs_status_t ucp_sched_task_init(ucp_sched_h schedh, ucp_request_t *req,
                                  ucp_sched_task_type_t type, void *in,
-                                 void *out, size_t count, ucp_datatype_t dt,
-                                 ucp_sched_task_t **task_p);
+                                 void *out, size_t count, ucp_ep_h ep,
+                                 ucp_datatype_t dt, ucp_sched_task_t **task_p);
 ucs_status_t ucp_sched_task_send(ucp_sched_h schedh, ucp_sched_task_t *task);
 ucs_status_t ucp_sched_task_recv(ucp_sched_h schedh, ucp_sched_task_t *task);
 ucs_status_t ucp_sched_task_remove(ucp_sched_task_t *task);

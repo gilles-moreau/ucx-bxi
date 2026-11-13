@@ -10,7 +10,7 @@
 
 #include "tag_match.inl"
 #include <ucp/tag/offload.h>
-#include <ucp/core/ucp_sched.h>
+#include <ucp/sched/ucp_sched.h>
 
 
 static ucs_mpool_ops_t ucp_sched_mpool_ops = {
