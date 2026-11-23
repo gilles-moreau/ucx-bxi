@@ -82,7 +82,7 @@ public:
         s.imm_data         = i;
         s.uct_comp.count   = 1;
         s.uct_comp.status  = UCS_OK;
-        s.uct_comp.gop     = NULL;
+        s.uct_comp.comp     = NULL;
         s.uct_comp.func    = send_completion;
         s.sw_rndv          = s.comp = false;
         s.unexp            = unexp_flow;
@@ -127,7 +127,7 @@ public:
 
     ucs_status_t tag_eager_zcopy(entity &e, send_ctx &ctx)
     {
-        unsigned offload = ctx.uct_comp.gop == NULL ? 0 : UCT_TAG_SCHEDULE;
+        unsigned offload = ctx.uct_comp.comp == NULL ? 0 : UCT_TAG_SCHEDULE;
 
         UCS_TEST_GET_BUFFER_IOV(iov, iovcnt, ctx.mbuf->ptr(),
                                 ctx.mbuf->length(), ctx.mbuf->memh(),
@@ -144,7 +144,7 @@ public:
 
     ucs_status_t tag_rndv_zcopy(entity &e, send_ctx &ctx)
     {
-         unsigned offload = ctx.uct_comp.gop == NULL ? 0 : UCT_TAG_SCHEDULE;
+         unsigned offload = ctx.uct_comp.comp == NULL ? 0 : UCT_TAG_SCHEDULE;
 
          rndv_hdr hdr = {{ctx.imm_data,
                           reinterpret_cast<uint64_t>(&ctx)
@@ -296,7 +296,7 @@ public:
                                       bool take_uct_desc = false)
     {
         uct_tag_t ftag = 11, btag = 22;
-        uct_gop_h gop;
+        uct_sched_comp_h recv_comp, send_comp;
 
         if (RUNNING_ON_VALGRIND) {
             length = ucs_min(length, 128U);
@@ -311,15 +311,20 @@ public:
         recv_ctx r_ctx;
         init_recv_ctx(r_ctx, &recvbuf, ftag, MASK, take_uct_desc);
 
-        r_ctx.uct_ctx.reply_ep = receiver().ep(0);
-        ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
+        ASSERT_UCS_OK(uct_iface_sched_comp_add(receiver().iface(), 
+                                               NULL, 0, &recv_comp));
 
-        ASSERT_UCS_OK(uct_iface_tag_sched_recv(receiver().iface(), 
-                                               &r_ctx.uct_ctx, &gop));
+        r_ctx.uct_ctx.reply_ep = receiver().ep(0);
+        r_ctx.uct_ctx.comp = recv_comp;
+        ASSERT_UCS_OK(tag_post(receiver(), r_ctx));
 
         send_ctx rt_ctx; // Triggered context.
         init_send_ctx(rt_ctx, &recvbuf, btag, reinterpret_cast<uint64_t>(&rt_ctx));
-        rt_ctx.uct_comp.gop = gop;
+
+        ASSERT_UCS_OK(uct_iface_sched_comp_add(receiver().iface(), 
+                                               &recv_comp, 1, &send_comp));
+
+        rt_ctx.uct_comp.comp = send_comp;
         ASSERT_UCS_OK((this->*sfunc)(receiver(), rt_ctx));
 
         recv_ctx st_ctx;
@@ -335,7 +340,8 @@ public:
         check_rx_completion(r_ctx, true, SEND_SEED);
         check_rx_completion(st_ctx, true, SEND_SEED);
 
-        uct_iface_tag_sched_release(receiver().iface(), gop);
+        uct_iface_sched_comp_rm(receiver().iface(), recv_comp);
+        uct_iface_sched_comp_rm(receiver().iface(), send_comp);
 
         flush();
     }

@@ -211,17 +211,13 @@ typedef ucs_status_t (*uct_iface_tag_recv_cancel_func_t)(uct_iface_h iface,
 
 /* interface - scheduling operations */
 
-typedef ucs_status_t (*uct_iface_tag_sched_recv_func_t)(uct_iface_h        iface,
-                                                        uct_tag_context_t *ctx,
-                                                        uct_gop_h         *gop_p);
+typedef ucs_status_t (*uct_iface_sched_comp_add_func_t)(uct_iface_h iface,
+                                                        uct_sched_comp_h *prevs,
+                                                        size_t prev_cnt,
+                                                        uct_sched_comp_h *next_p);
 
-typedef ucs_status_t (*uct_iface_tag_sched_send_func_t)(uct_iface_h iface,
-                                                        uct_gop_h *gop_p, 
-                                                        uct_gop_h *gops,
-                                                        size_t gop_cnt);
-
-typedef void (*uct_iface_tag_sched_release_func_t)(uct_iface_h iface,
-                                                   uct_gop_h gop);
+typedef void (*uct_iface_sched_comp_rm_func_t)(uct_iface_h iface,
+                                               uct_sched_comp_h comp);
 
 /* endpoint - pending queue */
 
@@ -364,9 +360,8 @@ typedef struct uct_iface_ops {
     uct_iface_tag_recv_cancel_func_t    iface_tag_recv_cancel;
 
     /* interface - scheduling operations */
-    uct_iface_tag_sched_recv_func_t     iface_tag_sched_recv;
-    uct_iface_tag_sched_send_func_t     iface_tag_sched_send;
-    uct_iface_tag_sched_release_func_t  iface_tag_sched_release;
+    uct_iface_sched_comp_add_func_t     iface_sched_comp_add;
+    uct_iface_sched_comp_rm_func_t      iface_sched_comp_rm;
 
     /* endpoint - pending queue */
     uct_ep_pending_add_func_t           ep_pending_add;

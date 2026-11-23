@@ -1,6 +1,8 @@
 #include "ucp_sched.h"
 #include "ucp_sched.inl"
 
+#include <ucp/tag/tag_match.inl>
+
 #include <ucp/core/ucp_request.inl>
 #include <ucp/core/ucp_worker.h>
 #include <ucs/datastruct/khash.h>
@@ -8,6 +10,7 @@
 
 #define UCP_SCHED_INITIAL_TASKS   32
 #define UCP_SCHED_INITIAL_EDGES   128
+#define UCP_SCHED_MAX_DEPS        16
 #define UCP_SCHED_PROGRESS_BUDGET 32
 
 static const char *ucp_sched_type_to_str[UCP_SCHED_TASK_TYPE_LAST] = {
@@ -112,40 +115,50 @@ static ucs_status_t ucp_sched_edge_add(ucp_sched_h       sched,
   return UCS_OK;
 }
 
-static ucs_status_t ucp_sched_task_send_progress(ucp_sched_task_t *task)
+static UCS_F_ALWAYS_INLINE int
+ucp_sched_task_has_dependencies(ucp_sched_task_t *task)
 {
-  ucp_request_send(task->req);
-  return UCS_OK;
+  return task->num_deps > 0;
 }
 
-static ucs_status_ptr_t ucp_sched_task_send_commit(ucp_sched_task_t *task)
+static ucs_status_ptr_t ucp_sched_task_send_progress(ucp_sched_task_t *task)
 {
+  ucp_request_send(task->req);
   return UCS_STATUS_PTR(UCS_OK);
 }
 
-static ucp_sched_task_ops_t send_ops = {.commit = ucp_sched_task_send_commit,
-                                        .progress =
+static ucp_sched_task_ops_t send_ops = {.progress =
                                                 ucp_sched_task_send_progress};
 
-static ucs_status_t ucp_sched_task_recv_progress(ucp_sched_task_t *task)
+static ucs_status_ptr_t
+ucp_sched_task_recv_offload_progress(ucp_sched_task_t *task)
 {
-  return UCS_OK;
-}
+  ucp_recv_desc_t *rdesc;
 
-static ucs_status_ptr_t ucp_sched_task_recv_commit(ucp_sched_task_t *task)
-{
+  if (task->flags & UCP_SCHED_TASK_FLAG_OFFLOADED) {
+    if (ucp_sched_task_has_dependencies(task)) {
 
-  if (task->remaining_deps > 0) {
-    ucs_trace("SCHED: task %p commit in progress", task);
-    return UCS_STATUS_PTR(UCS_INPROGRESS);
+      task->recv.proxy_req = ucs_mpool_get_inline(&task->sched->proxy_req_mp);
+      if (UCS_PTR_IS_ERR(task->recv.proxy_req)) {
+        return UCS_STATUS_PTR(task->recv.proxy_req);
+      }
+    }
+
+  } else if (ucp_sched_task_has_dependencies(task)) {
+
+    rdesc = ucp_tag_unexp_search(&task->sched->worker->tm, task->recv.tag,
+                                 task->recv.tag_mask, 1, "recv_nbx");
+    return ucp_tag_recv_common(task->sched->worker, task->recv.buffer,
+                               task->recv.count, task->recv.tag,
+                               task->recv.tag_mask, task->req, rdesc,
+                               &task->recv.param, "recv_nbx");
   }
 
   return UCS_STATUS_PTR(UCS_OK);
 }
 
-static ucp_sched_task_ops_t recv_ops = {.commit = ucp_sched_task_recv_commit,
-                                        .progress =
-                                                ucp_sched_task_recv_progress};
+static ucp_sched_task_ops_t recv_ops = {
+        .progress = ucp_sched_task_recv_offload_progress};
 
 ucs_status_t ucp_sched_task_init(ucp_sched_t *sched, ucp_request_t *req,
                                  ucp_sched_task_type_t type, void *in,
@@ -154,13 +167,14 @@ ucs_status_t ucp_sched_task_init(ucp_sched_t *sched, ucp_request_t *req,
 {
   ucp_sched_task_t *task;
 
-  ucs_assert(sched);
+  ucs_assert(sched != NULL);
 
   task = ucp_sched_task_alloc(sched);
   if (task == NULL) {
     return UCS_ERR_NO_MEMORY;
   }
 
+  task->flags = 0;
   task->type  = type;
   task->in    = in;
   task->out   = out;
@@ -232,14 +246,46 @@ static int ucp_sched_depends_on(const ucp_sched_task_t *task,
   return 0;
 }
 
-ucs_status_ptr_t ucp_sched_task_schedule(ucp_sched_task_t *task)
+static ucs_status_t ucp_sched_comp_add(ucp_sched_t      *sched,
+                                       ucp_sched_task_t *task)
+{
+  ucs_status_t        status = UCS_OK;
+  ucp_worker_iface_t *iface  = sched->worker->tm.offload.iface;
+  uct_sched_comp_h    prevs[UCP_SCHED_MAX_DEPS];
+  size_t              prev_cnt;
+  ucp_sched_edge_t   *edge;
+
+  if (!(sched->flags & UCP_SCHED_OFFLOAD_ENABLED)) {
+    task->comp = NULL;
+    /* No completion to offload. */
+    return status;
+  }
+
+  prev_cnt = 0;
+  ucs_list_for_each (edge, &task->predecessors, from_link) {
+    prevs[prev_cnt] = edge->from->comp;
+    prev_cnt++;
+  }
+
+  status = uct_iface_sched_comp_add(iface->iface, prevs, prev_cnt, &task->comp);
+  if (status != UCS_OK) {
+    return status;
+  }
+
+  task->flags |= UCP_SCHED_TASK_FLAG_OFFLOADED;
+  return status;
+}
+
+ucs_status_t ucp_sched_task_schedule(ucp_sched_task_t *task)
 {
   ucs_status_t      status;
   ucp_sched_t      *sched = task->sched;
   ucp_sched_task_t *prev;
 
-  ucs_assert(task);
+  ucs_assert(task != NULL);
 
+  ucs_trace("SCHED: scheduling task %p type %s", task,
+            ucp_sched_type_to_str[task->type]);
   ucs_list_for_each (prev, &sched->schedule, elem) {
     if (!ucp_sched_depends_on(task, prev)) {
       continue;
@@ -253,14 +299,21 @@ ucs_status_ptr_t ucp_sched_task_schedule(ucp_sched_task_t *task)
     if (status != UCS_OK) {
       ucp_sched_remove_incoming(sched, task);
       ucp_sched_task_unalloc(sched, task);
-      return UCS_STATUS_PTR(status);
+      return status;
     }
+  }
+
+  status = ucp_sched_comp_add(sched, task);
+  if (status != UCS_OK) {
+    ucp_sched_remove_incoming(sched, task);
+    ucp_sched_task_unalloc(sched, task);
+    return status;
   }
 
   ucs_list_add_tail(&sched->schedule, &task->elem);
   ucp_sched_make_ready(sched, task);
 
-  return task->ops.commit(task);
+  return status;
 }
 
 static void ucp_sched_destroy(ucp_sched_t *sched)
@@ -285,8 +338,8 @@ static void ucp_sched_destroy(ucp_sched_t *sched)
      * during ucs_mpool_cleanup() meaningful. */
   ucs_list_for_each (task, &sched->schedule, elem) {
     if (task->flags & UCP_SCHED_TASK_FLAG_RELEASE_SCHED) {
-      uct_iface_tag_sched_release(sched->worker->tm.offload.iface->iface,
-                                  task->comph);
+      uct_iface_sched_comp_rm(sched->worker->tm.offload.iface->iface,
+                              task->comp);
     }
 
     ucs_list_for_each_safe (edge, tmp_edge, &task->successors, from_link) {
@@ -309,9 +362,21 @@ static void ucp_sched_destroy(ucp_sched_t *sched)
   ucs_mpool_put(sched);
 }
 
+//static void ucp_sched_show_remaining(ucp_sched_t *sched)
+//{
+//  ucp_sched_task_t *task;
+//
+//  ucs_list_for_each (task, &sched->schedule, elem) {
+//    if (!(task->flags & UCP_SCHED_TASK_FLAG_COMPLETED)) {
+//      ucs_trace("SCHED: sched %p task %p type %s not completed.", sched, task,
+//                ucp_sched_type_to_str[task->type]);
+//    }
+//  }
+//}
+
 unsigned ucp_sched_progress_cb(void *arg)
 {
-  ucs_status_t      status;
+  ucs_status_ptr_t  ret;
   ucp_sched_t      *sched = (ucp_sched_t *)arg;
   ucp_sched_task_t *task;
   unsigned          progressed = 0;
@@ -325,9 +390,11 @@ unsigned ucp_sched_progress_cb(void *arg)
     task->flags &= ~UCP_SCHED_TASK_FLAG_READY;
     task->flags |= UCP_SCHED_TASK_FLAG_STARTED;
 
-    status = task->ops.progress(task);
-    if (status != UCS_OK) {
-      return status;
+    ucs_trace("SCHED: sched %p task %p type %s has started", sched, task,
+              ucp_sched_type_to_str[task->type]);
+    task->ret = task->ops.progress(task);
+    if (UCS_PTR_IS_ERR(task->ret)) {
+      return UCS_PTR_RAW_STATUS(task->ret);
     }
 
     ++progressed;
@@ -341,11 +408,20 @@ unsigned ucp_sched_progress_cb(void *arg)
   return progressed;
 }
 
+static ucs_mpool_ops_t ucp_proxy_req_mpool_ops = {
+    .chunk_alloc   = ucs_mpool_chunk_malloc,
+    .chunk_release = ucs_mpool_chunk_free,
+    .obj_init      = NULL,
+    .obj_cleanup   = NULL,
+    .obj_str       = NULL
+};
+
 ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
 {
-  ucp_sched_h  sched;
-  ucs_status_t status;
-  int          ret;
+  ucp_sched_h        sched;
+  ucs_status_t       status;
+  ucs_mpool_params_t mp_params;
+  int                ret;
 
   sched = ucs_mpool_get(&worker->tm.sched_mp);
   if (sched == NULL) {
@@ -373,10 +449,27 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
     goto err_task_mp;
   }
 
+  if (worker->tm.offload.iface != NULL) {
+    sched->flags |= UCP_SCHED_OFFLOAD_ENABLED;
+
+    ucs_mpool_params_reset(&mp_params);
+    mp_params.elem_size =
+            worker->context->config.ext.seg_size + sizeof(ucp_request_t);
+    mp_params.align_offset    = sizeof(ucp_request_t);
+    mp_params.elems_per_chunk = 32;
+    mp_params.ops             = &ucp_proxy_req_mpool_ops;
+    mp_params.name            = "ucp_sched_bufs";
+    /* Create memory pool of bounce buffers */
+    status = ucs_mpool_init(&mp_params, &sched->proxy_req_mp);
+    if (status != UCS_OK) {
+      goto err_edge_mp;
+    }
+  }
+
   kh_put(ucp_tag_sched_hash, &worker->tm.sched_hash, sched, &ret);
   if (ret == UCS_KH_PUT_FAILED) {
     status = UCS_ERR_NO_MEMORY;
-    goto err_edge_mp;
+    goto err_proxy_req_mp;
   }
 
   sched->progress_id = ucs_callbackq_add_safe(&worker->uct->progress_q,
@@ -391,6 +484,10 @@ ucs_status_t ucp_sched_create(ucp_worker_h worker, ucp_sched_h *sched_p)
   *sched_p = sched;
   return UCS_OK;
 
+err_proxy_req_mp:
+  if (sched->flags & UCP_SCHED_OFFLOAD_ENABLED) {
+    ucs_mpool_cleanup(&sched->proxy_req_mp, 1);
+  }
 err_edge_mp:
   ucs_mpool_cleanup(&sched->edge_mp, 1);
 err_task_mp:

@@ -198,12 +198,19 @@ typedef struct uct_bxi_iface_send_op {
   };
 } uct_bxi_iface_send_op_t;
 
-typedef struct uct_bxi_gop {
-  uct_gop_t       super;    /* Generic operation handle */
-  ptl_handle_ct_t cth;      /* Counter handle */
-  ptl_size_t      ct_value; /* SW value tracking HW counter value */
-  ptl_handle_md_t mdh;      /* MD used for scheduled send op */
-} uct_bxi_gop_t;
+typedef struct uct_bxi_sched_comp {
+  uct_sched_comp_t super;    /* Generic operation handle */
+  ptl_handle_ct_t  cth;      /* Counter handle */
+  ptl_size_t       ct_value; /* SW value tracking HW counter value */
+  ptl_handle_md_t  mdh;      /* MD used for scheduled send op */
+} uct_bxi_sched_comp_t;
+
+typedef struct uct_bxi_send_block {
+  unsigned        flags;
+  ptl_handle_md_t mdh;
+  ptl_handle_ct_t cth;
+  ptl_size_t      ct_value;
+} uct_bxi_send_block_t;
 
 typedef struct uct_bxi_device_addr {
   ptl_process_t pid;
@@ -240,9 +247,9 @@ typedef struct uct_bxi_iface_config {
   struct {
     int                      enable;
     unsigned int             list_size;
-    unsigned int             max_gop; /* Maximum number of OP context */
+    unsigned int             max_comp; /* Maximum number of OP context */
     unsigned int             max_rndv_hdr;
-    uct_iface_mpool_config_t gop_mp; /* Receive descriptor for TAG RX. */
+    uct_iface_mpool_config_t comp_mp;
   } tm;
 } uct_bxi_iface_config_t;
 
@@ -310,7 +317,7 @@ typedef struct uct_bxi_iface {
     size_t max_atomic_size;
     struct {
       size_t       eager_limit; /* Maximum eager message size. */
-      unsigned int max_gop;     /* Maximum number of generic operation */
+      unsigned int max_comp;    /* Maximum number of completion handles */
       unsigned int max_tags;    /* Maximum number of hw matching descriptors */
       int          max_zcopy;   /* Maximum payload size for zcopy */
       unsigned     max_hdr;     /* Maximum header size for rndv send */
@@ -324,7 +331,7 @@ typedef struct uct_bxi_iface {
 
   struct {
     unsigned int               enabled;
-    ucs_mpool_t                gop_mp; /* Operation context for Triggered */
+    ucs_mpool_t                comp_mp; /* Completion handle for Triggered */
     khash_t(uct_bxi_tag_addrs) tag_addrs;
     struct {
       void                    *arg; /* User defined arg */
@@ -335,6 +342,7 @@ typedef struct uct_bxi_iface {
       uct_tag_unexp_rndv_cb_t cb;  /* Callback for unexpected rndv messages */
     } rndv_unexp;
     ucs_mpool_t         recv_block_mp;   /* MP of exp block */
+    ucs_mpool_t         send_block_mp;   /* MP of send block */
     uct_bxi_conn_ooo_t *unexp_ooo;       /* Cached unexp ooo, used for cancel */
     unsigned int        rndv_hdr_offset; /* Offset of rndv hdr in payload */
   } tm;                                  /* Tag matching */

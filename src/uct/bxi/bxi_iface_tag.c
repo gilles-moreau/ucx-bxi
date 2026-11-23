@@ -240,16 +240,70 @@ static ucs_mpool_ops_t uct_bxi_recv_block_mpool_ops = {
         .obj_cleanup   = uct_bxi_iface_recv_block_cleanup,
         .obj_str       = NULL};
 
-static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
+static void uct_bxi_iface_send_block_init(ucs_mpool_t *mp, void *obj,
+                                          void *chunk)
+{
+  uct_bxi_iface_t *iface =
+          ucs_container_of(mp, uct_bxi_iface_t, tm.send_block_mp);
+  ucs_status_t          status;
+  uct_bxi_send_block_t *block = obj;
+  ptl_md_t              md;
+
+  block->ct_value = 0;
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &block->cth));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: send could not allocate counter.");
+  }
+
+  md.eq_handle = iface->tx.eqh;
+  md.length    = PTL_SIZE_MAX;
+  md.options   = PTL_MD_EVENT_CT_REPLY | PTL_MD_EVENT_SEND_DISABLE;
+  md.start     = 0;
+  md.ct_handle = block->cth;
+
+  status = uct_bxi_wrap(
+          PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &block->mdh));
+  if (status != UCS_OK) {
+    ucs_fatal("BXI: could not bind MD.");
+  }
+}
+
+static void uct_bxi_iface_send_block_cleanup(ucs_mpool_t *mp, void *obj)
+{
+  uct_bxi_recv_block_t *block = obj;
+  ptl_ct_event_t        ct_value;
+
+  uct_bxi_wrap(PtlCTGet(block->cth, &ct_value));
+  if (ct_value.success != block->ct_value) {
+    ucs_error("BXI: error tracking ct value. exp=%lu, val=%lu",
+              ct_value.success, block->ct_value);
+  }
+
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlCTFree(block->cth));
+
+  ucs_assert(!PtlHandleIsEqual(block->cth, PTL_INVALID_HANDLE));
+  uct_bxi_wrap(PtlMDRelease(block->mdh));
+}
+
+static ucs_mpool_ops_t uct_bxi_send_block_mpool_ops = {
+        .chunk_alloc   = ucs_mpool_chunk_malloc,
+        .chunk_release = ucs_mpool_chunk_free,
+        .obj_init      = uct_bxi_iface_send_block_init,
+        .obj_cleanup   = uct_bxi_iface_send_block_cleanup,
+        .obj_str       = NULL};
+
+static void uct_bxi_iface_sched_comp_init(ucs_mpool_t *mp, void *obj,
+                                          void *chunk)
 {
   ucs_status_t     status;
-  uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.gop_mp);
-  uct_bxi_gop_t   *gop   = obj;
-  ptl_md_t         md;
+  uct_bxi_iface_t *iface = ucs_container_of(mp, uct_bxi_iface_t, tm.comp_mp);
+  uct_bxi_sched_comp_t *comp = obj;
+  ptl_md_t              md;
 
-  gop->ct_value = 0;
+  comp->ct_value = 0;
 
-  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &gop->cth));
+  status = uct_bxi_wrap(PtlCTAlloc(uct_bxi_iface_md(iface)->nih, &comp->cth));
   if (status != UCS_OK) {
     ucs_error("BXI: could not allocate counter.");
   }
@@ -259,29 +313,30 @@ static void uct_bxi_iface_gop_init(ucs_mpool_t *mp, void *obj, void *chunk)
   md.length    = PTL_SIZE_MAX;
   md.options   = PTL_MD_EVENT_CT_ACK | PTL_MD_EVENT_SEND_DISABLE;
   md.start     = 0;
-  md.ct_handle = gop->cth;
+  md.ct_handle = comp->cth;
 
-  status = uct_bxi_wrap(
-          PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &gop->mdh));
+  status =
+          uct_bxi_wrap(PtlMDBind(uct_bxi_iface_md(iface)->nih, &md, &comp->mdh));
   if (status != UCS_OK) {
     ucs_fatal("BXI: could not bind MD.");
   }
 }
 
-static void uct_bxi_iface_gop_cleanup(ucs_mpool_t *mp, void *obj)
+static void uct_bxi_iface_sched_comp_cleanup(ucs_mpool_t *mp, void *obj)
 {
-  uct_bxi_gop_t *gop = obj;
+  uct_bxi_sched_comp_t *comp = obj;
 
-  ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
+  ucs_assert(!PtlHandleIsEqual(comp->cth, PTL_INVALID_HANDLE));
 
-  uct_bxi_wrap(PtlCTFree(gop->cth));
+  uct_bxi_wrap(PtlCTFree(comp->cth));
+  uct_bxi_wrap(PtlMDRelease(comp->cth));
 }
 
-static ucs_mpool_ops_t uct_bxi_gop_mpool_ops = {
+static ucs_mpool_ops_t uct_bxi_sched_comp_mpool_ops = {
         .chunk_alloc   = ucs_mpool_chunk_malloc,
         .chunk_release = ucs_mpool_chunk_free,
-        .obj_init      = uct_bxi_iface_gop_init,
-        .obj_cleanup   = uct_bxi_iface_gop_cleanup,
+        .obj_init      = uct_bxi_iface_sched_comp_init,
+        .obj_cleanup   = uct_bxi_iface_sched_comp_cleanup,
         .obj_str       = NULL};
 
 ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
@@ -310,7 +365,7 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
 
   /* First, initialize interface configuration. */
   iface->config.tm.max_tags  = config->tm.list_size;
-  iface->config.tm.max_gop   = config->tm.max_gop;
+  iface->config.tm.max_comp   = config->tm.max_comp;
   iface->config.tm.max_zcopy = config->seg_size;
   iface->config.tm.max_hdr   = UCT_BXI_RNDV_MAX_HDR_LENGTH;
   //FIXME: reset to make payload up to 8192
@@ -388,6 +443,22 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
     goto err_release_rxq;
   }
 
+  ucs_mpool_params_reset(&mp_param);
+  mp_param.max_chunk_size =
+          iface->config.tm.max_tags * sizeof(uct_bxi_send_block_t);
+  mp_param.elems_per_chunk = mp_param.max_elems =
+          ucs_min(uct_bxi_iface_md(iface)->config.limits.max_entries,
+                  iface->config.tm.max_tags);
+  mp_param.elem_size   = sizeof(uct_bxi_send_block_t);
+  mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
+  mp_param.ops         = &uct_bxi_send_block_mpool_ops;
+  mp_param.name        = "tag-send-block";
+  mp_param.grow_factor = 1;
+  status               = ucs_mpool_init(&mp_param, &iface->tm.send_block_mp);
+  if (status != UCS_OK) {
+    goto err_release_rxq;
+  }
+
   /* Create RXQ for rendez-vous blocks, see uct_bxi_ep_tag_rndv_zcopy for 
    * details.*/
   rxq_param.flags = UCT_BXI_RXQ_FLAG_EMPTY_MEMPOOL;
@@ -425,17 +496,17 @@ ucs_status_t uct_bxi_iface_tag_init(uct_bxi_iface_t              *iface,
   /* Memory pool of Generic operation. These are counters that are 
    * used to implement dependencies between sends and receives. */
   ucs_mpool_params_reset(&mp_param);
-  mp_param.max_chunk_size  = config->tm.gop_mp.max_chunk_size;
-  mp_param.elems_per_chunk = config->tm.gop_mp.bufs_grow;
+  mp_param.max_chunk_size  = config->tm.comp_mp.max_chunk_size;
+  mp_param.elems_per_chunk = config->tm.comp_mp.bufs_grow;
   mp_param.max_elems   = ucs_min(uct_bxi_iface_md(iface)->config.limits.max_cts,
-                                 iface->config.tm.max_gop);
-  mp_param.elem_size   = sizeof(uct_bxi_gop_t);
+                                 iface->config.tm.max_comp);
+  mp_param.elem_size   = sizeof(uct_bxi_sched_comp_t);
   mp_param.alignment   = UCS_SYS_CACHE_LINE_SIZE;
-  mp_param.ops         = &uct_bxi_gop_mpool_ops;
-  mp_param.name        = "gop";
+  mp_param.ops         = &uct_bxi_sched_comp_mpool_ops;
+  mp_param.name        = "sched-comp";
   mp_param.grow_factor = 1;
 
-  status = ucs_mpool_init(&mp_param, &iface->tm.gop_mp);
+  status = ucs_mpool_init(&mp_param, &iface->tm.comp_mp);
   if (status != UCS_OK) {
     goto err_clean_ctrl_rxq;
   }
@@ -477,7 +548,7 @@ void uct_bxi_iface_tag_fini(uct_bxi_iface_t *iface)
   /* Receive block memory pool.*/
   ucs_mpool_cleanup(&iface->tm.recv_block_mp, 1);
   /* And operation contexts.*/
-  ucs_mpool_cleanup(&iface->tm.gop_mp, 1);
+  ucs_mpool_cleanup(&iface->tm.comp_mp, 1);
 
 out:
   return;

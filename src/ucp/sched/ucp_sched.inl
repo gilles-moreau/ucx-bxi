@@ -9,7 +9,8 @@ static UCS_F_ALWAYS_INLINE void ucp_sched_make_ready(ucp_sched_t      *sched,
   if ((task->flags &
        (UCP_SCHED_TASK_FLAG_READY | UCP_SCHED_TASK_FLAG_STARTED |
         UCP_SCHED_TASK_FLAG_COMPLETED | UCP_SCHED_TASK_FLAG_FAILED)) ||
-      (task->remaining_deps != 0)) {
+      ((task->remaining_deps != 0) &&
+       !(task->flags & UCP_SCHED_TASK_FLAG_OFFLOADED))) {
     return;
   }
 
@@ -37,8 +38,8 @@ ucp_sched_task_complete(ucp_sched_task_t *task, ucs_status_t status)
               ucs_status_string(status));
   } else {
     task->flags |= UCP_SCHED_TASK_FLAG_COMPLETED;
-    ucs_trace("SCHED: schedule %p task %p type %d is completed.", 
-              task->sched, task, task->type);
+    ucs_trace("SCHED: schedule %p task %p type %d is completed.", task->sched,
+              task, task->type);
     ucs_list_for_each (edge, &task->successors, from_link) {
       ucs_assert(edge->to->remaining_deps > 0);
       --edge->to->remaining_deps;
@@ -52,22 +53,25 @@ ucp_sched_task_complete(ucp_sched_task_t *task, ucs_status_t status)
   return UCS_OK;
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_t
+static UCS_F_ALWAYS_INLINE ucs_status_ptr_t
 ucp_sched_task_progress(ucp_sched_task_t *task)
 {
-  return (ucs_status_t)ucp_sched_progress_cb(task->sched);
+  ucp_sched_progress_cb(task->sched);
+
+  return task->ret;
 }
 
 static UCS_F_ALWAYS_INLINE void ucp_sched_task_recv_save_params(
         ucp_sched_task_t *task, const ucp_request_param_t *param, ucp_tag_t tag,
         ucp_tag_t tag_mask, size_t count, void *buffer,
-        ucs_status_t (*progress_cb)(ucp_sched_task_t *task))
+        ucs_status_ptr_t (*progress_cb)(ucp_sched_task_t *task))
 {
-  task->recv.tag      = tag;
-  task->recv.tag_mask = tag_mask;
-  task->recv.buffer   = buffer;
-  task->recv.count    = count;
-  task->ops.progress  = progress_cb;
+  task->recv.tag          = tag;
+  task->recv.tag_mask     = tag_mask;
+  task->recv.buffer       = buffer;
+  task->recv.count        = count;
+  task->ops.progress      = progress_cb;
+  task->recv.param.flags |= UCP_OP_ATTR_FLAG_NO_IMM_CMPL;
   memcpy(&task->recv.param, param, sizeof(ucp_request_param_t));
 }
 

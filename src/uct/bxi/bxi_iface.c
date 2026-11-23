@@ -92,12 +92,12 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         {"MAX_TM_OP_CTX", "64",
          "Maximum number of tag matching generic operation (default: 64).",
-         ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
+         ucs_offsetof(uct_bxi_iface_config_t, tm.max_comp),
          UCS_CONFIG_TYPE_UINT},
 
         UCT_IFACE_MPOOL_CONFIG_FIELDS(
-                "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_gop",
-                ucs_offsetof(uct_bxi_iface_config_t, tm.gop_mp), "\n"),
+                "TM_OP_CTX_", -1, 32, 128m, 1.0, "tm_comp",
+                ucs_offsetof(uct_bxi_iface_config_t, tm.comp_mp), "\n"),
 
         {"TM_LIST_SIZE", "32",
          "Limits the number of tags posted to the HW for matching.",
@@ -106,7 +106,7 @@ ucs_config_field_t uct_bxi_iface_config_table[] = {
 
         {"MAX_OPERATION_CONTEXT", "1024",
          "Number of operation context allocable (default: 128)",
-         ucs_offsetof(uct_bxi_iface_config_t, tm.max_gop),
+         ucs_offsetof(uct_bxi_iface_config_t, tm.max_comp),
          UCS_CONFIG_TYPE_UINT},
 
         {NULL},
@@ -1143,9 +1143,8 @@ static uct_iface_ops_t uct_bxi_iface_tl_ops = {
         .iface_is_reachable       = uct_base_iface_is_reachable,
         .iface_tag_recv_zcopy     = uct_bxi_iface_tag_recv_zcopy,
         .iface_tag_recv_cancel    = uct_bxi_iface_tag_recv_cancel,
-        .iface_tag_sched_recv     = uct_bxi_iface_tag_sched_recv,
-        .iface_tag_sched_send     = uct_bxi_iface_tag_sched_send,
-        .iface_tag_sched_release  = uct_bxi_iface_tag_sched_release,
+        .iface_sched_comp_add     = uct_bxi_iface_sched_comp_add,
+        .iface_sched_comp_rm      = uct_bxi_iface_sched_comp_rm,
 };
 
 static uct_bxi_iface_ops_t uct_bxi_iface_ops = {

@@ -55,7 +55,7 @@ static void ucp_tag_recv_eager_multi(ucp_worker_h worker, ucp_request_t *req,
     }
 }
 
-static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
+ucs_status_ptr_t ucp_tag_recv_common(
         ucp_worker_h worker, void *buffer, size_t count, ucp_tag_t tag,
         ucp_tag_t tag_mask, ucp_request_t *req, ucp_recv_desc_t *rdesc,
         const ucp_request_param_t *param, const char *debug_name)
@@ -114,6 +114,7 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
     /* Initialize receive request */
     req->status      = UCS_OK;
     req->flags       = UCP_REQUEST_FLAG_RECV_TAG;
+    req->flags      |= (req->task != NULL) ? UCP_REQUEST_FLAG_SCHEDULED : 0;
     req->recv.worker = worker;
 
     status = ucp_datatype_iter_init_unpack(worker->context, buffer, count,
@@ -169,6 +170,12 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_tag_recv_common(
     return req + 1;
 
 out_completed:
+    if (ucs_unlikely(req->task != NULL)) {
+        /* Call completion manually since receive request completion will not 
+         * be called in this path. */
+        ucp_sched_task_complete(req->task, req->status);
+    }
+
     if (param->op_attr_mask & UCP_OP_ATTR_FLAG_NO_IMM_CMPL) {
         /* coverity[address_free] */
         /* coverity[offset_free] */
@@ -223,22 +230,19 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nb,
     return ucp_tag_recv_nbx(worker, buffer, count, tag, tag_mask, &param);
 }
 
-ucs_status_t ucp_tag_sched_recv_progress(ucp_sched_task_t *task) {
+ucs_status_ptr_t ucp_tag_sched_recv_progress(ucp_sched_task_t *task) {
     ucp_recv_desc_t *rdesc;
-    ucs_status_ptr_t ret;
 
+    //FIXME: hack to force UCP to call user's callback if set. Indeed, receive 
+    //       has been delayed so user was returned a request and expect the 
+    //       callback to be called.
+    task->recv.param.op_attr_mask |= UCP_OP_ATTR_FLAG_NO_IMM_CMPL;
     rdesc = ucp_tag_unexp_search(&task->sched->worker->tm, task->recv.tag, 
                                  task->recv.tag_mask, 1, "recv_nbx");
-    ret   = ucp_tag_recv_common(task->sched->worker, task->recv.buffer, 
+    return ucp_tag_recv_common(task->sched->worker, task->recv.buffer, 
                                 task->recv.count, task->recv.tag, 
                                 task->recv.tag_mask, task->req,
                                 rdesc, &task->recv.param, "recv_nbx");
-
-    if (UCS_PTR_IS_ERR(ret)) {
-        return UCS_PTR_RAW_STATUS(ret);
-    } else {
-        return UCS_OK;
-    }
 }
 
 UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nbx,
@@ -274,26 +278,23 @@ UCS_PROFILE_FUNC(ucs_status_ptr_t, ucp_tag_recv_nbx,
             return UCS_STATUS_PTR(status);
         }
 
-        req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
-
-        ret = ucp_sched_task_schedule(req->task); 
-        if (UCS_PTR_IS_ERR(ret)) {
-            req->flags &= ~UCP_REQUEST_FLAG_SCHEDULED;
+        status = ucp_sched_task_schedule(req->task); 
+        if (status < 0) {
+            ret = UCS_STATUS_PTR(status);
             ucp_request_put_param(param, req);
             goto out;
-        } else if (UCS_PTR_RAW_STATUS(ret) == UCS_INPROGRESS) {
-            ucp_sched_task_recv_save_params(req->task, param, tag, tag_mask, 
-                                            count, buffer, 
-                                            ucp_tag_sched_recv_progress);
-            goto out;
-        } else if (UCS_PTR_IS_PTR(ret)) {
-            req = ret;
-        } 
-    }
+        }
 
-    rdesc = ucp_tag_unexp_search(&worker->tm, tag, tag_mask, 1, "recv_nbx");
-    ret   = ucp_tag_recv_common(worker, buffer, count, tag, tag_mask, req,
-                                rdesc, param, "recv_nbx");
+        ucp_sched_task_recv_save_params(req->task, param, tag, tag_mask, 
+                                        count, buffer, 
+                                        ucp_tag_sched_recv_progress);
+
+        ret = ucp_sched_task_progress(req->task);
+    } else {
+        rdesc = ucp_tag_unexp_search(&worker->tm, tag, tag_mask, 1, "recv_nbx");
+        ret   = ucp_tag_recv_common(worker, buffer, count, tag, tag_mask, req,
+                                    rdesc, param, "recv_nbx");
+    }
 
 out:
     UCP_WORKER_THREAD_CS_EXIT_CONDITIONAL(worker);

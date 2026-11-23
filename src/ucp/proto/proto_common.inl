@@ -250,10 +250,10 @@ static UCS_F_ALWAYS_INLINE ucs_status_ptr_t ucp_proto_request_send_op_common(
     }
 
     if (ucs_unlikely(req->task != NULL)) {
-        status_ptr = ucp_sched_task_schedule(req->task);
-        if (UCS_PTR_IS_ERR(status_ptr)) {
+        status = ucp_sched_task_schedule(req->task);
+        if (status < 0) {
             ucp_request_put_param(param, req);
-            return status_ptr;
+            return UCS_STATUS_PTR(status);
         }
         req->flags |= UCP_REQUEST_FLAG_SCHEDULED;
 

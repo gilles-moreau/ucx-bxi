@@ -17,14 +17,6 @@
 #include <ucp/proto/proto_init.h>
 #include <ucp/proto/proto_single.inl>
 
-static void ucp_proto_amo_completion(uct_completion_t *self)
-{
-  ucp_request_t *req =
-          ucs_container_of(self, ucp_request_t, send.state.uct_comp);
-
-  ucp_request_complete_send(req, self->status);
-}
-
 static UCS_F_ALWAYS_INLINE ucs_status_t
 ucp_proto_amo_vec_progress(uct_pending_req_t *self)
 {
@@ -46,9 +38,9 @@ ucp_proto_amo_vec_progress(uct_pending_req_t *self)
 
   if (!(req->flags & UCP_REQUEST_FLAG_PROTO_INITIALIZED)) {
     md_map = (spriv->reg_md == UCP_NULL_RESOURCE) ? 0 : UCS_BIT(spriv->reg_md);
-    status = ucp_proto_request_zcopy_init(req, md_map, ucp_proto_amo_completion,
-                                          UCT_MD_MEM_ACCESS_LOCAL_READ,
-                                          UCS_BIT(UCP_DATATYPE_CONTIG));
+    status = ucp_proto_request_zcopy_init(
+            req, md_map, ucp_proto_request_zcopy_completion,
+            UCT_MD_MEM_ACCESS_LOCAL_READ, UCS_BIT(UCP_DATATYPE_CONTIG));
 
     req->flags |= UCP_REQUEST_FLAG_PROTO_INITIALIZED;
   }

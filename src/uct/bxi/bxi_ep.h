@@ -140,15 +140,12 @@ ucs_status_t uct_bxi_ep_tag_rndv_request(uct_ep_h ep, uct_tag_t tag,
                                          unsigned    header_length,
                                          unsigned    flags);
 
-ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
-                                          uct_tag_context_t *ctx,
-                                          uct_gop_h         *gop_p);
+ucs_status_t uct_bxi_iface_sched_comp_add(uct_iface_h       tl_iface,
+                                          uct_sched_comp_h *tl_prevs,
+                                          size_t            prev_cnt,
+                                          uct_sched_comp_h *tl_next);
 
-ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
-                                          uct_gop_h *tl_gop, uct_gop_h *tl_gops,
-                                          size_t gop_cnt);
-
-void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop);
+void uct_bxi_iface_sched_comp_rm(uct_iface_h tl_iface, uct_sched_comp_h tl_comp);
 
 ucs_status_t uct_bxi_iface_tag_recv_zcopy(uct_iface_h tl_iface, uct_tag_t tag,
                                           uct_tag_t        tag_mask,

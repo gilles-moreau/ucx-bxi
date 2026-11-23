@@ -179,10 +179,10 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
                                         size_t iovcnt, unsigned flags,
                                         uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  ucs_status_t          status;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *sc = ucs_derived_of(comp->comp, uct_bxi_sched_comp_t);
   uct_bxi_iface_send_op_t *op;
   ptl_hdr_data_t           hdr;
 
@@ -209,10 +209,10 @@ ucs_status_t uct_bxi_ep_tag_eager_zcopy(uct_ep_h tl_ep, uct_tag_t tag,
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
-    status = uct_bxi_wrap(PtlTriggeredPut(
-            iface->tx.mdh, (ptl_size_t)op->tag.buffer, op->length, PTL_ACK_REQ,
-            ep->dev_addr.pid, ep->iface_addr.tag, tag, 0, op, hdr, gop->cth,
-            gop->ct_value));
+    status = uct_bxi_wrap(
+            PtlTriggeredPut(sc->mdh, (ptl_size_t)op->tag.buffer, op->length,
+                            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.tag,
+                            tag, 0, op, hdr, sc->cth, sc->ct_value));
   } else {
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)op->tag.buffer,
                                  op->length, PTL_ACK_REQ, ep->dev_addr.pid,
@@ -270,10 +270,10 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
                           unsigned header_length, const uct_iov_t *iov,
                           size_t iovcnt, unsigned flags, uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  ucs_status_t          status;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *sc = ucs_derived_of(comp->comp, uct_bxi_sched_comp_t);
   uct_bxi_iface_send_op_t *op;
   ptl_me_t                 me;
   uct_bxi_recv_block_t    *block;
@@ -355,13 +355,14 @@ uct_bxi_ep_tag_rndv_zcopy(uct_ep_h tl_ep, uct_tag_t tag, const void *header,
   ep->conn->sn++;
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
-    ucs_assert(gop != NULL);
-    ucs_assert(!PtlHandleIsEqual(gop->cth, PTL_INVALID_HANDLE));
+    ucs_assert(sc != NULL);
+    ucs_assert(!PtlHandleIsEqual(sc->cth, PTL_INVALID_HANDLE));
 
-    status = uct_bxi_wrap(PtlTriggeredPut(iface->tx.mdh, (ptl_size_t)(op + 1),
-                                          size, PTL_ACK_REQ, ep->dev_addr.pid,
-                                          ep->iface_addr.tag, tag, 0, op, hdr,
-                                          gop->cth, gop->ct_value));
+    status = uct_bxi_wrap(PtlTriggeredPut(
+            sc->mdh, (ptl_size_t)(op + 1), size, PTL_ACK_REQ, ep->dev_addr.pid,
+            ep->iface_addr.tag, tag, 0, op, hdr, sc->cth, sc->ct_value));
+
+    sc->ct_value++;
   } else {
     //TODO: replace by PtlPutNB and handle PTL_TRY_AGAIN
     status = uct_bxi_wrap(PtlPut(iface->tx.mdh, (ptl_size_t)(op + 1), size,
@@ -725,96 +726,46 @@ out:
   return status;
 }
 
-ucs_status_t uct_bxi_iface_tag_sched_recv(uct_iface_h        tl_iface,
-                                          uct_tag_context_t *ctx,
-                                          uct_gop_h         *gop_p)
+ucs_status_t uct_bxi_iface_sched_comp_add(uct_iface_h       tl_iface,
+                                          uct_sched_comp_h *tl_prevs,
+                                          size_t            prev_cnt,
+                                          uct_sched_comp_h *next_p)
 {
   ucs_status_t          status = UCS_OK;
-  uct_bxi_gop_t        *gop;
-  uct_bxi_iface_t      *iface = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_recv_block_t *block = *(uct_bxi_recv_block_t **)ctx->priv;
-  size_t                thresh;
+  uct_bxi_iface_t      *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *comp;
+  uct_bxi_sched_comp_t *tmp_comp;
+  size_t                i;
 
-  ucs_assert(block->flags & UCT_BXI_RECV_BLOCK_FLAG_COUNTER_ENABLED);
-
-  gop = ucs_mpool_get(&iface->tm.gop_mp);
-  if (gop == NULL) {
-    ucs_debug("BXI: no more counter");
+  /* First, allocate a completion handle. */
+  comp = ucs_mpool_get(&iface->tm.comp_mp);
+  if (comp == NULL) {
     status = UCS_ERR_NO_RESOURCE;
     goto err;
   }
 
-  if (block->flags & UCT_BXI_RECV_BLOCK_FLAG_RNDV) {
-    /* thresh = current counter value + 1 (first match) + 1 (get) */
-    thresh = block->ct_value + 2;
-  } else {
-    thresh = block->ct_value + 1;
-  }
+  for (i = 0; i < prev_cnt; i++) {
+    tmp_comp = ucs_derived_of(tl_prevs[i], uct_bxi_sched_comp_t);
 
-  status = uct_bxi_wrap(
-          PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC, block->cth, thresh));
-  if (status != UCS_OK) {
-    ucs_fatal("BXI: could not trig ct inc.");
-  }
-  gop->ct_value += 1;
+    ucs_assert(!PtlHandleIsEqual(tmp_comp->cth, PTL_INVALID_HANDLE));
 
-  *gop_p = (uct_gop_h)gop;
-
-  return status;
-
-err_free_gop:
-  ucs_mpool_put(gop);
-err:
-  return status;
-}
-
-ucs_status_t uct_bxi_iface_tag_sched_send(uct_iface_h tl_iface,
-                                          uct_gop_h *gop_p, uct_gop_h *tl_gops,
-                                          size_t gop_cnt)
-{
-  ucs_status_t     status = UCS_OK;
-  uct_bxi_iface_t *iface  = ucs_derived_of(tl_iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop;
-  uct_bxi_gop_t   *tmp_gop;
-  size_t           i;
-
-  if (gop_cnt == 0) {
-    *gop_p = NULL;
-    return UCS_OK;
-  }
-
-  if (gop_cnt > 1) {
-    gop = ucs_mpool_get(&iface->tm.gop_mp);
-    if (gop == NULL) {
-      status = UCS_ERR_NO_RESOURCE;
-      goto err;
+    status = uct_bxi_wrap(PtlTriggeredCTInc(comp->cth, UCT_BXI_CT_INC,
+                                            tmp_comp->cth, tmp_comp->ct_value));
+    if (status != UCS_OK) {
+      ucs_fatal("BXI: failed setting trig inc.");
     }
-
-    for (i = 0; i < gop_cnt; i++) {
-      tmp_gop = ucs_derived_of(tl_gops[i], uct_bxi_gop_t);
-
-      ucs_assert(!PtlHandleIsEqual(tmp_gop->cth, PTL_INVALID_HANDLE));
-
-      status = uct_bxi_wrap(PtlTriggeredCTInc(gop->cth, UCT_BXI_CT_INC,
-                                              tmp_gop->cth, tmp_gop->ct_value));
-      if (status != UCS_OK) {
-        ucs_fatal("BXI: failed setting trig inc.");
-      }
-      gop->ct_value++;
-    }
-  } else {
-    gop = ucs_derived_of(tl_gops[0], uct_bxi_gop_t);
+    comp->ct_value++;
   }
 
-  *gop_p = (uct_gop_h)gop;
+  *next_p = (uct_sched_comp_h)comp;
 
 err:
   return status;
 }
 
-void uct_bxi_iface_tag_sched_release(uct_iface_h tl_iface, uct_gop_h tl_gop)
+void uct_bxi_iface_sched_comp_rm(uct_iface_h tl_iface, uct_sched_comp_h tl_comp)
 {
-  uct_bxi_gop_t *gop = ucs_derived_of(tl_gop, uct_bxi_gop_t);
+  uct_bxi_sched_comp_t *comp = ucs_derived_of(tl_comp, uct_bxi_sched_comp_t);
 
-  ucs_mpool_put(gop);
+  ucs_mpool_put(comp);
 }

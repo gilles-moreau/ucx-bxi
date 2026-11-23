@@ -385,11 +385,11 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   size_t iovcnt, uint64_t remote_addr,
                                   uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
-  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
+  ucs_status_t          status;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *sc   = ucs_derived_of(comp->comp, uct_bxi_sched_comp_t);
+  uct_bxi_rkey_t       *rkey = (uct_bxi_rkey_t *)uct_rkey;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -409,10 +409,12 @@ ucs_status_t uct_bxi_ep_put_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   op->put.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   if (ucs_unlikely(comp->flags & UCT_TAG_SCHEDULE)) {
-    status = uct_bxi_wrap(
-            PtlTriggeredPut(gop->mdh, (ptl_size_t)op->tag.buffer, op->length,
-                            PTL_ACK_REQ, ep->dev_addr.pid, ep->iface_addr.rma,
-                            0, 0, op, 0, gop->cth, gop->ct_value));
+    status = uct_bxi_wrap(PtlTriggeredPut(sc->mdh, (ptl_size_t)op->tag.buffer,
+                                          op->length, PTL_ACK_REQ,
+                                          ep->dev_addr.pid, ep->iface_addr.rma,
+                                          0, 0, op, 0, sc->cth, sc->ct_value));
+
+    sc->ct_value++;
   } else {
     status = uct_bxi_ep_execute_op(iface, ep, op);
   }
@@ -481,10 +483,10 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
                                   size_t iovcnt, uint64_t remote_addr,
                                   uct_rkey_t uct_rkey, uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
+  ucs_status_t          status;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *sc = ucs_derived_of(comp->comp, uct_bxi_sched_comp_t);
   uct_bxi_iface_send_op_t *op;
   uct_bxi_rkey_t          *rkey = (uct_bxi_rkey_t *)uct_rkey;
 
@@ -505,10 +507,11 @@ ucs_status_t uct_bxi_ep_get_zcopy(uct_ep_h tl_ep, const uct_iov_t *iov,
   op->get.resolved_raddr  = uct_bxi_resolve_raddr(remote_addr, rkey);
 
   if (ucs_unlikely(comp->flags & UCT_TAG_SCHEDULE)) {
-    status = uct_bxi_wrap(PtlTriggeredGet(
-            iface->tx.mdh, (ptl_size_t)op->get.buffer, op->length,
-            ep->dev_addr.pid, ep->iface_addr.rma, 0, op->get.resolved_raddr, op,
-            gop->cth, gop->ct_value));
+    status = uct_bxi_wrap(
+            PtlTriggeredGet(iface->tx.mdh, (ptl_size_t)op->get.buffer,
+                            op->length, ep->dev_addr.pid, ep->iface_addr.rma, 0,
+                            op->get.resolved_raddr, op, sc->cth, sc->ct_value));
+    sc->ct_value++;
   } else {
     status = uct_bxi_ep_execute_op(iface, ep, op);
   }
@@ -719,12 +722,12 @@ ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
                                      uct_rkey_t uct_rkey, unsigned flags,
                                      uct_completion_t *comp)
 {
-  ucs_status_t     status;
-  uct_bxi_ep_t    *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
-  uct_bxi_iface_t *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
-  uct_bxi_gop_t   *gop   = ucs_derived_of(comp->gop, uct_bxi_gop_t);
-  uct_bxi_rkey_t  *rkey  = (uct_bxi_rkey_t *)uct_rkey;
-  uct_bxi_mem_t   *mem   = (uct_bxi_mem_t *)iov->memh;
+  ucs_status_t          status;
+  uct_bxi_ep_t         *ep    = ucs_derived_of(tl_ep, uct_bxi_ep_t);
+  uct_bxi_iface_t      *iface = ucs_derived_of(tl_ep->iface, uct_bxi_iface_t);
+  uct_bxi_sched_comp_t *sc   = ucs_derived_of(comp->comp, uct_bxi_sched_comp_t);
+  uct_bxi_rkey_t       *rkey = (uct_bxi_rkey_t *)uct_rkey;
+  uct_bxi_mem_t        *mem  = (uct_bxi_mem_t *)iov->memh;
   uct_bxi_iface_send_op_t *op;
 
   UCT_BXI_CHECK_EP(ep);
@@ -745,10 +748,10 @@ ucs_status_t uct_bxi_ep_atomicv_post(uct_ep_h tl_ep, unsigned opcode,
 
   if (ucs_unlikely(flags & UCT_TAG_SCHEDULE)) {
     status = uct_bxi_wrap(PtlTriggeredAtomic(
-            gop->mdh, (uint64_t)op->atomic.buffer, op->length, PTL_ACK_REQ,
+            sc->mdh, (uint64_t)op->atomic.buffer, op->length, PTL_ACK_REQ,
             ep->dev_addr.pid, ep->iface_addr.rma, 0, op->atomic.remote_addr, op,
-            0, op->atomic.op_code, op->atomic.dt, gop->cth, gop->ct_value));
-    gop->ct_value++;
+            0, op->atomic.op_code, op->atomic.dt, sc->cth, sc->ct_value));
+    sc->ct_value++;
   } else {
     status = uct_bxi_wrap(PtlAtomic(
             iface->tx.mdh, (uint64_t)op->atomic.buffer, op->length, PTL_ACK_REQ,

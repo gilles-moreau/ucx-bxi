@@ -1783,7 +1783,7 @@ struct uct_completion {
     ucs_status_t              status;  /**< Completion status, this field must
                                             be initialized with UCS_OK before
                                             first operation is started. */
-    uct_gop_h                 gop;     /**< Generic operation handle. */
+    uct_sched_comp_h          comp;    /**< Completion handle. */
     unsigned                  flags;   /**< Tag flags, @ref uct_tag_flags. */
 };
 
@@ -1858,6 +1858,9 @@ struct uct_tag_context {
      /** Reply endpoint to enable offloaded rendezvous (only needed for BXI). */ 
      uct_ep_h reply_ep;
 
+     /** Completion handle to be attached to the posted receive. */
+     uct_sched_comp_h comp;
+
      /** Flags from @ref uct_tag_flags. */
      unsigned flags;
 
@@ -1865,14 +1868,16 @@ struct uct_tag_context {
      char priv[UCT_TAG_PRIV_LEN];
 };
 
+enum {
+    UCT_SCHED_COMP_ARMED = UCS_BIT(0)
+};
+
 /**
  * Operation Context structure for storing generic operation information.
  */
-typedef struct uct_gop {
+typedef struct uct_sched_comp {
     unsigned  flags;
-    void     *buffer; /* Operation buffer */
-    size_t    size;   /* Operation size */
-} uct_gop_t;
+} uct_sched_comp_t;
 
 
 /**
@@ -3698,60 +3703,39 @@ UCT_INLINE_API ucs_status_t uct_iface_tag_recv_cancel(uct_iface_h iface,
     return iface->ops.iface_tag_recv_cancel(iface, ctx, flags);
 }
 
-
 /**
  * @ingroup UCT_TAG
- * @brief Create a completion handle on the transport for a receive operation.
+ * @brief Create completion handle to be attached later to a transport 
+ * operation. Created completion handle may depend on previous/other 
+ * completion handle provided as a table.
  *
- * This routine creates the necessary resources on a transport interface to be 
- * able to create dependencies between communication primitives.
- *
- * @param [in]    iface     Interface to post the tag on.
- * @param [out]   gop       Generic operation created.
- *
- * @return UCS_OK                - The context is created to the transport.
- * @return UCS_ERR_NO_RESOURCE   - Could not start the operation due to lack of
- *                                 resources.
- */
-UCT_INLINE_API ucs_status_t uct_iface_tag_sched_recv(uct_iface_h        iface,
-                                                     uct_tag_context_t *ctx,
-                                                     uct_gop_h         *gop_p)
-{
-    return iface->ops.iface_tag_sched_recv(iface, ctx, gop_p);
-}
-
-
-/**
- * @ingroup UCT_TAG
- * @brief Create completion handle to schedue a send operation.
- *
- * @param [in]    iface     Interface to post the tag on.
- * @param [in]    gop       Target Operation handle.
- * @param [in]    gops      Table of Operation handles.
- * @param [in]    gop_cnt   Size of Operation handle table.
+ * @param [in]    iface     Interface.
+ * @param [in]    prevs     Table of previous completion handles.
+ * @param [in]    prev_cnt  Number of previous completion handles.
+ * @param [in]    next_p    Next created completion handle.
  *
  * @return UCS_OK                - The context is created to the transport.
  */
-UCT_INLINE_API ucs_status_t uct_iface_tag_sched_send(uct_iface_h iface,
-                                                     uct_gop_h *gop_p,
-                                                     uct_gop_h *gops,
-                                                     size_t gop_cnt)
+UCT_INLINE_API ucs_status_t uct_iface_sched_comp_add(uct_iface_h iface,
+                                                     uct_sched_comp_h *prevs,
+                                                     size_t prev_cnt,
+                                                     uct_sched_comp_h *next_p)
 {
-    return iface->ops.iface_tag_sched_send(iface, gop_p, gops, gop_cnt);
+    return iface->ops.iface_sched_comp_add(iface, prevs, prev_cnt, next_p);
 }
 
 /**
  * @ingroup UCT_TAG
- * @brief Delete an Offload Operation Context to a transport interface.
+ * @brief Remove the completion handle and complete it if necessary.
  *
- * @param [in]    iface     Interface to post the tag on.
- * @param [in]   gop       Generic operation handle.
+ * @param [in]    iface     Interface.
+ * @param [in]    comp      Completion handle to be removed.
  *
  */
-UCT_INLINE_API void uct_iface_tag_sched_release(uct_iface_h iface,
-                                                uct_gop_h gop)
+UCT_INLINE_API void uct_iface_sched_comp_rm(uct_iface_h iface,
+                                            uct_sched_comp_h comp)
 {
-    iface->ops.iface_tag_sched_release(iface, gop);
+    iface->ops.iface_sched_comp_rm(iface, comp);
 }
 
 /**

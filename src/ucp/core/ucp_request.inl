@@ -86,7 +86,6 @@ UCS_PTR_MAP_IMPL(request, 0);
         } \
         if (ucs_unlikely((_req)->flags & UCP_REQUEST_FLAG_SCHEDULED)) { \
             ucp_sched_task_complete((_req)->task, _status); \
-            (_req)->flags &= ~UCP_REQUEST_FLAG_SCHEDULED; \
         } \
         if (ucs_unlikely(_flags & UCP_REQUEST_FLAG_RELEASED)) { \
             ucp_request_put(_req); \
